@@ -468,70 +468,109 @@ localhost dev ports for direct (unproxied) calls.
 
 ---
 
-## 9. Stage 5b — managed serving on Amazon Bedrock AgentCore (design)
+## 9. Stage 5b — managed serving on Amazon Bedrock AgentCore
 
-**Not yet implemented** — this is the serving target the compiled graph is designed to be
-promoted to, not code that exists today. Recorded here so the eventual implementation has
-a single design to follow rather than inventing the contract from scratch.
+**Built; verified offline and against a local arm64 run of the real package. Not yet run
+against a real AWS account** — the first real deploy is the remaining check (see §9.6).
 
 ### 9.1 The runtime contract
 
-An AgentCore agent is a container that must:
-- expose **`POST /invocations`** — primary entrypoint; JSON task input in, result out
-  (streaming supported);
-- expose **`GET /ping`** — health check;
-- be built for **ARM64**.
-
-Clients invoke it through the **`InvokeAgentRuntime`** API. The contract is implemented
-either via the `bedrock-agentcore` Python SDK's `@entrypoint` decorator (starter toolkit,
-which handles the HTTP server details) or by implementing the two endpoints directly.
-
-### 9.2 What the deployment layer would wrap
-
-The AgentCore entrypoint is designed as a thin adapter over the same functions the
-FastAPI layer already uses — no compiler or runtime code changes, only the serving
-envelope differs:
+AgentCore Runtime runs a Linux **arm64** process that listens on port **8080** and serves
+**`GET /ping`** (health: `{"status": "Healthy"}`) and **`POST /invocations`** (the work).
+Clients reach it through the **`InvokeAgentRuntime`** API. `runtime_app.py` implements
+both endpoints over the same functions the local API uses, with the same task-input JSON
+as `POST /projects/{id}/run`:
 
 ```
-POST /invocations  ->  compile_graph(plan) [or cached graph]  ->  run_graph(graph, payload.input, plan.bounds)
-GET  /ping          ->  health/readiness
+POST /invocations {"input": {...}}                         -> run_graph(compiled graph, input, plan.bounds)
+POST /invocations {"input": {...}, "agent_id": "a", ...}   -> run_single_agent(plan, "a", input, upstream_outputs)
+GET  /ping                                                 -> {"status": "Healthy", ...}
 ```
 
-The JSON task-input contract is the same one `POST /run` accepts locally, so a graph
-would run identically both ways.
+The plan is validated and compiled when the runtime starts, so a broken package fails its
+health check rather than its first call.
 
-### 9.3 Deploy flow (design)
+### 9.2 Packaging — direct code, not a container
+
+AgentCore's *direct code deployment* takes a .zip from S3, so no Docker image or ECR
+repository is needed. `deploy.build_package` builds:
+
+| In the zip | From |
+|---|---|
+| `main.py` | generated: loads `plan.json`, serves `runtime_app` with uvicorn on 0.0.0.0:8080 |
+| `plan.json` | the project's validated plan, at the version being deployed |
+| `agentic_platform/*.py` | the platform package **minus** platform-only modules (`app`, `auth`, `stores`, `agentcore`, `deploy`) |
+| dependencies | `uv export --frozen` of the backend lock **minus** platform-only packages (argon2-cffi, pyjwt, email-validator, pymongo, boto3), installed as `aarch64-manylinux_2_28` wheels for Python 3.11 |
+
+Dependencies are built once per lock and cached in `backend/.deploy-cache/` (with a
+pre-zipped copy), so a redeploy only appends the code and plan (~0.2 s). Zip entries are
+written as Unix files with mode 0644, as AgentCore requires, whatever OS builds them. The
+package is checked against AgentCore's 250 MB zipped / 750 MB unzipped limits; today it is
+about 74 MB / 258 MB.
+
+**Why manylinux_2_28:** AWS's docs show `manylinux2014`, but numpy (needed by the
+`yahoo_finance_news` tool) no longer publishes manylinux2014 arm64 wheels. AWS's own
+sample-agentcore-launchpad measured the direct-code runtime as Amazon Linux 2023 /
+glibc 2.34, which runs manylinux_2_28 wheels.
+
+### 9.3 Deploy flow
 
 ```mermaid
 flowchart LR
-    A["Validated AgentPlan"] --> B["compile_graph()"]
-    B --> C["AgentCore entrypoint<br/>(/invocations + /ping)"]
-    C --> D["ARM64 container image"]
-    D --> E["Create/Update AgentCore runtime<br/>(starter toolkit or bedrock-agentcore APIs)"]
-    E --> F["IAM execution role<br/>(least privilege per project)"]
-    F --> G["Invoke via InvokeAgentRuntime"]
+    A["POST /projects/{id}/deploy<br/>(compiled plan only)"] --> B["record: packaging<br/>(returns 202)"]
+    B --> C["background job:<br/>build_package"]
+    C --> D["upload to S3<br/>bedrock-agentcore-agentic-platform-&lt;acct&gt;-&lt;region&gt;"]
+    D --> E["ensure execution role<br/>AmazonBedrockAgentCoreAgenticPlatform-&lt;region&gt;"]
+    E --> F["create or update runtime<br/>agentic_&lt;project id&gt;"]
+    F --> G["poll until READY"]
+    G --> H["record: ready (live)"]
 ```
 
-### 9.4 Project → runtime mapping (open decision)
+Each step updates the project's `deployment` record (`packaging → uploading →
+provisioning → ready`, or `failed` with the error), which the console polls. The job runs
+in-process (FastAPI background task) until a job queue exists; a record that stops
+moving for 30 minutes is reported as failed ("interrupted") instead of spinning forever.
+A redeploy updates the same runtime, and the previous version keeps serving until the new
+one is ready; `live_plan_version` records what is actually serving, and the project shows
+"outdated" when its plan has moved on. `DELETE /projects/{id}/deployment` deletes the
+runtime and its code packages.
 
-AgentCore hosts one agent per deployed artifact, so a project maps to a runtime one of
-two ways:
+AWS access goes through `agentcore.AgentCoreCloud` (S3, IAM, STS, `bedrock-agentcore-control`,
+`bedrock-agentcore`), with credentials from the standard boto3 chain. Without credentials
+the deploy option is off and the console explains how to enable it. Region:
+`AGENTCORE_REGION` (default `ap-south-1`); optional `AGENTCORE_EXECUTION_ROLE_ARN` /
+`AGENTCORE_CODE_BUCKET` to use existing resources instead of the platform's own.
 
-| Option | Isolation | Cost of deploys | Fits |
-|---|---|---|---|
-| **Runtime-per-project** | Strong (own runtime + role) | One deploy per project | The "promote a tenant to dedicated infra" principle; heavy/compliance tenants |
-| **Shared runtime, in-payload routing** | Weaker (shared runtime, dispatch by project id) | Few deploys | Many small/early tenants |
+### 9.4 Project → runtime mapping (decided: one runtime per project)
 
-A common path: shared runtime early, promote heavy or sensitive tenants to dedicated
-runtimes later — the architecture allows this without a rewrite.
+Each deployed project gets its own runtime (`agentic_<project id>`) with the plan baked
+into its package. This needs no database access from the runtime, gives each project its
+own isolated runtime, and matches the "promote a tenant to dedicated infrastructure"
+principle; the cost is one deploy per project. A shared runtime routing by project id
+remains possible later without changing the runtime app.
 
-### 9.5 Secrets and isolation (design)
+### 9.5 Secrets
 
-BYOK provider keys would go through KMS / Secrets Manager (or AgentCore Identity),
-decrypted only in-memory at call time — never baked into the image, never logged, never
-stored on a plan object. Each deployed project would run in an isolated AgentCore runtime
-session, so one tenant's execution state, memory, and credentials never bleed into
-another's.
+**Current choice (a deliberate deviation):** the provider keys a plan needs are passed to
+its runtime as AgentCore environment variables — only the keys for providers and tools the
+plan actually uses, checked before any AWS call (a missing key fails the request
+up front). They are never logged or returned by the API, and failure messages carry only
+error types and messages. The trade-off: anyone with read access to the runtime's
+configuration in the AWS account can see them. Moving them to Secrets Manager (or AgentCore
+Identity) is the planned hardening; see the decision log in `CLAUDE.md`.
+
+### 9.6 Calling a deployed flow, and what is not verified yet
+
+`POST /projects/{id}/deployment/invoke` (same body and result shape as `/run`) calls
+`InvokeAgentRuntime` with the platform's AWS credentials, so apps only need the platform's
+sign-in token. Callers with their own IAM credentials can also invoke the runtime ARN
+directly; the console shows both snippets.
+
+Verified: 27 offline tests (runtime app, environment, packaging, AWS request shapes via
+botocore's Stubber, orchestration, API, ownership); and the real package, unzipped into
+an arm64 Linux container, started, passed `/ping`, and completed a real two-agent run.
+**Not yet verified:** a deploy against real AWS — IAM role propagation, AgentCore
+accepting the package, and the Python 3.11 runtime's OS image.
 
 ---
 
@@ -625,9 +664,12 @@ covering all three orchestration patterns and the real `web_search` tool):
   step — covering the full brief → plan → compile → run loop
   (`frontend/`), verified against the live API in a browser
 
+- Deployment to Amazon Bedrock AgentCore Runtime (§9): packaging, S3 upload, execution
+  role, runtime create/update/delete, invoke through the platform, and a Deploy page —
+  verified offline and with a local arm64 run of the real package, **not yet against a
+  real AWS account**
+
 **Not yet built** (design recorded above, not code):
-- Bedrock AgentCore deployment layer (§9) — entrypoint adapter, container build, runtime
-  create/update, IAM role.
 - Run history, and Redis for queueing — projects persist in MongoDB, runs are not
   recorded yet.
 - Async background compilation/execution (Celery/RQ).

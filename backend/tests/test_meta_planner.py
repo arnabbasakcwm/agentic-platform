@@ -193,3 +193,24 @@ def test_revision_cannot_exceed_the_platform_maximum(monkeypatch):
     _patch_llm(monkeypatch, [too_big] * 3)
     with pytest.raises(PlannerError):
         mp.revise_plan("x", _plan_with(1), "more agents", available_tools=[], available_llms=_LLMS)
+
+
+def test_planner_cannot_set_run_limits(monkeypatch):
+    from agentic_platform.agent_schema import RunBounds
+
+    tight = _plan_with(1).model_copy(update={"bounds": RunBounds(timeout_s=60, max_steps=10, max_retries=2)})
+    _patch_llm(monkeypatch, [tight])
+    plan = mp.plan_project("x", available_tools=[], available_llms=_LLMS)
+    assert plan.bounds == RunBounds()
+
+
+def test_revision_keeps_the_projects_run_limits(monkeypatch):
+    from agentic_platform.agent_schema import RunBounds
+
+    current = _plan_with(1).model_copy(update={"bounds": RunBounds(timeout_s=600)})
+    proposed = PlanRevision(reply="ok", brief="x",
+                            plan=_plan_with(2).model_copy(update={"bounds": RunBounds(timeout_s=30)}))
+    _patch_llm(monkeypatch, [proposed])
+    revision = mp.revise_plan("x", current, "add an agent", available_tools=[], available_llms=_LLMS)
+    assert revision.plan.bounds.timeout_s == 600
+    assert len(revision.plan.agents) == 2

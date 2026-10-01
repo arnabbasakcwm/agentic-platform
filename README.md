@@ -1,8 +1,9 @@
 # Agentic Platform
 
-**Natural-language multi-agent builder.** Describe a task in plain English, say how many
-agents you want and what each should do, and get back live, callable API endpoints for a
-compiled multi-agent system — ready to wire into your own website, app, or pipeline.
+**Natural-language multi-agent builder.** Describe a task in plain English, and get back
+live, callable API endpoints for a compiled multi-agent system — ready to wire into your
+own website, app, or pipeline. The planner decides how many agents the task needs (or you
+can set the number), and you can keep reshaping the team by simply asking for changes.
 
 > Full architecture, the reasoning behind every dependency, error model, and deployment
 > design: see [systemDescription.md](docs/systemDescription.md). This file is a quick-start.
@@ -20,13 +21,16 @@ engineering behind *how* it runs.
 
 ### What it does
 
-1. The user describes their task and the agent team they want, in natural language.
+1. The user describes their task in natural language — in a chat-style console, or
+   through the API.
 2. The planning layer turns that description into a structured, validated plan: how many
    agents, each agent's job, how they're wired together (sequential, parallel, or
    supervised/routed), what tools each needs, and which LLM powers each one.
-3. The user reviews and can adjust the plan before anything is built.
+3. The user reviews the plan and can change it — by asking the plan assistant in plain
+   language ("run these in parallel", "add a reviewer") or by editing the JSON — before
+   anything is built.
 4. The platform compiles the plan into a running multi-agent graph and serves it —
-   locally via FastAPI today, on Amazon Bedrock AgentCore Runtime for managed deployment.
+   locally via FastAPI, and with one click on Amazon Bedrock AgentCore Runtime.
 5. The user takes the resulting endpoints and builds whatever they want on top, without
    touching orchestration code themselves.
 
@@ -48,13 +52,16 @@ Backend and frontend are separate, independently runnable projects.
 ├── backend/                        # Python API + agent runtime
 │   ├── src/agentic_platform/       # Installable package
 │   │   ├── agent_schema.py         # Pydantic contracts: LLMConfig, AgentSpec, AgentPlan
-│   │   ├── meta_planner_prompt.py  # Meta-planner: brief -> validated AgentPlan
+│   │   ├── meta_planner_prompt.py  # Meta-planner: brief -> AgentPlan; plan revisions
 │   │   ├── graph_builder.py        # LLM factory + AgentPlan -> LangGraph compiler
 │   │   ├── tools.py                # Closed, vetted tool registry
 │   │   ├── config.py               # Env loading, provider/model defaults
 │   │   ├── errors.py               # Typed platform errors
 │   │   ├── stores.py               # Project and user persistence (in-memory or MongoDB)
 │   │   ├── auth.py                 # Password hashing + JWT access tokens
+│   │   ├── runtime_app.py          # What a deployed project runs on AgentCore
+│   │   ├── deploy.py               # Packaging + deploy jobs
+│   │   ├── agentcore.py            # AWS calls (S3, IAM, AgentCore)
 │   │   └── app.py                  # FastAPI serving layer (local/MVP)
 │   ├── tests/                      # Offline, fully mocked test suite
 │   ├── scripts/smoke_e2e.py        # Real-API end-to-end smoke script
@@ -77,7 +84,20 @@ Backend and frontend are separate, independently runnable projects.
 
 ## Getting started
 
-Requires Python 3.11 with [uv](https://docs.astral.sh/uv/), and Node for the console.
+Requires Python 3.11 with [uv](https://docs.astral.sh/uv/), Node for the console, and
+MongoDB for storage (optional for a first try — see step 2).
+
+**Database** — MongoDB in Docker is the simplest local setup:
+
+```bash
+docker run -d --name agentic-mongo --restart unless-stopped \
+  -p 27017:27017 -v agentic-mongo-data:/data/db mongo:8
+```
+
+Any MongoDB works, including a free MongoDB Atlas cluster (use its `mongodb+srv://` URI).
+On Windows with Smart App Control on, the native MongoDB Community Server may be blocked
+from starting; Docker or Atlas avoid that. MongoDB Compass can browse the data at
+`mongodb://localhost:27017` → `agentic_platform`.
 
 **Backend** — first terminal:
 
@@ -92,9 +112,10 @@ cp .env.example .env
 # Fill in at least one LLM provider key (the default provider is Gemini, so
 # GOOGLE_API_KEY or GEMINI_API_KEY is the easiest to start with).
 # TAVILY_API_KEY is only needed if a project opts into the web_search tool.
-# Set MONGODB_URI to persist projects in MongoDB; leave it unset and projects are
-# kept in memory and lost when the server stops.
-# Set JWT_SECRET to a long random value so sign-ins survive a server restart.
+# Set MONGODB_URI=mongodb://localhost:27017 to persist projects and accounts; leave it
+# unset and everything is kept in memory and lost when the server stops.
+# Set JWT_SECRET to a long random value so sign-ins survive a server restart:
+#   python -c "import secrets; print(secrets.token_urlsafe(48))"
 
 # 3. Run the API
 uv run uvicorn agentic_platform.app:app --reload
@@ -112,6 +133,21 @@ npm run dev
 
 Vite proxies `/api` to the backend on port 8000, so both run on one origin in the
 browser. Set `VITE_API_BASE` to point the console at a different API.
+
+### Using the console
+
+1. **Create an account** on the sign-in screen (email and a password of 8+ characters).
+2. **New project** — describe the task in the message box and press Enter. The planner
+   designs the team and replies with a summary and a *Review plan* link. Team size, model
+   and tools are optional; open them from the pill under the message box.
+3. **Brief / Plan / Compile / Run** — each project has one page per step. The plan
+   assistant beside Brief, Plan and Compile takes change requests in plain language; any
+   change makes a new plan version that has to be compiled again.
+4. **Deploy** — after Run, the Deploy page puts the compiled plan on Amazon Bedrock
+   AgentCore Runtime, lets you try the live deployment, and shows how to call it from an
+   app. Needs AWS set up — see [Deploying to AWS](#deploying-to-aws-agentcore).
+5. **Projects** — every project you've created, newest first; the sidebar also lists the
+   most recent ones.
 
 Try it end to end with curl:
 
@@ -131,6 +167,13 @@ curl -s -X POST localhost:8000/projects \
 # agent_count is optional: omit it and the planner chooses the team size (max 10)
 # -> {"project_id": "...", "plan": {...}, "side_effect_tools_enabled": []}
 
+# Change it by asking (optional) — a change needs a new compile
+curl -s -X POST localhost:8000/projects/<project_id>/revise \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Add an agent that double-checks the answer"}'
+# -> {"changed": true, "reply": {...}, "project": {...}}
+
 # Compile the plan into a runnable graph
 curl -s -X POST localhost:8000/projects/<project_id>/compile \
   -H "Authorization: Bearer $TOKEN"
@@ -146,7 +189,8 @@ curl -s -X POST localhost:8000/projects/<project_id>/run \
 
 ```bash
 cd backend
-uv run pytest                       # offline, fully mocked — no API keys or network needed
+uv run pytest                       # offline, LLMs mocked — no API keys or network needed
+                                    # (MongoDB store tests also run if a server is reachable)
 uv run python scripts/smoke_e2e.py  # real LLM + tool calls end to end (needs .env keys)
 ```
 
@@ -167,12 +211,75 @@ to a LangGraph graph.
 
 ---
 
+## API at a glance
+
+All `/projects` routes need `Authorization: Bearer <token>` and only ever see the
+signed-in user's projects. Interactive docs: http://127.0.0.1:8000/docs.
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /auth/register`, `POST /auth/login`, `GET /auth/me` | Accounts and sign-in |
+| `GET /health`, `GET /tools`, `GET /providers` | Status, tool registry, model options (public) |
+| `POST /projects` | Plan a new project from a brief (`agent_count` optional) |
+| `GET /projects`, `GET /projects/{id}` | List your projects / fetch one with its plan and conversation |
+| `POST /projects/{id}/revise` | Change the brief or plan by asking in plain language |
+| `PATCH /projects/{id}/plan` | Replace the plan with an edited one (re-validated) |
+| `POST /projects/{id}/compile` | Build the runnable graph (no model calls) |
+| `POST /projects/{id}/run` | Run the whole team on an input |
+| `POST /projects/{id}/agents/{agent_id}/invoke` | Run one agent on its own |
+| `POST /projects/{id}/deploy` | Deploy the compiled plan to AgentCore (runs in the background) |
+| `GET /projects/{id}/deployment` | Deployment status, and whether this server can deploy |
+| `POST /projects/{id}/deployment/invoke` | Run the deployed flow on AgentCore (same body as `/run`) |
+| `DELETE /projects/{id}/deployment` | Remove the deployment |
+
+---
+
+## Deploying to AWS (AgentCore)
+
+Each project deploys as its own Amazon Bedrock AgentCore runtime. The platform builds a
+zip (the plan, the runtime code, and dependencies built for Linux arm64), uploads it to
+S3, and creates or updates the runtime — no Docker image involved.
+
+1. **Install the AWS CLI** and sign in: `aws configure` (access keys) or `aws sso login`.
+   The account needs permission to use Amazon Bedrock AgentCore, S3 and IAM — AWS's
+   [AgentCore permissions guide](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-permissions.html)
+   lists them; the bucket (`bedrock-agentcore-agentic-platform-…`) and role
+   (`AmazonBedrockAgentCoreAgenticPlatform-…`) names match its suggested patterns.
+2. **Region:** deployments go to `ap-south-1` (Mumbai) unless `AGENTCORE_REGION` is set in
+   `backend/.env`. Optionally set `AGENTCORE_EXECUTION_ROLE_ARN` / `AGENTCORE_CODE_BUCKET`
+   to use an existing role or bucket.
+3. **Restart the API.** The Deploy page now enables the Deploy button.
+
+The first deploy builds the arm64 dependencies (about 30 s) and caches them in
+`backend/.deploy-cache/`; AgentCore then takes a few minutes to start the runtime.
+The provider keys the plan uses are passed to the runtime as environment variables.
+
+---
+
+## Recent changes and why
+
+The architecture decision log in [CLAUDE.md](CLAUDE.md) records each of these with the
+rules it sets for future code; this is the short version.
+
+| Change | Why |
+|---|---|
+| **Projects and accounts are stored in MongoDB** (in-memory fallback when `MONGODB_URI` is unset) | Everything was lost on every restart. A project is one JSON document, so a document store fits; plain CRUD keeps it portable to Atlas or Amazon DocumentDB. |
+| **Storage sits behind small store interfaces** (`stores.py`) | Routes never touch a database driver, tests run without a database, and the store can be swapped without rewriting the API. |
+| **Compiled state is tracked by plan version** | Compiled graphs can't be saved to a database, but compiling is cheap — so a project stays "compiled" across restarts and is rebuilt on demand, and any plan change reliably un-compiles it. |
+| **Email/password accounts with JWT sign-in; every user sees only their own projects** | The API was open to anyone who could reach it, spending your provider keys. Passwords are Argon2id-hashed; another user's project looks exactly like one that doesn't exist. |
+| **The planner chooses the team size by default** | Most people don't know how many agents a task needs. You can still set a number; the 10-agent maximum is enforced by the server either way. |
+| **Plan assistant: change the brief or plan by asking** | Small changes ("run these in parallel", "add a reviewer") shouldn't require editing JSON. Revised plans pass exactly the same validation as new ones, can't switch on external tools the project didn't opt into, and are never saved over a plan that changed in the meantime. |
+| **Deploy to Amazon Bedrock AgentCore** — one runtime per project, built from a zip (no Docker) | A finished flow needs a hosted endpoint apps can call. The deployed runtime runs the same compiler and runtime code with the same input/output as local runs, so behaviour matches. |
+| **Redesigned console** — collapsible sidebar, Projects page, chat-style New project page, separate Brief / Plan / Compile / Run pages | The old single page mixed planning, compiling and running and became cluttered; you also had no way to find earlier projects. |
+
+---
+
 ## Roadmap
 
 | Phase | Scope | Status |
 |---|---|---|
 | **MVP** | Meta-planner + schema, compiler (all 3 patterns), FastAPI serving, real `web_search` tool + opt-in enforcement | **Done** |
-| **V1** | Project persistence in MongoDB (**done**); user accounts with JWT sign-in (**done**); run history and Redis-backed jobs; per-project API keys; plan-review/edit UX; synthesis (aggregate) endpoint; package a compiled project as a Bedrock AgentCore runtime | In progress |
+| **V1** | Project persistence in MongoDB (**done**); user accounts with JWT sign-in (**done**); plan-review/edit UX incl. plan assistant (**done**); run history and Redis-backed jobs; per-project API keys; synthesis (aggregate) endpoint; deploy a compiled project to Bedrock AgentCore Runtime (**built**; first real AWS deploy pending) | In progress |
 | **V2** | Dedicated AgentCore runtime per heavy/isolated tenant; AgentCore Observability + LangSmith; expanded tool registry; rate limiting and billing | Not started |
 
 ---
@@ -183,7 +290,11 @@ to a LangGraph graph.
   interpreted by a fixed compiler.
 - Every agent run is bounded — enforced max steps, timeouts, and error retries.
 - Tools with real-world side effects require explicit per-project opt-in; the planner
-  never auto-attaches them.
+  never auto-attaches them, and the plan assistant can't switch them on either.
+- Every project route requires a signed-in user and is scoped to that user's projects.
+  Passwords are stored only as Argon2id hashes and never appear in responses or errors.
+- Not yet in place: rate limiting (including on sign-in attempts), refresh tokens, and
+  per-project API keys for machine clients.
 
 Full security model, secrets handling, and the AgentCore deployment design:
 see [systemDescription.md](docs/systemDescription.md).

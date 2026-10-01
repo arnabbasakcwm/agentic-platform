@@ -451,18 +451,24 @@ def run_single_agent(
 
 def run_graph(graph, task_input: dict[str, Any], bounds: RunBounds) -> dict[str, Any]:
     """Invoke a compiled graph with a wall-clock timeout bound (principle: every run is
-    bounded, not left to model good behavior)."""
+    bounded, not left to model good behavior).
+
+    On timeout the caller gets TimeoutError as soon as the limit passes. The run's worker
+    thread can't be killed, so it finishes in the background and its result is dropped.
+    """
     import concurrent.futures
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(
-            graph.invoke,
-            initial_state(task_input),
-            {"recursion_limit": 50},
-        )
-        try:
-            return future.result(timeout=bounds.timeout_s)
-        except concurrent.futures.TimeoutError as e:
-            raise TimeoutError(
-                f"graph run exceeded {bounds.timeout_s}s timeout"
-            ) from e
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    future = pool.submit(
+        graph.invoke,
+        initial_state(task_input),
+        {"recursion_limit": 50},
+    )
+    try:
+        return future.result(timeout=bounds.timeout_s)
+    except concurrent.futures.TimeoutError as e:
+        raise TimeoutError(f"the run exceeded its {bounds.timeout_s:g}s time limit") from e
+    finally:
+        # Never block on the worker: a `with` block here would wait for it to finish,
+        # which is exactly what made the timeout fire late.
+        pool.shutdown(wait=False, cancel_futures=True)

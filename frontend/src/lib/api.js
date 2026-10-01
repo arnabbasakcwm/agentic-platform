@@ -4,6 +4,9 @@
 
 const BASE = import.meta.env.VITE_API_BASE ?? "/api";
 
+// The API's absolute URL, for snippets shown to users.
+export const API_URL = new URL(BASE, window.location.origin).href.replace(/\/$/, "");
+
 export class ApiError extends Error {
   constructor({ status, errorType, message, details }) {
     super(message);
@@ -117,6 +120,11 @@ export const api = {
   listProjects: () => request("/projects"),
   getProject: (id) => request(`/projects/${id}`),
   updatePlan: (id, plan) => request(`/projects/${id}/plan`, { method: "PATCH", body: plan }),
+  getDeployment: (id) => request(`/projects/${id}/deployment`),
+  deploy: (id) => request(`/projects/${id}/deploy`, { method: "POST" }),
+  invokeDeployment: (id, input) =>
+    request(`/projects/${id}/deployment/invoke`, { method: "POST", body: { input } }),
+  removeDeployment: (id) => request(`/projects/${id}/deployment`, { method: "DELETE" }),
   reviseProject: (id, message) =>
     request(`/projects/${id}/revise`, { method: "POST", body: { message } }),
   compile: (id) => request(`/projects/${id}/compile`, { method: "POST" }),

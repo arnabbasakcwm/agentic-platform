@@ -17,7 +17,7 @@ from typing import Any, Callable, TypeVar
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, ValidationError
 
-from .agent_schema import AgentPlan, LLMConfig, PlanRevision
+from .agent_schema import AgentPlan, LLMConfig, PlanRevision, RunBounds
 from .config import DEFAULT_MODELS, DEFAULT_PROVIDER, MAX_AGENTS
 from .errors import PlannerError
 from .graph_builder import get_llm
@@ -247,7 +247,7 @@ def plan_project(
     (still capped at MAX_AGENTS).
     """
     tools, llms = _resolve_options(available_tools, available_llms)
-    return _invoke_with_retries(
+    plan = _invoke_with_retries(
         AgentPlan,
         _SYSTEM_PROMPT,
         lambda correction: _build_user_message(
@@ -256,6 +256,9 @@ def plan_project(
         lambda plan: _semantic_check(plan, requested_agent_count, tools, llms),
         planner_llm,
     )
+    # Run limits are set by the platform, never by the model (principle 6): whatever
+    # `bounds` the model filled in is replaced with the platform defaults.
+    return plan.model_copy(update={"bounds": RunBounds()})
 
 
 def revise_plan(
@@ -275,7 +278,7 @@ def revise_plan(
     """
     tools, llms = _resolve_options(available_tools, available_llms)
     recent = (history or [])[-REVISION_HISTORY_LIMIT:]
-    return _invoke_with_retries(
+    revision = _invoke_with_retries(
         PlanRevision,
         _REVISION_PROMPT,
         lambda correction: _build_revision_message(
@@ -284,3 +287,6 @@ def revise_plan(
         lambda revision: _semantic_check(revision.plan, None, tools, llms),
         planner_llm,
     )
+    # A revision never changes run limits; they stay whatever the project had.
+    revised_plan = revision.plan.model_copy(update={"bounds": plan.bounds})
+    return revision.model_copy(update={"plan": revised_plan})

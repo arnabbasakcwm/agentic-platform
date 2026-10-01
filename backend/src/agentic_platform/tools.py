@@ -336,6 +336,14 @@ TOOL_SUMMARIES: dict[str, str] = {
     "wolfram_alpha": "Computation and curated facts (Wolfram Alpha)",
 }
 
+# Environment variables each tool reads at run time, as (required, optional). A
+# deployment copies exactly these into the runtime for the tools its plan uses.
+TOOL_ENV_VARS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "web_search": (("TAVILY_API_KEY",), ()),
+    "wolfram_alpha": (("WOLFRAM_ALPHA_APPID",), ()),
+    "pubmed": ((), ("PUBMED_API_KEY",)),
+}
+
 # Tools with real-world side effects — network egress to a third party, whether or not
 # they need an API key. The planner never auto-attaches these: see `default_tool_names()`
 # and its use in app.py::create_project. A caller must name one explicitly in

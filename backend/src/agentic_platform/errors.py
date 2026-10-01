@@ -75,6 +75,47 @@ class PlanConflictError(PlatformError):
         )
 
 
+class RunTimeoutError(PlatformError):
+    def __init__(self, limit_s: float):
+        self.limit_s = limit_s
+        super().__init__(
+            f"the run exceeded its {limit_s:g}s time limit. Agents that search the web or "
+            "use large models can need longer: raise bounds.timeout_s in the plan "
+            "(Plan → Edit as JSON), compile, and run again"
+        )
+
+
+class DeployError(PlatformError):
+    """A deployment step failed (packaging, AWS provisioning, or the runtime itself)."""
+
+
+class DeployNotConfiguredError(PlatformError):
+    def __init__(self) -> None:
+        super().__init__(
+            "deployment is not set up on this server: no AWS credentials were found "
+            "(configure them with `aws configure` or `aws sso login`, then restart the API)"
+        )
+
+
+class DeployInProgressError(PlatformError):
+    def __init__(self) -> None:
+        super().__init__("a deployment of this project is already in progress")
+
+
+class NotDeployedError(PlatformError):
+    def __init__(self) -> None:
+        super().__init__("this project has no live deployment")
+
+
+class DeployedRunError(PlatformError):
+    """The deployed runtime answered, but with an error."""
+
+    def __init__(self, status: int, error_type: str, message: str):
+        self.status = status
+        self.error_type = error_type
+        super().__init__(message)
+
+
 class PlannerError(PlatformError):
     """Raised when the meta-planner cannot produce a valid AgentPlan within the retry ceiling."""
 

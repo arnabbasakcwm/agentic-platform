@@ -17,7 +17,7 @@ import { useAction } from "../../lib/useAction.js";
 
 const SAMPLE = '{\n  "question": "What is the speed of light?"\n}';
 
-function Results({ result }) {
+export function Results({ result }) {
   const outputs = Object.entries(result.outputs ?? {});
   const errors = result.errors ?? [];
 
@@ -200,6 +200,10 @@ export function RunStep({ project, result, onResult }) {
         <LinkButton href={paths.project(project.project_id, "compile")}>
           <Icon name="arrowLeft" />
           Compile
+        </LinkButton>
+        <LinkButton variant="primary" href={paths.project(project.project_id, "deploy")}>
+          Deploy
+          <Icon name="arrowRight" />
         </LinkButton>
       </ActionBar>
     </>

@@ -11,7 +11,7 @@ its own memory.
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Iterator, Literal, Protocol
 
 from pydantic import BaseModel, Field
@@ -54,6 +54,53 @@ class ChatMessage(BaseModel):
     plan_version: int | None = None
 
 
+DEPLOY_IN_PROGRESS = ("packaging", "uploading", "provisioning")
+# An in-progress deployment that hasn't moved for this long was cut off (for example by a
+# server restart, since the job runs in-process) and is reported as failed.
+DEPLOY_STALE_AFTER = timedelta(minutes=30)
+
+
+class Deployment(BaseModel):
+    """A project's deployment to Amazon Bedrock AgentCore Runtime."""
+
+    status: Literal["packaging", "uploading", "provisioning", "ready", "failed"]
+    # The plan version the latest deployment attempt is for.
+    plan_version: int
+    region: str
+    runtime_name: str
+    runtime_id: str | None = None
+    runtime_arn: str | None = None
+    # The plan version actually serving traffic, once a deployment has succeeded. While
+    # a redeploy runs (or after one fails) the previous version keeps serving.
+    live_plan_version: int | None = None
+    error: str | None = None
+    started_at: datetime = Field(default_factory=_now)
+    updated_at: datetime = Field(default_factory=_now)
+    deployed_at: datetime | None = None
+
+    @property
+    def in_progress(self) -> bool:
+        return self.status in DEPLOY_IN_PROGRESS
+
+    @property
+    def live(self) -> bool:
+        return self.runtime_arn is not None and self.live_plan_version is not None
+
+    def effective(self, now: datetime | None = None) -> "Deployment":
+        """This record as callers should see it: a stalled in-progress deployment is
+        reported as failed rather than spinning forever."""
+        now = now or datetime.now(timezone.utc)
+        if self.in_progress and now - self.updated_at > DEPLOY_STALE_AFTER:
+            return self.model_copy(
+                update={
+                    "status": "failed",
+                    "error": "Interrupted: no progress for 30 minutes (the server may have "
+                    "restarted during the deployment). Deploy again.",
+                }
+            )
+        return self
+
+
 class ProjectRecord(BaseModel):
     id: str
     # The owning user's id. Each user is their own tenant for now.
@@ -67,6 +114,7 @@ class ProjectRecord(BaseModel):
     compiled_version: int | None = None
     side_effect_tools_enabled: list[str] = Field(default_factory=list)
     conversation: list[ChatMessage] = Field(default_factory=list)
+    deployment: Deployment | None = None
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
 
@@ -91,6 +139,11 @@ class ProjectStore(Protocol):
     def mark_compiled(self, project_id: str, plan_version: int) -> bool:
         """Record that `plan_version` was compiled. False if the plan has moved on since
         (or the project is gone), so a stale compile never marks a newer plan runnable."""
+        ...
+
+    def set_deployment(self, project_id: str, deployment: Deployment | None) -> bool:
+        """Replace (or with None, clear) the project's deployment record. False if the
+        project is gone."""
         ...
 
     def record_exchange(
@@ -173,6 +226,13 @@ class InMemoryProjectStore:
         record.conversation = [*record.conversation, *messages][-CONVERSATION_LIMIT:]
         record.updated_at = _now()
         return record.model_copy(deep=True)
+
+    def set_deployment(self, project_id: str, deployment: Deployment | None) -> bool:
+        record = self._records.get(project_id)
+        if record is None:
+            return False
+        record.deployment = deployment.model_copy() if deployment else None
+        return True
 
 
 @contextmanager
@@ -314,6 +374,14 @@ class MongoProjectStore:
                 return_document=ReturnDocument.AFTER,
             )
         return self._from_doc(doc) if doc else None
+
+    def set_deployment(self, project_id: str, deployment: Deployment | None) -> bool:
+        value = deployment.model_dump() if deployment else None
+        with _mongo_errors():
+            result = self._projects.update_one(
+                {"_id": project_id}, {"$set": {"deployment": value}}
+            )
+        return result.matched_count == 1
 
 
 class MongoUserStore:

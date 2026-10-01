@@ -345,3 +345,20 @@ def test_revise_rejects_an_empty_message(monkeypatch):
     c = _client(monkeypatch)
     pid = c.post("/projects", json={"brief": "x"}).json()["project_id"]
     assert c.post(f"/projects/{pid}/revise", json={"message": ""}).status_code == 422
+
+
+def test_run_timeout_is_a_typed_504_not_a_bare_500(monkeypatch):
+    c = _client(monkeypatch)
+    pid = c.post("/projects", json={"brief": "x"}).json()["project_id"]
+    c.post(f"/projects/{pid}/compile")
+
+    def too_slow(graph, task_input, bounds):
+        raise TimeoutError("the run exceeded its 300s time limit")
+
+    monkeypatch.setattr(app_module, "run_graph", too_slow)
+    r = c.post(f"/projects/{pid}/run", json={"input": {"q": "x"}})
+    assert r.status_code == 504
+    body = r.json()
+    assert body["error_type"] == "RunTimeout"
+    assert "timeout_s" in body["message"]
+    assert body["details"] == {"limit_s": 300.0}

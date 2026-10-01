@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AssistantPanel } from "../components/AssistantPanel.jsx";
 import { Icon } from "../components/icons.jsx";
 import { Stepper } from "../components/Stepper.jsx";
@@ -9,6 +9,7 @@ import { paths } from "../lib/router.js";
 import { useAction } from "../lib/useAction.js";
 import { BriefStep } from "./project/BriefStep.jsx";
 import { CompileStep } from "./project/CompileStep.jsx";
+import { DeployStep } from "./project/DeployStep.jsx";
 import { PlanStep } from "./project/PlanStep.jsx";
 import { RunStep } from "./project/RunStep.jsx";
 
@@ -27,6 +28,17 @@ function readAssistantOpen() {
   }
 }
 
+function deployHint(deployment) {
+  if (!deployment) return "Not deployed";
+  if (deployment.in_progress) return "Deploying…";
+  if (deployment.live) {
+    return deployment.outdated
+      ? `Live v${deployment.live_plan_version} · outdated`
+      : `Live v${deployment.live_plan_version}`;
+  }
+  return "Failed";
+}
+
 function runHint(project, result) {
   if (result) return result.halted ? "Last run halted" : "Last run completed";
   return project.compiled ? "Ready" : "Needs compiling";
@@ -40,6 +52,15 @@ export function ProjectWorkspace({ id, step, onChanged }) {
   const [result, setResult] = useState(null);
   const [assistantOpen, setAssistantOpen] = useState(readAssistantOpen);
   const load = useAction();
+
+  // Stable, so the deploy page's status polling isn't restarted on every render.
+  const deploymentChanged = useCallback(
+    (deployment) => {
+      setProject((p) => (p ? { ...p, deployment } : p));
+      if (!deployment?.in_progress) onChanged();
+    },
+    [onChanged],
+  );
 
   useEffect(() => {
     let current = true;
@@ -94,6 +115,12 @@ export function ProjectWorkspace({ id, step, onChanged }) {
       label: "Run",
       hint: runHint(project, result),
       done: Boolean(result && !result.halted),
+    },
+    {
+      key: "deploy",
+      label: "Deploy",
+      hint: deployHint(project.deployment),
+      done: Boolean(project.deployment?.live && !project.deployment.outdated),
     },
   ].map((s) => ({ ...s, href: paths.project(id, s.key) }));
 
@@ -162,6 +189,9 @@ export function ProjectWorkspace({ id, step, onChanged }) {
         )}
         {step === "compile" && <CompileStep key={stepKey} project={project} onCompiled={compiled} />}
         {step === "run" && <RunStep project={project} result={result} onResult={setResult} />}
+        {step === "deploy" && (
+          <DeployStep project={project} onDeploymentChanged={deploymentChanged} />
+        )}
       </div>
 
       {showAssistant && (

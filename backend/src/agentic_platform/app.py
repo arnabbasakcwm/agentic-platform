@@ -13,7 +13,8 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from fastapi import Depends, FastAPI, Request
+from botocore.exceptions import BotoCoreError, ClientError
+from fastapi import BackgroundTasks, Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -22,12 +23,28 @@ from pydantic import BaseModel, EmailStr, Field, ValidationError
 
 from .agent_schema import AgentPlan
 from .auth import create_access_token, decode_access_token, hash_password, verify_password
-from .config import DEFAULT_MODELS, DEFAULT_PROVIDER, JWT_EXPIRES_MINUTES, MAX_AGENTS
+from .agentcore import make_cloud
+from .config import (
+    AGENTCORE_CODE_BUCKET,
+    AGENTCORE_EXECUTION_ROLE_ARN,
+    AGENTCORE_REGION,
+    DEFAULT_MODELS,
+    DEFAULT_PROVIDER,
+    JWT_EXPIRES_MINUTES,
+    MAX_AGENTS,
+)
+from .deploy import build_package, remove_deployment, run_deployment, runtime_environment, runtime_name
 from .errors import (
     AuthenticationError,
     EmailTakenError,
     MissingProviderKeyError,
+    DeployedRunError,
+    DeployError,
+    DeployInProgressError,
+    DeployNotConfiguredError,
+    NotDeployedError,
     PlanConflictError,
+    RunTimeoutError,
     MissingToolKeyError,
     PlannerError,
     PlatformError,
@@ -37,7 +54,7 @@ from .errors import (
 )
 from .graph_builder import compile_graph, run_graph, run_single_agent
 from .meta_planner_prompt import plan_project, revise_plan
-from .stores import ChatMessage, ProjectRecord, UserRecord, make_stores
+from .stores import ChatMessage, Deployment, ProjectRecord, UserRecord, make_stores
 from .tools import SIDE_EFFECT_TOOLS, TOOL_REGISTRY, TOOL_SUMMARIES, default_tool_names
 
 app = FastAPI(
@@ -58,6 +75,17 @@ app.add_middleware(
 )
 
 _store, _users = make_stores()
+
+
+def _make_cloud():
+    """The AWS side of deployments, or None when this server has no AWS credentials.
+    A function (not a module constant) so credentials set up later are picked up, and so
+    tests can swap in a fake."""
+    return make_cloud(AGENTCORE_REGION, AGENTCORE_EXECUTION_ROLE_ARN, AGENTCORE_CODE_BUCKET)
+
+
+# Swappable in tests: builds the deployment zip.
+_package_builder = build_package
 
 # Per-process cache of compiled graphs: project id -> (plan_version, graph). Purely an
 # optimisation — the store's compiled_version is the source of truth for whether a
@@ -88,6 +116,13 @@ class LoginRequest(BaseModel):
 
 class ReviseRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
+
+
+class DeployedInvokeRequest(BaseModel):
+    input: dict[str, Any]
+    # Run one agent instead of the whole graph.
+    agent_id: str | None = None
+    upstream_outputs: dict[str, Any] = Field(default_factory=dict)
 
 
 class RunRequest(BaseModel):
@@ -140,6 +175,19 @@ def _session(user: UserRecord) -> dict[str, Any]:
     }
 
 
+def _deployment_body(project: ProjectRecord) -> dict[str, Any] | None:
+    if project.deployment is None:
+        return None
+    deployment = project.deployment.effective()
+    return {
+        **deployment.model_dump(),
+        "live": deployment.live,
+        "in_progress": deployment.in_progress,
+        # The live runtime serves an older plan than the one in the project now.
+        "outdated": deployment.live and deployment.live_plan_version != project.plan_version,
+    }
+
+
 def _project_body(project: ProjectRecord) -> dict[str, Any]:
     return {
         "project_id": project.id,
@@ -149,6 +197,7 @@ def _project_body(project: ProjectRecord) -> dict[str, Any]:
         "compiled": project.is_compiled,
         "side_effect_tools_enabled": project.side_effect_tools_enabled,
         "conversation": [m.model_dump() for m in project.conversation],
+        "deployment": _deployment_body(project),
         "created_at": project.created_at,
         "updated_at": project.updated_at,
     }
@@ -367,7 +416,10 @@ def run_project(
     project = _get_project(project_id, user)
     if not project.is_compiled:
         raise NotCompiledError(project_id)
-    result = run_graph(_compiled_graph(project), req.input, project.plan.bounds)
+    try:
+        result = run_graph(_compiled_graph(project), req.input, project.plan.bounds)
+    except TimeoutError:
+        raise RunTimeoutError(project.plan.bounds.timeout_s) from None
     return {
         "project_id": project_id,
         "outputs": result["outputs"],
@@ -398,6 +450,96 @@ def invoke_agent(
             },
         )
     return {"project_id": project_id, "agent_id": agent_id, "result": result}
+
+
+# --------------------------------------------------------------------------- deploy
+@app.get("/projects/{project_id}/deployment")
+def get_deployment(project_id: str, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """The project's deployment (or null), and whether this server can deploy at all."""
+    project = _get_project(project_id, user)
+    return {
+        "available": _make_cloud() is not None,
+        "region": AGENTCORE_REGION,
+        "deployment": _deployment_body(project),
+    }
+
+
+@app.post("/projects/{project_id}/deploy", status_code=202)
+def deploy_project(
+    project_id: str, background: BackgroundTasks, user: UserRecord = Depends(current_user)
+) -> dict[str, Any]:
+    """Deploy the compiled plan to Amazon Bedrock AgentCore Runtime, or redeploy it.
+
+    Returns at once; packaging, upload and provisioning run in the background and are
+    reported through GET /projects/{id}/deployment. The previous version, if any, keeps
+    serving until the new one is ready.
+    """
+    project = _get_project(project_id, user)
+    if not project.is_compiled:
+        raise NotCompiledError(project_id)
+    cloud = _make_cloud()
+    if cloud is None:
+        raise DeployNotConfiguredError()
+    previous = project.deployment.effective() if project.deployment else None
+    if previous is not None and previous.in_progress:
+        raise DeployInProgressError()
+    # Fail now, not minutes into the job, if a key the plan needs isn't configured.
+    runtime_environment(project.plan)
+
+    deployment = Deployment(
+        status="packaging",
+        plan_version=project.plan_version,
+        region=cloud.region,
+        runtime_name=runtime_name(project_id),
+        runtime_id=previous.runtime_id if previous else None,
+        runtime_arn=previous.runtime_arn if previous else None,
+        live_plan_version=previous.live_plan_version if previous else None,
+        deployed_at=previous.deployed_at if previous else None,
+    )
+    _store.set_deployment(project_id, deployment)
+    background.add_task(run_deployment, project_id, _store, cloud, _package_builder)
+    return {"deployment": _deployment_body(_get_project(project_id, user))}
+
+
+@app.post("/projects/{project_id}/deployment/invoke")
+def invoke_deployment(
+    project_id: str, req: DeployedInvokeRequest, user: UserRecord = Depends(current_user)
+) -> dict[str, Any]:
+    """Run the deployed flow on AgentCore — same input and output shape as /run."""
+    project = _get_project(project_id, user)
+    deployment = project.deployment
+    if deployment is None or not deployment.live:
+        raise NotDeployedError()
+    cloud = _make_cloud()
+    if cloud is None:
+        raise DeployNotConfiguredError()
+    payload: dict[str, Any] = {"input": req.input}
+    if req.agent_id is not None:
+        payload["agent_id"] = req.agent_id
+        payload["upstream_outputs"] = req.upstream_outputs
+    result = cloud.invoke(deployment.runtime_arn, payload)
+    return {
+        "project_id": project_id,
+        "plan_version": deployment.live_plan_version,
+        "outputs": result.get("outputs", {}),
+        "errors": result.get("errors", []),
+        "halted": bool(result.get("halted", False)),
+    }
+
+
+@app.delete("/projects/{project_id}/deployment")
+def delete_deployment(project_id: str, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """Take the deployment down: delete the AgentCore runtime and its code packages."""
+    project = _get_project(project_id, user)
+    if project.deployment is None:
+        raise NotDeployedError()
+    if project.deployment.effective().in_progress:
+        raise DeployInProgressError()
+    cloud = _make_cloud()
+    if cloud is None:
+        raise DeployNotConfiguredError()
+    remove_deployment(project_id, _store, cloud)
+    return {"deployment": None}
 
 
 # --------------------------------------------------------------------------- errors
@@ -468,6 +610,45 @@ def _handle_request_validation(_req: Request, exc: RequestValidationError):
 @app.exception_handler(StoreUnavailableError)
 def _handle_store_unavailable(_req: Request, exc: StoreUnavailableError):
     return _error_response(503, "StoreUnavailable", str(exc))
+
+
+@app.exception_handler(RunTimeoutError)
+def _handle_run_timeout(_req: Request, exc: RunTimeoutError):
+    return _error_response(504, "RunTimeout", str(exc), {"limit_s": exc.limit_s})
+
+
+@app.exception_handler(DeployNotConfiguredError)
+def _handle_deploy_not_configured(_req: Request, exc: DeployNotConfiguredError):
+    return _error_response(503, "DeployNotConfigured", str(exc))
+
+
+@app.exception_handler(DeployInProgressError)
+def _handle_deploy_in_progress(_req: Request, exc: DeployInProgressError):
+    return _error_response(409, "DeployInProgress", str(exc))
+
+
+@app.exception_handler(NotDeployedError)
+def _handle_not_deployed(_req: Request, exc: NotDeployedError):
+    return _error_response(409, "NotDeployed", str(exc))
+
+
+@app.exception_handler(DeployedRunError)
+def _handle_deployed_run(_req: Request, exc: DeployedRunError):
+    # The runtime's own typed error, passed through; 502 because it came from upstream.
+    return _error_response(502, exc.error_type, str(exc), {"runtime_status": exc.status})
+
+
+@app.exception_handler(ClientError)
+@app.exception_handler(BotoCoreError)
+def _handle_aws(_req: Request, exc: Exception):
+    # AWS refused or failed a call (permissions, quotas, a missing resource); its message
+    # says which, and holds no secrets.
+    return _error_response(502, "AwsError", str(exc))
+
+
+@app.exception_handler(DeployError)
+def _handle_deploy(_req: Request, exc: DeployError):
+    return _error_response(502, "DeployFailed", str(exc))
 
 
 @app.exception_handler(PlanConflictError)

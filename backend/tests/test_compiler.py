@@ -238,3 +238,24 @@ def test_supervisor_invalid_route_target_finishes_safely(monkeypatch):
 
     assert result["next_agent"] == "FINISH"
     assert "w" not in result["outputs"]
+
+
+def test_run_graph_times_out_on_time_instead_of_waiting_for_the_run():
+    import time as _time
+
+    from agentic_platform.agent_schema import RunBounds
+    from agentic_platform.graph_builder import run_graph
+
+    class SlowGraph:
+        def invoke(self, state, config):
+            _time.sleep(2)
+            return {"outputs": {}, "errors": [], "halted": False}
+
+    started = _time.monotonic()
+    try:
+        run_graph(SlowGraph(), {}, RunBounds(timeout_s=0.2))
+        raise AssertionError("expected a timeout")
+    except TimeoutError as e:
+        assert "0.2s time limit" in str(e)
+    # Returned at the limit, not after the 2 s run finished.
+    assert _time.monotonic() - started < 1.0

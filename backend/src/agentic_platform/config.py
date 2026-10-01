@@ -25,6 +25,13 @@ MONGODB_TIMEOUT_MS = 3000
 JWT_SECRET: str | None = os.environ.get("JWT_SECRET") or None
 JWT_EXPIRES_MINUTES = int(os.environ.get("JWT_EXPIRES_MINUTES") or 60)
 
+# Deployment to Amazon Bedrock AgentCore Runtime. AWS credentials come from the standard
+# boto3 chain (`aws configure`, SSO, env vars); without them the deploy option is off.
+AGENTCORE_REGION: str = os.environ.get("AGENTCORE_REGION") or "ap-south-1"
+# Optional: use an existing execution role / code bucket instead of the platform's own.
+AGENTCORE_EXECUTION_ROLE_ARN: str | None = os.environ.get("AGENTCORE_EXECUTION_ROLE_ARN") or None
+AGENTCORE_CODE_BUCKET: str | None = os.environ.get("AGENTCORE_CODE_BUCKET") or None
+
 # Hard ceiling on team size, whether the user picks the count or the planner does.
 MAX_AGENTS = 10
 

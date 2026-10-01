@@ -1,0 +1,534 @@
+"""Deploying to Amazon Bedrock AgentCore Runtime — offline.
+
+AWS is never called: the runtime app is exercised directly, the AWS wrapper is checked
+against botocore's Stubber (exact request shapes), and the orchestration and API run
+against a fake cloud.
+"""
+
+import io
+import json
+import stat
+import zipfile
+from datetime import datetime, timedelta, timezone
+
+import boto3
+import pytest
+from botocore.response import StreamingBody
+from botocore.stub import ANY, Stubber
+from fastapi.testclient import TestClient
+
+import agentic_platform.app as app_module
+import agentic_platform.deploy as deploy
+import agentic_platform.runtime_app as runtime_app
+from agentic_platform.agent_schema import AgentPlan, AgentSpec, LLMConfig
+from agentic_platform.agentcore import AgentCoreCloud
+from agentic_platform.errors import (
+    DeployedRunError,
+    DeployError,
+    MissingProviderKeyError,
+    MissingToolKeyError,
+    UnknownToolError,
+)
+from agentic_platform.stores import Deployment, InMemoryProjectStore, InMemoryUserStore, ProjectRecord
+
+GEMINI = LLMConfig(provider="google_genai", model="gemini-3.1-pro-preview")
+
+
+def _plan(tools=(), llm=GEMINI):
+    return AgentPlan(
+        agents=[
+            AgentSpec(id="a", role="worker", system_prompt="do it", llm=llm, tools=list(tools)),
+            AgentSpec(id="b", role="writer", system_prompt="write it", llm=llm, depends_on=["a"]),
+        ],
+        orchestration_pattern="sequential",
+    )
+
+
+@pytest.fixture
+def keys(monkeypatch):
+    for name in ("GOOGLE_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY", "TAVILY_API_KEY", "PUBMED_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-secret")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-secret")
+
+
+# ------------------------------------------------------------------ runtime app (inside AgentCore)
+def test_runtime_ping_and_invocations_match_the_local_run_contract(monkeypatch):
+    seen = {}
+
+    def fake_run(graph, task_input, bounds):
+        seen["input"] = task_input
+        return {"outputs": {"b": {"content": "done", "data": {}}}, "errors": [], "halted": False}
+
+    monkeypatch.setattr(runtime_app, "run_graph", fake_run)
+    client = TestClient(runtime_app.create_app(_plan().model_dump()))
+
+    ping = client.get("/ping")
+    assert ping.status_code == 200
+    assert ping.json()["status"] == "Healthy"
+
+    r = client.post("/invocations", json={"input": {"q": "x"}})
+    assert r.status_code == 200
+    assert r.json() == {"outputs": {"b": {"content": "done", "data": {}}}, "errors": [], "halted": False}
+    assert seen["input"] == {"q": "x"}
+
+
+def test_runtime_single_agent_and_unknown_agent(monkeypatch):
+    monkeypatch.setattr(
+        runtime_app, "run_single_agent",
+        lambda plan, agent_id, task_input, upstream: {"outputs": {agent_id: {"content": "ok"}}},
+    )
+    client = TestClient(runtime_app.create_app(_plan().model_dump()))
+    r = client.post("/invocations", json={"input": {}, "agent_id": "a"})
+    assert r.json()["outputs"] == {"a": {"content": "ok"}}
+
+    monkeypatch.setattr(
+        runtime_app, "run_single_agent",
+        lambda *a, **k: (_ for _ in ()).throw(KeyError("ghost")),
+    )
+    r = client.post("/invocations", json={"input": {}, "agent_id": "ghost"})
+    assert r.status_code == 404
+    assert r.json()["error_type"] == "AgentNotFound"
+
+
+def test_runtime_rejects_a_malformed_request():
+    client = TestClient(runtime_app.create_app(_plan().model_dump()))
+    r = client.post("/invocations", json={"prompt": "hello"})
+    assert r.status_code == 422
+    assert r.json()["error_type"] == "ValidationError"
+
+
+def test_runtime_refuses_to_start_with_an_invalid_plan():
+    # Compiling at startup means a bad package fails its health check, not a user's call.
+    bad = _plan(tools=["ghost_tool"]).model_dump()
+    with pytest.raises(UnknownToolError):
+        runtime_app.create_app(bad)
+
+
+# ------------------------------------------------------------------ runtime environment
+def test_environment_holds_only_the_keys_the_plan_uses(keys):
+    env = deploy.runtime_environment(_plan())
+    assert env == {"GEMINI_API_KEY": "gemini-secret"}  # no OpenAI key: no agent uses it
+
+
+def test_environment_includes_tool_keys_required_and_optional(keys, monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "tavily-secret")
+    monkeypatch.setenv("PUBMED_API_KEY", "pubmed-secret")
+    env = deploy.runtime_environment(_plan(tools=["web_search", "pubmed"]))
+    assert env["TAVILY_API_KEY"] == "tavily-secret"
+    assert env["PUBMED_API_KEY"] == "pubmed-secret"
+
+
+def test_environment_missing_keys_fail_before_anything_is_deployed(keys, monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY")
+    with pytest.raises(MissingProviderKeyError):
+        deploy.runtime_environment(_plan())
+    monkeypatch.setenv("GEMINI_API_KEY", "x")
+    with pytest.raises(MissingToolKeyError):
+        deploy.runtime_environment(_plan(tools=["web_search"]))
+    # pubmed's key is optional
+    assert "PUBMED_API_KEY" not in deploy.runtime_environment(_plan(tools=["pubmed"]))
+
+
+def test_local_only_models_cannot_be_deployed(keys):
+    with pytest.raises(DeployError, match="ollama"):
+        deploy.runtime_environment(_plan(llm=LLMConfig(provider="ollama", model="llama3.1")))
+
+
+# ------------------------------------------------------------------ package
+def test_package_has_entrypoint_plan_and_code_with_linux_permissions(tmp_path, monkeypatch):
+    deps = tmp_path / "deps"
+    (deps / "somelib").mkdir(parents=True)
+    (deps / "somelib" / "__init__.py").write_text("VALUE = 1\n")
+    (deps / "somelib" / "__pycache__").mkdir()
+    (deps / "somelib" / "__pycache__" / "x.pyc").write_bytes(b"junk")
+
+    out = tmp_path / "package.zip"
+    sizes = deploy.build_package(_plan(), out, dependencies=lambda: deps)
+
+    with zipfile.ZipFile(out) as zf:
+        names = set(zf.namelist())
+        assert {"main.py", "plan.json", "somelib/__init__.py"} <= names
+        assert "agentic_platform/runtime_app.py" in names
+        assert "agentic_platform/graph_builder.py" in names
+        # Platform-only code (accounts, database, AWS) never ships in a runtime.
+        assert not {"agentic_platform/app.py", "agentic_platform/auth.py",
+                    "agentic_platform/stores.py", "agentic_platform/deploy.py"} & names
+        assert not any("__pycache__" in n or n.endswith(".pyc") for n in names)
+        assert AgentPlan.model_validate(json.loads(zf.read("plan.json"))) == _plan()
+        assert b"create_app" in zf.read("main.py")
+        for info in zf.infolist():
+            assert info.create_system == 3  # Unix entries, whatever OS built the zip
+            assert stat.S_IMODE(info.external_attr >> 16) == 0o644
+    assert sizes["zipped"] == out.stat().st_size
+
+
+def test_package_over_agentcore_limits_is_rejected(tmp_path, monkeypatch):
+    deps = tmp_path / "deps"
+    deps.mkdir()
+    (deps / "big.bin").write_bytes(b"x" * 4096)
+    monkeypatch.setattr(deploy, "MAX_UNZIPPED_BYTES", 1024)
+    with pytest.raises(DeployError, match="750 MB"):
+        deploy.build_package(_plan(), tmp_path / "p.zip", dependencies=lambda: deps)
+
+
+# ------------------------------------------------------------------ AWS wrapper (stubbed)
+def _cloud(**kwargs):
+    session = boto3.Session(
+        aws_access_key_id="test", aws_secret_access_key="test", region_name="ap-south-1"
+    )
+    cloud = AgentCoreCloud("ap-south-1", session=session, **kwargs)
+    cloud._account = "123456789012"
+    return cloud
+
+
+def test_create_runtime_request_shape():
+    cloud = _cloud()
+    with Stubber(cloud.control) as stub:
+        stub.add_response(
+            "create_agent_runtime",
+            {
+                "agentRuntimeArn": "arn:aws:bedrock-agentcore:ap-south-1:123456789012:runtime/agentic_p1-abcdefghij",
+                "agentRuntimeId": "agentic_p1-abcdefghij",
+                "agentRuntimeVersion": "1",
+                "createdAt": datetime(2026, 10, 1),
+                "status": "CREATING",
+            },
+            {
+                "agentRuntimeName": "agentic_p1",
+                "agentRuntimeArtifact": {
+                    "codeConfiguration": {
+                        "code": {
+                            "s3": {
+                                "bucket": "bedrock-agentcore-agentic-platform-123456789012-ap-south-1",
+                                "prefix": "agentic_p1/v1.zip",
+                            }
+                        },
+                        "runtime": "PYTHON_3_11",
+                        "entryPoint": ["main.py"],
+                    }
+                },
+                "roleArn": "arn:aws:iam::123456789012:role/r",
+                "networkConfiguration": {"networkMode": "PUBLIC"},
+                "environmentVariables": {"GEMINI_API_KEY": "k"},
+                "description": "d",
+            },
+        )
+        runtime_id, arn = cloud.deploy_runtime(
+            "agentic_p1", "agentic_p1/v1.zip", {"GEMINI_API_KEY": "k"},
+            "arn:aws:iam::123456789012:role/r", description="d",
+        )
+    assert runtime_id == "agentic_p1-abcdefghij"
+    assert arn.endswith("runtime/agentic_p1-abcdefghij")
+
+
+def test_existing_runtime_is_updated_not_recreated():
+    cloud = _cloud()
+    with Stubber(cloud.control) as stub:
+        stub.add_response(
+            "update_agent_runtime",
+            {
+                "agentRuntimeArn": "arn:aws:bedrock-agentcore:ap-south-1:123456789012:runtime/agentic_p1-abcdefghij",
+                "agentRuntimeId": "agentic_p1-abcdefghij",
+                "agentRuntimeVersion": "2",
+                "createdAt": datetime(2026, 10, 1),
+                "lastUpdatedAt": datetime(2026, 10, 1),
+                "status": "UPDATING",
+            },
+            {
+                "agentRuntimeId": "agentic_p1-abcdefghij",
+                "agentRuntimeArtifact": ANY,
+                "roleArn": ANY,
+                "networkConfiguration": ANY,
+                "environmentVariables": ANY,
+            },
+        )
+        cloud.deploy_runtime("agentic_p1", "k.zip", {}, "arn:aws:iam::123456789012:role/r",
+                             existing_runtime_id="agentic_p1-abcdefghij")
+
+
+def _runtime_status(status, reason=None):
+    body = {
+        "agentRuntimeArn": "arn:aws:bedrock-agentcore:ap-south-1:123456789012:runtime/agentic_p1-abcdefghij",
+        "agentRuntimeName": "agentic_p1",
+        "agentRuntimeId": "agentic_p1-abcdefghij",
+        "agentRuntimeVersion": "1",
+        "createdAt": datetime(2026, 10, 1),
+        "lastUpdatedAt": datetime(2026, 10, 1),
+        "roleArn": "arn:aws:iam::123456789012:role/r",
+        "networkConfiguration": {"networkMode": "PUBLIC"},
+        "status": status,
+        "lifecycleConfiguration": {"idleRuntimeSessionTimeout": 900, "maxLifetime": 28800},
+    }
+    if reason:
+        body["failureReason"] = reason
+    return body
+
+
+def test_wait_until_ready_polls_then_succeeds_or_reports_the_failure():
+    cloud = _cloud()
+    with Stubber(cloud.control) as stub:
+        stub.add_response("get_agent_runtime", _runtime_status("CREATING"))
+        stub.add_response("get_agent_runtime", _runtime_status("READY"))
+        cloud.wait_until_ready("agentic_p1-abcdefghij", poll_s=0)
+
+    with Stubber(cloud.control) as stub:
+        stub.add_response("get_agent_runtime", _runtime_status("CREATE_FAILED", "bad package"))
+        with pytest.raises(DeployError, match="CREATE_FAILED: bad package"):
+            cloud.wait_until_ready("agentic_p1-abcdefghij", poll_s=0)
+
+
+def _invoke_response(body: dict, status=200):
+    raw = json.dumps(body).encode()
+    return {
+        "response": StreamingBody(io.BytesIO(raw), len(raw)),
+        "contentType": "application/json",
+        "runtimeSessionId": "s" * 64,
+        "statusCode": status,
+    }
+
+
+def test_invoke_sends_the_task_and_returns_the_runtime_json():
+    cloud = _cloud()
+    with Stubber(cloud.data) as stub:
+        stub.add_response(
+            "invoke_agent_runtime",
+            _invoke_response({"outputs": {"b": {"content": "hi"}}, "errors": [], "halted": False}),
+            {
+                "agentRuntimeArn": "arn:x",
+                "runtimeSessionId": ANY,
+                "payload": json.dumps({"input": {"q": "x"}}).encode(),
+                "contentType": "application/json",
+                "accept": "application/json",
+                "qualifier": "DEFAULT",
+            },
+        )
+        assert cloud.invoke("arn:x", {"input": {"q": "x"}})["outputs"]["b"]["content"] == "hi"
+
+
+def test_invoke_surfaces_the_runtimes_typed_error():
+    cloud = _cloud()
+    with Stubber(cloud.data) as stub:
+        stub.add_response(
+            "invoke_agent_runtime",
+            _invoke_response({"error_type": "RunTimeout", "message": "too slow", "details": None}, 504),
+        )
+        with pytest.raises(DeployedRunError) as exc:
+            cloud.invoke("arn:x", {"input": {}})
+    assert exc.value.error_type == "RunTimeout"
+    assert exc.value.status == 504
+
+
+# ------------------------------------------------------------------ orchestration (fake cloud)
+class FakeCloud:
+    region = "ap-south-1"
+
+    def __init__(self, fail_at=None):
+        self.fail_at = fail_at
+        self.calls = []
+        self.environment = None
+        self.invocations = []
+
+    def _step(self, name):
+        self.calls.append(name)
+        if name == self.fail_at:
+            raise DeployError(f"{name} broke")
+
+    def ensure_bucket(self):
+        self._step("ensure_bucket")
+
+    def upload(self, path, key):
+        self._step("upload")
+        self.key = key
+
+    def ensure_role(self):
+        self._step("ensure_role")
+        return "arn:aws:iam::123456789012:role/r"
+
+    def deploy_runtime(self, name, code_key, environment, role_arn, existing_runtime_id=None, description=""):
+        self._step("update_runtime" if existing_runtime_id else "create_runtime")
+        self.environment = environment
+        return "agentic_p-abcdefghij", "arn:aws:bedrock-agentcore:ap-south-1:123456789012:runtime/agentic_p-abcdefghij"
+
+    def wait_until_ready(self, runtime_id):
+        self._step("wait_until_ready")
+
+    def delete_runtime(self, runtime_id):
+        self._step("delete_runtime")
+
+    def delete_code(self, prefix):
+        self._step("delete_code")
+
+    def invoke(self, runtime_arn, payload):
+        self.invocations.append(payload)
+        return {"outputs": {"b": {"content": "from AgentCore"}}, "errors": [], "halted": False}
+
+
+def _fake_packager(plan, path):
+    path.write_bytes(b"zip")
+
+
+def _store_with_deployment(**deployment):
+    store = InMemoryProjectStore()
+    store.create(ProjectRecord(id="p", tenant_id="u", brief="b", plan=_plan(), compiled_version=1))
+    store.set_deployment("p", Deployment(status="packaging", plan_version=1, region="ap-south-1",
+                                         runtime_name="agentic_p", **deployment))
+    return store
+
+
+def test_successful_deployment_records_the_live_runtime(keys):
+    store, cloud = _store_with_deployment(), FakeCloud()
+    deploy.run_deployment("p", store, cloud, _fake_packager)
+    d = store.get("p").deployment
+    assert d.status == "ready"
+    assert d.live and d.live_plan_version == 1
+    assert d.runtime_arn.endswith("agentic_p-abcdefghij")
+    assert cloud.calls == ["ensure_bucket", "upload", "ensure_role", "create_runtime", "wait_until_ready"]
+    assert cloud.key.startswith("agentic_p/v1-")
+    assert cloud.environment == {"GEMINI_API_KEY": "gemini-secret"}
+
+
+def test_failed_deployment_is_recorded_and_never_leaks_keys(keys):
+    store, cloud = _store_with_deployment(), FakeCloud(fail_at="wait_until_ready")
+    deploy.run_deployment("p", store, cloud, _fake_packager)
+    d = store.get("p").deployment
+    assert d.status == "failed"
+    assert "wait_until_ready broke" in d.error
+    assert "gemini-secret" not in d.model_dump_json()
+
+
+def test_redeploy_updates_the_existing_runtime(keys):
+    store = _store_with_deployment(runtime_id="agentic_p-abcdefghij", runtime_arn="arn:old", live_plan_version=1)
+    cloud = FakeCloud()
+    deploy.run_deployment("p", store, cloud, _fake_packager)
+    assert "update_runtime" in cloud.calls and "create_runtime" not in cloud.calls
+
+
+def test_stalled_deployment_is_reported_as_failed():
+    d = Deployment(status="uploading", plan_version=1, region="r", runtime_name="n",
+                   updated_at=datetime.now(timezone.utc) - timedelta(hours=1))
+    assert d.effective().status == "failed"
+    assert "Interrupted" in d.effective().error
+    fresh = d.model_copy(update={"updated_at": datetime.now(timezone.utc)})
+    assert fresh.effective().status == "uploading"
+
+
+# ------------------------------------------------------------------ API
+@pytest.fixture
+def api(monkeypatch, keys):
+    monkeypatch.setattr(app_module, "plan_project", lambda **kw: _plan())
+    monkeypatch.setattr(app_module, "_store", InMemoryProjectStore())
+    monkeypatch.setattr(app_module, "_users", InMemoryUserStore())
+    monkeypatch.setattr(app_module, "_package_builder", _fake_packager)
+    cloud = FakeCloud()
+    monkeypatch.setattr(app_module, "_make_cloud", lambda: cloud)
+    app_module._COMPILED.clear()
+    client = TestClient(app_module.app)
+
+    def login(email):
+        token = client.post("/auth/register", json={"email": email, "password": "a-long-password"}).json()["access_token"]
+        return {"Authorization": f"Bearer {token}"}
+
+    client.cloud = cloud
+    client.login = login
+    return client
+
+
+def _compiled_project(api, headers):
+    pid = api.post("/projects", json={"brief": "x"}, headers=headers).json()["project_id"]
+    api.post(f"/projects/{pid}/compile", headers=headers)
+    return pid
+
+
+def test_deploy_then_invoke_then_remove(api):
+    h = api.login("ada@example.com")
+    pid = _compiled_project(api, h)
+
+    status = api.get(f"/projects/{pid}/deployment", headers=h).json()
+    assert status == {"available": True, "region": "ap-south-1", "deployment": None}
+
+    r = api.post(f"/projects/{pid}/deploy", headers=h)
+    assert r.status_code == 202
+    # The background job ran (TestClient runs it before returning).
+    d = api.get(f"/projects/{pid}/deployment", headers=h).json()["deployment"]
+    assert d["status"] == "ready" and d["live"] is True and d["outdated"] is False
+    assert api.get(f"/projects/{pid}", headers=h).json()["deployment"]["status"] == "ready"
+
+    r = api.post(f"/projects/{pid}/deployment/invoke", json={"input": {"q": "x"}}, headers=h)
+    assert r.status_code == 200
+    assert r.json()["outputs"]["b"]["content"] == "from AgentCore"
+    assert api.cloud.invocations == [{"input": {"q": "x"}}]
+
+    assert api.delete(f"/projects/{pid}/deployment", headers=h).json() == {"deployment": None}
+    assert api.get(f"/projects/{pid}/deployment", headers=h).json()["deployment"] is None
+
+
+def test_deploy_needs_a_compiled_plan(api):
+    h = api.login("ada@example.com")
+    pid = api.post("/projects", json={"brief": "x"}, headers=h).json()["project_id"]
+    r = api.post(f"/projects/{pid}/deploy", headers=h)
+    assert r.status_code == 409
+    assert r.json()["error_type"] == "NotCompiled"
+
+
+def test_deploy_without_aws_credentials_says_so(api, monkeypatch):
+    monkeypatch.setattr(app_module, "_make_cloud", lambda: None)
+    h = api.login("ada@example.com")
+    pid = _compiled_project(api, h)
+    assert api.get(f"/projects/{pid}/deployment", headers=h).json()["available"] is False
+    r = api.post(f"/projects/{pid}/deploy", headers=h)
+    assert r.status_code == 503
+    assert r.json()["error_type"] == "DeployNotConfigured"
+
+
+def test_deploy_with_a_missing_provider_key_fails_up_front(api, monkeypatch):
+    h = api.login("ada@example.com")
+    pid = _compiled_project(api, h)
+    monkeypatch.delenv("GEMINI_API_KEY")
+    r = api.post(f"/projects/{pid}/deploy", headers=h)
+    assert r.json()["error_type"] == "MissingProviderKey"
+    assert api.get(f"/projects/{pid}/deployment", headers=h).json()["deployment"] is None
+    assert api.cloud.calls == []
+
+
+def test_second_deploy_while_one_runs_is_rejected(api):
+    h = api.login("ada@example.com")
+    pid = _compiled_project(api, h)
+    app_module._store.set_deployment(pid, Deployment(status="uploading", plan_version=1,
+                                                     region="ap-south-1", runtime_name="n"))
+    r = api.post(f"/projects/{pid}/deploy", headers=h)
+    assert r.status_code == 409
+    assert r.json()["error_type"] == "DeployInProgress"
+
+
+def test_invoke_without_a_live_deployment_is_rejected(api):
+    h = api.login("ada@example.com")
+    pid = _compiled_project(api, h)
+    r = api.post(f"/projects/{pid}/deployment/invoke", json={"input": {}}, headers=h)
+    assert r.status_code == 409
+    assert r.json()["error_type"] == "NotDeployed"
+
+
+def test_plan_change_marks_the_deployment_outdated_but_keeps_it_live(api):
+    h = api.login("ada@example.com")
+    pid = _compiled_project(api, h)
+    api.post(f"/projects/{pid}/deploy", headers=h)
+    api.patch(f"/projects/{pid}/plan", json=_plan().model_dump(), headers=h)
+    d = api.get(f"/projects/{pid}/deployment", headers=h).json()["deployment"]
+    assert d["live"] is True
+    assert d["outdated"] is True
+    assert d["live_plan_version"] == 1
+
+
+def test_deployments_are_private_to_their_owner(api):
+    ada, bob = api.login("ada@example.com"), api.login("bob@example.com")
+    pid = _compiled_project(api, ada)
+    api.post(f"/projects/{pid}/deploy", headers=ada)
+    for r in (
+        api.get(f"/projects/{pid}/deployment", headers=bob),
+        api.post(f"/projects/{pid}/deploy", headers=bob),
+        api.post(f"/projects/{pid}/deployment/invoke", json={"input": {}}, headers=bob),
+        api.delete(f"/projects/{pid}/deployment", headers=bob),
+    ):
+        assert r.status_code == 404
+    assert api.get(f"/projects/{pid}/deployment", headers=ada).json()["deployment"]["live"] is True
