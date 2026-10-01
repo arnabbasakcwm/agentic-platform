@@ -3,6 +3,11 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
+  test: {
+    // Unit tests for pure logic; the browser-level checks live in e2e/ (Playwright).
+    include: ["src/**/*.test.{js,jsx}"],
+    environment: "node",
+  },
   server: {
     port: 5173,
     // Proxying keeps the browser on one origin in dev, so the console works even if the

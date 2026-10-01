@@ -7,3 +7,8 @@ __pycache__/
 .ruff_cache/
 # Built Linux/arm64 dependencies for AgentCore deployments
 .deploy-cache/
+
+# Playwright output
+frontend/e2e/screenshots/
+frontend/test-results/
+frontend/playwright-report/

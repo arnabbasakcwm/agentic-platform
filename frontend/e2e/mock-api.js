@@ -1,0 +1,181 @@
+// A scripted stand-in for the platform API, for the Playwright checks. It serves one
+// signed-in user with one compiled three-agent travel project and streams run events
+// with real timing, so the Run page can be captured idle, mid-run, completed and failed
+// without calling a model. Answers echo the task input, so a test can prove that the
+// input it typed is what reached the agents.
+//
+//   node e2e/mock-api.js [port]
+//
+// Scenario per run, chosen by the task input: {"scenario": "fail"} times out midway,
+// {"scenario": "slow"} pauses after the first agent (for mid-run screenshots); anything
+// else completes.
+
+import http from "node:http";
+
+const PORT = Number(process.argv[2] ?? process.env.MOCK_API_PORT ?? 8765);
+const PROJECT_ID = "e2e0travel0project";
+
+const llm = { provider: "google_genai", model: "gemini-3.1-pro-preview", temperature: 0, extra_params: {} };
+const plan = {
+  agents: [
+    { id: "flight_searcher", role: "Flight search specialist", system_prompt: "Search flights for the trip in the task input.", llm, tools: ["web_search"], depends_on: [], output_schema: "default" },
+    { id: "price_analyzer", role: "Fare analyst", system_prompt: "Compare the fares found.", llm, tools: ["calculator"], depends_on: ["flight_searcher"], output_schema: "default" },
+    { id: "travel_advisor", role: "Travel advisor", system_prompt: "Recommend the top options.", llm, tools: [], depends_on: ["price_analyzer"], output_schema: "default" },
+  ],
+  orchestration_pattern: "sequential",
+  supervisor_id: null,
+  bounds: { max_steps: 8, timeout_s: 300, max_retries: 3 },
+  example_input: { origin: "Kolkata (CCU)", destination: "New Delhi (DEL)", month: "October" },
+};
+const project = {
+  project_id: PROJECT_ID,
+  brief: "Travel agent for finding cheap flights",
+  plan,
+  plan_version: 2,
+  compiled: true,
+  side_effect_tools_enabled: ["web_search"],
+  conversation: [],
+  deployment: null,
+  created_at: "2026-10-01T06:00:00Z",
+  updated_at: "2026-10-01T06:09:54Z",
+};
+
+function trip(input) {
+  const from = input.origin ?? "your origin";
+  const to = input.destination ?? "your destination";
+  return { from, to, month: input.month ?? "your dates" };
+}
+
+function outputs(input) {
+  const { from, to, month } = trip(input);
+  return {
+    flight_searcher: {
+      content: `## Flights found: ${from} → ${to}\n\nSearched **4 airlines** for ${month}. Direct flights take **2h 15m–2h 35m**.\n\n- IndiGo — 6 daily departures\n- Air India — morning and late-night\n- Akasa Air — promotional morning fares\n- SpiceJet — last flight around 11:20 PM`,
+      data: {
+        origin: from,
+        destination: to,
+        travel_month: month,
+        cheapest_one_way_price_inr: 7004,
+        cheapest_round_trip_price_usd: 118,
+        airlines: [
+          { airline: "IndiGo", departures_per_day: 6, fare_inr: 8249 },
+          { airline: "Air India", departures_per_day: 2, fare_inr: 8528 },
+          { airline: "Akasa Air", departures_per_day: 1, fare_inr: 7004 },
+        ],
+      },
+    },
+    price_analyzer: {
+      content: `### Fare comparison\n\n| Airline | One-way (INR) | Notes |\n|---|---|---|\n| Akasa Air | ₹7,004 | Promotional, mornings only |\n| IndiGo | ₹8,249–₹8,849 | Most flexible |\n| Air India | ₹8,528–₹9,128 | Full service |\n\nRound trips start around **$118 (USD)** — quoted in USD by the source, not converted.`,
+      data: { lowest_fare_inr: 7004, median_fare_inr: 8528, spread_inr: 2124 },
+    },
+    travel_advisor: {
+      content: `Here are the top 3 options for **${from} → ${to}** in ${month}:\n\n### 🥇 1. Budget pick: Akasa Air\n* **Schedule:** Morning departures\n* **Fare:** from **₹7,004** one-way\n* **Why:** Cheapest on the route; book early.\n\n### 🥈 2. Most flexible: IndiGo\n* **Schedule:** 05:20, 08:25, 12:00, 16:10, 21:00, 22:30\n* **Fare:** ₹8,249–₹8,849\n\n### 🥉 3. Full service: Air India\n* **Schedule:** Morning and late-night\n* **Fare:** ₹8,528–₹9,128\n\n> **Tip:** October is festival season — fares climb as dates fill. Compare live prices at https://www.example.com/flights/search?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&month=${encodeURIComponent(month)}&sort=price_ascending&cabin=economy before booking.`,
+      data: {
+        recommendations: [
+          { rank: 1, airline: "Akasa Air", fare_inr: 7004 },
+          { rank: 2, airline: "IndiGo", fare_inr: 8249 },
+          { rank: 3, airline: "Air India", fare_inr: 8528 },
+        ],
+      },
+    },
+  };
+}
+
+function send(res, status, body) {
+  res.writeHead(status, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(body));
+}
+
+function readBody(req) {
+  return new Promise((resolve) => {
+    let raw = "";
+    req.on("data", (c) => (raw += c));
+    req.on("end", () => {
+      try {
+        resolve(raw ? JSON.parse(raw) : {});
+      } catch {
+        resolve({});
+      }
+    });
+  });
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function streamRun(req, res, input) {
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+  });
+  let open = true;
+  req.on("close", () => (open = false));
+  const t0 = Date.now() / 1000;
+  const emit = (event, data) => {
+    if (open) res.write(`event: ${event}\ndata: ${JSON.stringify({ ...data, at: Date.now() / 1000 })}\n\n`);
+  };
+  const out = outputs(input);
+  const step = Number(input.step_ms ?? 400);
+
+  emit("run_started", { timeout_s: plan.bounds.timeout_s });
+  for (const [i, agent] of plan.agents.entries()) {
+    if (!open) return;
+    const started = Date.now();
+    emit("node_started", { node: agent.id });
+    if (input.scenario === "slow" && i === 1) await sleep(120_000);
+    if (input.scenario === "fail" && i === 1) {
+      await sleep(step);
+      emit("run_failed", {
+        error_type: "RunTimeout",
+        message: "the run exceeded its 60s time limit",
+        limit_s: 60,
+      });
+      return res.end();
+    }
+    await sleep(step * (i + 1));
+    emit("node_completed", { node: agent.id, duration_ms: Date.now() - started, attempts: 1, output: out[agent.id] });
+  }
+  emit("run_completed", {
+    duration_ms: Math.round((Date.now() / 1000 - t0) * 1000),
+    outputs: out,
+    errors: [],
+    halted: false,
+  });
+  res.end();
+}
+
+const server = http.createServer(async (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
+  if (req.method === "OPTIONS") return res.writeHead(204).end();
+
+  const path = new URL(req.url, "http://x").pathname;
+  const p = `/projects/${PROJECT_ID}`;
+
+  if (path === "/health") return send(res, 200, { status: "ok" });
+  if (path === "/tools") return send(res, 200, { tools: [{ name: "calculator", side_effect: false, description: "Arithmetic" }], default: ["calculator"] });
+  if (path === "/providers") return send(res, 200, { providers: [{ provider: "google_genai", model: "gemini-3.1-pro-preview", default: true }] });
+  if (path === "/auth/me") return send(res, 200, { id: "u1", email: "e2e@example.com", created_at: "2026-10-01T00:00:00Z" });
+  if (path === "/projects") {
+    return send(res, 200, {
+      projects: [{ project_id: PROJECT_ID, brief: project.brief, orchestration_pattern: "sequential", agent_count: 3, compiled: true, created_at: project.created_at, updated_at: project.updated_at }],
+    });
+  }
+  if (path === p) return send(res, 200, project);
+  if (path === `${p}/deployment`) return send(res, 200, { available: false, region: "ap-south-1", deployment: null });
+  if (path === `${p}/run/stream` && req.method === "POST") {
+    const body = await readBody(req);
+    return streamRun(req, res, body.input ?? {});
+  }
+  const agentRun = path.match(new RegExp(`^${p}/agents/([^/]+)/invoke$`));
+  if (agentRun && req.method === "POST") {
+    const body = await readBody(req);
+    await sleep(500);
+    const output = outputs(body.input ?? {})[agentRun[1]];
+    return send(res, 200, { project_id: PROJECT_ID, agent_id: agentRun[1], result: { outputs: { [agentRun[1]]: output } } });
+  }
+  send(res, 404, { error_type: "NotFound", message: `no mock for ${req.method} ${path}`, details: null });
+});
+
+server.listen(PORT, "127.0.0.1", () => console.log(`mock API on http://127.0.0.1:${PORT}`));
