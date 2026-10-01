@@ -75,7 +75,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-_store, _users = make_stores()
+_store, _users, _knowledge = make_stores()
 
 
 def _make_cloud():

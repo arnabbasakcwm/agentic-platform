@@ -250,3 +250,80 @@ def test_conversation_keeps_only_the_most_recent_messages(store):
     updated = store.record_exchange(record.id, 1, batch)
     assert len(updated.conversation) == CONVERSATION_LIMIT
     assert updated.conversation[-1].content == f"m{CONVERSATION_LIMIT + 4}"
+
+
+# ------------------------------------------------------------------ KnowledgeStore
+@pytest.fixture
+def knowledge(backend):
+    from agentic_platform.stores import InMemoryKnowledgeStore, MongoKnowledgeStore
+
+    return InMemoryKnowledgeStore() if backend is None else MongoKnowledgeStore(backend)
+
+
+def _kdoc(doc_id="d1", project_id="p1", **overrides):
+    from agentic_platform.stores import KnowledgeDocument
+
+    fields = dict(id=doc_id, project_id=project_id, tenant_id="u1", filename="guide.pdf", kind=".pdf", size_bytes=10)
+    return KnowledgeDocument(**{**fields, **overrides})
+
+
+def _kchunk(chunk_id, doc_id="d1", project_id="p1", ordinal=0, embedding=None):
+    from agentic_platform.stores import KnowledgeChunk
+
+    return KnowledgeChunk(
+        id=chunk_id, project_id=project_id, document_id=doc_id, ordinal=ordinal,
+        text=f"text {chunk_id}", source="page 1", embedding=embedding or [0.1, 0.2],
+    )
+
+
+def test_documents_are_scoped_to_their_project(knowledge):
+    knowledge.add_document(_kdoc("d1", "p1"))
+    knowledge.add_document(_kdoc("d2", "p2"))
+    assert [d.id for d in knowledge.list_documents("p1")] == ["d1"]
+    assert knowledge.get_document("p2", "d1") is None  # another project's id
+    assert knowledge.update_document("p2", "d1", status="ready") is False
+
+
+def test_document_status_updates(knowledge):
+    knowledge.add_document(_kdoc())
+    assert knowledge.update_document("p1", "d1", status="ready", chunk_count=3)
+    doc = knowledge.get_document("p1", "d1")
+    assert (doc.status, doc.chunk_count) == ("ready", 3)
+
+
+def test_chunks_replace_filter_and_delete_with_their_document(knowledge):
+    knowledge.add_document(_kdoc("d1"))
+    knowledge.add_document(_kdoc("d2"))
+    knowledge.replace_chunks("p1", "d1", [_kchunk("c1", ordinal=0), _kchunk("c2", ordinal=1)])
+    knowledge.replace_chunks("p1", "d2", [_kchunk("c3", doc_id="d2")])
+    knowledge.replace_chunks("p1", "d1", [_kchunk("c4")])  # replaces c1, c2
+    assert sorted(c.id for c in knowledge.chunks_for_project("p1")) == ["c3", "c4"]
+    assert [c.id for c in knowledge.chunks_for_project("p1", ["d2"])] == ["c3"]
+    assert knowledge.delete_document("p1", "d1") is True
+    assert [c.id for c in knowledge.chunks_for_project("p1")] == ["c3"]
+    assert knowledge.delete_document("p1", "d1") is False
+
+
+def test_embeddings_can_be_replaced(knowledge):
+    knowledge.add_document(_kdoc())
+    knowledge.replace_chunks("p1", "d1", [_kchunk("c1")])
+    knowledge.set_embeddings("p1", {"c1": [1.0, 0.0, 0.0]})
+    assert knowledge.chunks_for_project("p1")[0].embedding == [1.0, 0.0, 0.0]
+
+
+def test_stalled_indexing_is_reported_as_failed():
+    from datetime import datetime, timedelta, timezone
+
+    stale = _kdoc(status="processing", updated_at=datetime.now(timezone.utc) - timedelta(hours=1))
+    assert stale.effective().status == "failed"
+    assert _kdoc(status="processing").effective().status == "processing"
+
+
+def test_project_embedding_setting_round_trips(store):
+    from agentic_platform.agent_schema import EmbeddingConfig
+
+    record = _record()
+    store.create(record)
+    config = EmbeddingConfig(provider="google_genai", model="gemini-embedding-001")
+    assert store.set_knowledge_embedding(record.id, config)
+    assert store.get(record.id).knowledge_embedding == config

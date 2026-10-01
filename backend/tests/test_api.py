@@ -3,7 +3,7 @@ import json
 import agentic_platform.app as app_module
 from agentic_platform.agent_schema import AgentPlan, AgentSpec, LLMConfig
 from agentic_platform.errors import StoreUnavailableError
-from agentic_platform.stores import InMemoryProjectStore, InMemoryUserStore
+from agentic_platform.stores import InMemoryProjectStore, InMemoryKnowledgeStore, InMemoryUserStore
 from fastapi.testclient import TestClient
 
 
@@ -27,6 +27,7 @@ def _client(monkeypatch):
     # Always the in-memory store, whatever MONGODB_URI the developer's .env holds.
     monkeypatch.setattr(app_module, "_store", InMemoryProjectStore())
     monkeypatch.setattr(app_module, "_users", InMemoryUserStore())
+    monkeypatch.setattr(app_module, "_knowledge", InMemoryKnowledgeStore())
     app_module._COMPILED.clear()
     client = TestClient(app_module.app)
     # Project routes need a signed-in user; auth itself is covered in test_auth.py.

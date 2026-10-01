@@ -29,7 +29,7 @@ from agentic_platform.errors import (
     MissingToolKeyError,
     UnknownToolError,
 )
-from agentic_platform.stores import Deployment, InMemoryProjectStore, InMemoryUserStore, ProjectRecord
+from agentic_platform.stores import Deployment, InMemoryProjectStore, InMemoryKnowledgeStore, InMemoryUserStore, ProjectRecord
 
 GEMINI = LLMConfig(provider="google_genai", model="gemini-3.1-pro-preview")
 
@@ -419,6 +419,7 @@ def api(monkeypatch, keys):
     monkeypatch.setattr(app_module, "plan_project", lambda **kw: _plan())
     monkeypatch.setattr(app_module, "_store", InMemoryProjectStore())
     monkeypatch.setattr(app_module, "_users", InMemoryUserStore())
+    monkeypatch.setattr(app_module, "_knowledge", InMemoryKnowledgeStore())
     monkeypatch.setattr(app_module, "_package_builder", _fake_packager)
     cloud = FakeCloud()
     monkeypatch.setattr(app_module, "_make_cloud", lambda: cloud)

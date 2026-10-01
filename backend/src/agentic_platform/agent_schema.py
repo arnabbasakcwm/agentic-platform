@@ -161,6 +161,14 @@ class AgentPlan(BaseModel):
         return self
 
 
+class EmbeddingConfig(BaseModel):
+    """The embedding model a project's knowledge base is indexed with. Passages and
+    queries must use the same one, so changing it means re-embedding every passage."""
+
+    provider: ProviderName
+    model: str
+
+
 class PlanRevision(BaseModel):
     """What the planner returns when asked to change an existing project: the (possibly
     unchanged) brief and plan, plus a short reply explaining the change to the user."""

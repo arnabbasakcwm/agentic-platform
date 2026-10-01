@@ -8,7 +8,7 @@ import agentic_platform.app as app_module
 import agentic_platform.auth as auth
 from agentic_platform.agent_schema import AgentPlan, AgentSpec, LLMConfig
 from agentic_platform.errors import AuthenticationError
-from agentic_platform.stores import InMemoryProjectStore, InMemoryUserStore
+from agentic_platform.stores import InMemoryProjectStore, InMemoryKnowledgeStore, InMemoryUserStore
 
 PASSWORD = "correct horse battery"
 
@@ -32,6 +32,7 @@ def client(monkeypatch):
     monkeypatch.setattr(app_module, "plan_project", lambda **kw: _plan())
     monkeypatch.setattr(app_module, "_store", InMemoryProjectStore())
     monkeypatch.setattr(app_module, "_users", InMemoryUserStore())
+    monkeypatch.setattr(app_module, "_knowledge", InMemoryKnowledgeStore())
     app_module._COMPILED.clear()
     return TestClient(app_module.app)
 
