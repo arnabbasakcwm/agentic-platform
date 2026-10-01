@@ -41,6 +41,27 @@ const PATHS = {
   chat: <path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.4A8 8 0 1 1 21 12z" />,
   close: <path d="M6 6l12 12M18 6 6 18" />,
   chevronRight: <path d="m9 6 6 6-6 6" />,
+  chevronDown: <path d="m6 9 6 6 6-6" />,
+  copy: (
+    <>
+      <rect x="9" y="9" width="11" height="11" rx="2" />
+      <path d="M5 15V6a2 2 0 0 1 2-2h9" />
+    </>
+  ),
+  clock: (
+    <>
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M12 7.5V12l3 2" />
+    </>
+  ),
+  skip: <path d="M6 12h12M14 8l4 4-4 4" />,
+  agent: (
+    <>
+      <rect x="4" y="7" width="16" height="12" rx="3" />
+      <path d="M12 3v4M9 12h.01M15 12h.01M9.5 16h5" />
+    </>
+  ),
+  flag: <path d="M5 21V4h11l-1.5 4L16 12H5" />,
   play: <path d="m7 5 12 7-12 7z" />,
   edit: <path d="M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4" />,
   bolt: <path d="M13 3 5 14h6l-1 7 8-11h-6z" />,

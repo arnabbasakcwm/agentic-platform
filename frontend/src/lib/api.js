@@ -2,6 +2,8 @@
 // carrying the backend's typed error shape ({error_type, message, details}), so the UI
 // can show what actually went wrong instead of a generic "request failed".
 
+import { readEventStream } from "./sse.js";
+
 const BASE = import.meta.env.VITE_API_BASE ?? "/api";
 
 // The API's absolute URL, for snippets shown to users.
@@ -52,7 +54,7 @@ export const session = {
   },
 };
 
-async function request(path, { method = "GET", body } = {}) {
+async function send(path, { method = "GET", body, signal } = {}) {
   const sentToken = token;
   const headers = {};
   if (body) headers["Content-Type"] = "application/json";
@@ -64,8 +66,10 @@ async function request(path, { method = "GET", body } = {}) {
       method,
       headers,
       body: body ? JSON.stringify(body) : undefined,
+      signal,
     });
   } catch (cause) {
+    if (cause?.name === "AbortError") throw cause;
     throw new ApiError({
       status: 0,
       errorType: "NetworkError",
@@ -74,24 +78,36 @@ async function request(path, { method = "GET", body } = {}) {
     });
   }
 
-  const payload = await response.json().catch(() => null);
-
   // A 401 on a request that carried a token means the token expired or was revoked.
   // (A 401 without one is just a failed sign-in attempt.)
   if (response.status === 401 && sentToken && sentToken === token) {
     session.clear();
     onSessionExpired();
   }
+  return response;
+}
 
-  if (!response.ok) {
-    throw new ApiError({
-      status: response.status,
-      errorType: payload?.error_type ?? "HttpError",
-      message: payload?.message ?? `Request failed with status ${response.status}`,
-      details: payload?.details ?? null,
-    });
-  }
-  return payload;
+async function failure(response) {
+  const payload = await response.json().catch(() => null);
+  return new ApiError({
+    status: response.status,
+    errorType: payload?.error_type ?? "HttpError",
+    message: payload?.message ?? `Request failed with status ${response.status}`,
+    details: payload?.details ?? null,
+  });
+}
+
+async function request(path, options) {
+  const response = await send(path, options);
+  if (!response.ok) throw await failure(response);
+  return response.json().catch(() => null);
+}
+
+/** POST and read the response as Server-Sent Events, calling onEvent for each. */
+async function stream(path, body, onEvent, signal) {
+  const response = await send(path, { method: "POST", body, signal });
+  if (!response.ok) throw await failure(response);
+  await readEventStream(response, onEvent);
 }
 
 export const api = {
@@ -129,6 +145,9 @@ export const api = {
     request(`/projects/${id}/revise`, { method: "POST", body: { message } }),
   compile: (id) => request(`/projects/${id}/compile`, { method: "POST" }),
   run: (id, input) => request(`/projects/${id}/run`, { method: "POST", body: { input } }),
+  // Same input as run(); onEvent receives { event, data } as each agent progresses.
+  runStream: (id, input, onEvent, signal) =>
+    stream(`/projects/${id}/run/stream`, { input }, onEvent, signal),
   invokeAgent: (id, agentId, input, upstreamOutputs = {}) =>
     request(`/projects/${id}/agents/${agentId}/invoke`, {
       method: "POST",

@@ -1,3 +1,5 @@
+import { Icon } from "./icons.jsx";
+
 export function Panel({ title, subtitle, actions, children, footer, flush }) {
   return (
     <section className="panel">
@@ -150,6 +152,36 @@ export function MetaList({ rows }) {
             <span className="metalist__val">{value}</span>
           </div>
         ))}
+    </div>
+  );
+}
+
+const STATUS = {
+  idle: { label: "Idle", icon: null },
+  queued: { label: "Queued", icon: "clock" },
+  running: { label: "Running", icon: null },
+  completed: { label: "Completed", icon: "check" },
+  failed: { label: "Failed", icon: "close" },
+  skipped: { label: "Skipped", icon: "skip" },
+};
+
+/** The state of a run or an agent: Idle, Queued, Running, Completed, Failed, Skipped. */
+export function StatusBadge({ status, label }) {
+  const s = STATUS[status] ?? STATUS.idle;
+  return (
+    <span className={`badge badge--${status}`}>
+      {status === "running" ? <span className="spin spin--sm" aria-hidden="true" /> : s.icon && <Icon name={s.icon} size={12} />}
+      {label ?? s.label}
+    </span>
+  );
+}
+
+export function Skeleton({ lines = 3 }) {
+  return (
+    <div className="skeleton" aria-hidden="true">
+      {Array.from({ length: lines }, (_, i) => (
+        <span key={i} className="skeleton__line" style={{ width: `${92 - i * 14}%` }} />
+      ))}
     </div>
   );
 }

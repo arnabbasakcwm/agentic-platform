@@ -25,7 +25,7 @@ export function BriefStep({ project }) {
                 rows={[
                   ["Created", project.created_at ? fullDate(project.created_at) : null],
                   ["Last changed", project.updated_at ? fullDate(project.updated_at) : null],
-                  ["Agents", <span className="mono">{plan.agents.length}</span>],
+                  ["Agents", <span key="Agents" className="mono">{plan.agents.length}</span>],
                   ["Models", models.map((m) => <Pill key={m}>{m}</Pill>)],
                   [
                     "Tools in use",

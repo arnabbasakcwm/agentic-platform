@@ -7,6 +7,7 @@ import { api } from "../lib/api.js";
 import { projectTitle } from "../lib/format.js";
 import { paths } from "../lib/router.js";
 import { useAction } from "../lib/useAction.js";
+import { useProjectRun } from "../lib/useProjectRun.js";
 import { BriefStep } from "./project/BriefStep.jsx";
 import { CompileStep } from "./project/CompileStep.jsx";
 import { DeployStep } from "./project/DeployStep.jsx";
@@ -39,19 +40,22 @@ function deployHint(deployment) {
   return "Failed";
 }
 
-function runHint(project, result) {
-  if (result) return result.halted ? "Last run halted" : "Last run completed";
+function runHint(project, run) {
+  if (run?.status === "running") return "Running…";
+  if (run?.status === "failed") return "Last run failed";
+  if (run?.status === "completed") return run.halted ? "Last run halted" : "Last run completed";
   return project.compiled ? "Ready" : "Needs compiling";
 }
 
 // One project, one step of its workflow per page. Mounted with key={id}, so switching
 // projects starts from a clean slate; switching steps keeps the loaded project and the
-// latest run result.
+// latest run, which keeps streaming while another step is open.
 export function ProjectWorkspace({ id, step, onChanged }) {
   const [project, setProject] = useState(null);
-  const [result, setResult] = useState(null);
+  const { run, draftInput, setDraftInput, start } = useProjectRun(project);
   const [assistantOpen, setAssistantOpen] = useState(readAssistantOpen);
   const load = useAction();
+  const { run: runLoad } = load;
 
   // Stable, so the deploy page's status polling isn't restarted on every render.
   const deploymentChanged = useCallback(
@@ -64,13 +68,13 @@ export function ProjectWorkspace({ id, step, onChanged }) {
 
   useEffect(() => {
     let current = true;
-    load.run(() => api.getProject(id)).then((loaded) => {
+    runLoad(() => api.getProject(id)).then((loaded) => {
       if (current && loaded) setProject(loaded);
     });
     return () => {
       current = false;
     };
-  }, [id, load.run]);
+  }, [id, runLoad]);
 
   if (load.error) {
     return (
@@ -113,8 +117,8 @@ export function ProjectWorkspace({ id, step, onChanged }) {
     {
       key: "run",
       label: "Run",
-      hint: runHint(project, result),
-      done: Boolean(result && !result.halted),
+      hint: runHint(project, run),
+      done: run?.status === "completed" && !run.halted,
     },
     {
       key: "deploy",
@@ -136,11 +140,10 @@ export function ProjectWorkspace({ id, step, onChanged }) {
     }
   }
 
-  // A new plan version (from a saved edit or the assistant) needs compiling again, and a
-  // result on screen came from the old plan.
-  function projectChanged(next, planChanged = true) {
+  // A new plan version (from a saved edit or the assistant) needs compiling again; the
+  // run hook starts from an idle run of the new version by itself.
+  function projectChanged(next) {
     setProject(next);
-    if (planChanged) setResult(null);
     onChanged();
   }
 
@@ -180,7 +183,12 @@ export function ProjectWorkspace({ id, step, onChanged }) {
               ) : null
             }
           />
-          <Stepper steps={steps} current={step} />
+        </div>
+        {/* Its own bar so it stays in view (sticky) while the step below scrolls. */}
+        <div className="stepper-bar">
+          <div className="stepper-bar__inner">
+            <Stepper steps={steps} current={step} />
+          </div>
         </div>
 
         {step === "brief" && <BriefStep key={stepKey} project={project} />}
@@ -188,7 +196,15 @@ export function ProjectWorkspace({ id, step, onChanged }) {
           <PlanStep key={stepKey} project={project} onSaved={(next) => projectChanged(next)} />
         )}
         {step === "compile" && <CompileStep key={stepKey} project={project} onCompiled={compiled} />}
-        {step === "run" && <RunStep project={project} result={result} onResult={setResult} />}
+        {step === "run" && (
+          <RunStep
+            project={project}
+            run={run}
+            draftInput={draftInput}
+            onDraftInput={setDraftInput}
+            onStart={start}
+          />
+        )}
         {step === "deploy" && (
           <DeployStep project={project} onDeploymentChanged={deploymentChanged} />
         )}

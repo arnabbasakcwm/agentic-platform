@@ -96,9 +96,8 @@ export default function App() {
   }, []);
 
   const userId = user?.id;
+  // Load the signed-in user's projects (sign-out clears them, in signOut below).
   useEffect(() => {
-    setProjects(null);
-    setProjectsError(null);
     if (userId) refreshProjects();
   }, [userId, refreshProjects]);
 
@@ -113,6 +112,8 @@ export default function App() {
   function signOut() {
     session.clear();
     setUser(null);
+    setProjects(null);
+    setProjectsError(null);
     setAuthNotice(null);
     navigate(paths.projects);
   }

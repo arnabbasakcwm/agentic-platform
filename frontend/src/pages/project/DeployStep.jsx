@@ -16,7 +16,7 @@ import { API_URL, api } from "../../lib/api.js";
 import { fullDate } from "../../lib/format.js";
 import { paths } from "../../lib/router.js";
 import { useAction } from "../../lib/useAction.js";
-import { Results } from "./RunStep.jsx";
+import { ResultOutputs } from "../../components/ResultOutputs.jsx";
 
 const POLL_MS = 3000;
 const PROGRESS = [
@@ -131,10 +131,10 @@ function StatusPanel({ project, deployment, available, onDeploy, onRemove, deplo
         {deployment.live && (
           <MetaList
             rows={[
-              ["Region", <span className="mono">{deployment.region}</span>],
-              ["Plan version", <span className="mono">v{deployment.live_plan_version}</span>],
+              ["Region", <span key="Region" className="mono">{deployment.region}</span>],
+              ["Plan version", <span key="Plan version" className="mono">v{deployment.live_plan_version}</span>],
               ["Deployed", deployment.deployed_at ? fullDate(deployment.deployed_at) : null],
-              ["Runtime ARN", <span className="mono">{deployment.runtime_arn}</span>],
+              ["Runtime ARN", <span key="Runtime ARN" className="mono">{deployment.runtime_arn}</span>],
             ]}
           />
         )}
@@ -234,7 +234,7 @@ function TryIt({ project }) {
         {run.error && <ErrorCallout error={run.error} />}
         {result && (
           <div style={{ marginTop: 12 }}>
-            <Results result={result} />
+            <ResultOutputs plan={project.plan} result={result} />
           </div>
         )}
       </Panel>

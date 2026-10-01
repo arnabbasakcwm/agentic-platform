@@ -10,54 +10,9 @@ import {
   Pill,
 } from "../../components/ui.jsx";
 import { api } from "../../lib/api.js";
+import { parallelStages, sequentialOrder } from "../../lib/flow.js";
 import { paths } from "../../lib/router.js";
 import { useAction } from "../../lib/useAction.js";
-
-// The order a sequential plan runs in: dependencies first, the planner's own ordering
-// among agents that are ready at the same time. Mirrors the compiler's ordering so the
-// page shows the chain that will actually be built.
-function sequentialOrder(agents) {
-  const indegree = Object.fromEntries(agents.map((a) => [a.id, 0]));
-  const dependents = Object.fromEntries(agents.map((a) => [a.id, []]));
-  for (const agent of agents) {
-    for (const dep of agent.depends_on) {
-      if (!(dep in indegree)) continue;
-      indegree[agent.id] += 1;
-      dependents[dep].push(agent.id);
-    }
-  }
-  const ready = agents.filter((a) => indegree[a.id] === 0).map((a) => a.id);
-  const order = [];
-  while (ready.length > 0) {
-    const current = ready.shift();
-    order.push(current);
-    for (const next of dependents[current]) {
-      indegree[next] -= 1;
-      if (indegree[next] === 0) ready.push(next);
-    }
-  }
-  return order;
-}
-
-// Groups agents into stages: an agent sits one stage after the latest thing it depends
-// on, so everything in a stage can run at the same time.
-function parallelStages(agents) {
-  const byId = Object.fromEntries(agents.map((a) => [a.id, a]));
-  const level = {};
-  const resolve = (id, path = []) => {
-    if (id in level) return level[id];
-    if (path.includes(id)) return 0; // plans are validated acyclic; never loop regardless
-    const deps = byId[id].depends_on.filter((d) => d in byId);
-    level[id] = deps.length ? 1 + Math.max(...deps.map((d) => resolve(d, [...path, id]))) : 0;
-    return level[id];
-  };
-  const stages = [];
-  for (const agent of agents) {
-    const l = resolve(agent.id);
-    (stages[l] ??= []).push(agent.id);
-  }
-  return stages.filter(Boolean);
-}
 
 function Stage({ label, nodes, router }) {
   return (
@@ -184,9 +139,9 @@ export function CompileStep({ project, onCompiled }) {
             <Panel title="Run limits" subtitle="Enforced on every run.">
               <MetaList
                 rows={[
-                  ["Tool steps per agent", <span className="mono">{plan.bounds.max_steps}</span>],
-                  ["Attempts per agent", <span className="mono">{plan.bounds.max_retries}</span>],
-                  ["Time per run", <span className="mono">{plan.bounds.timeout_s}s</span>],
+                  ["Tool steps per agent", <span key="Tool steps per agent" className="mono">{plan.bounds.max_steps}</span>],
+                  ["Attempts per agent", <span key="Attempts per agent" className="mono">{plan.bounds.max_retries}</span>],
+                  ["Time per run", <span key="Time per run" className="mono">{plan.bounds.timeout_s}s</span>],
                 ]}
               />
             </Panel>

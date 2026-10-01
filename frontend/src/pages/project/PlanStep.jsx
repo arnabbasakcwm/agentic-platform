@@ -112,7 +112,7 @@ export function PlanStep({ project, onSaved }) {
             <Panel title="Overview">
               <MetaList
                 rows={[
-                  ["Pattern", <Pill tone="accent">{plan.orchestration_pattern}</Pill>],
+                  ["Pattern", <Pill key="Pattern" tone="accent">{plan.orchestration_pattern}</Pill>],
                   ["Router", plan.supervisor_id ? <Pill>{plan.supervisor_id}</Pill> : null],
                   [
                     "Limits",

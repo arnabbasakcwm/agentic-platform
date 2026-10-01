@@ -1,0 +1,99 @@
+import { forwardRef, useState } from "react";
+import { agentTitle } from "../lib/flow.js";
+import { formatDuration } from "../lib/format.js";
+import { DataView } from "./DataView.jsx";
+import { Icon } from "./icons.jsx";
+import { CopyButton } from "./JsonView.jsx";
+import { Markdown } from "./Markdown.jsx";
+import { Pill, Skeleton, StatusBadge } from "./ui.jsx";
+
+/**
+ * One agent's part of a run: a readable title, its state, how long it took, and its
+ * answer rendered as Markdown with any structured data as a card. The colour matches
+ * the agent's node in the diagram and its bar in the timeline.
+ */
+export const AgentOutputCard = forwardRef(function AgentOutputCard(
+  { agentId, role, color, node, isFinal, highlighted },
+  ref,
+) {
+  const [open, setOpen] = useState(true);
+  const title = agentTitle(agentId);
+  const output = node.output;
+  const bodyId = `output-body-${agentId}`;
+
+  return (
+    <article
+      ref={ref}
+      id={`output-${agentId}`}
+      tabIndex={-1}
+      className={[
+        "outcard",
+        `outcard--${node.status}`,
+        isFinal && "outcard--final",
+        highlighted && "outcard--highlight",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      style={{ "--agent-color": color }}
+      aria-label={`${title} output`}
+    >
+      <header className="outcard__head">
+        <span className="outcard__icon" aria-hidden="true">
+          <Icon name="agent" size={15} />
+        </span>
+        <div className="outcard__titles">
+          <h3 className="outcard__title">
+            {title}
+            {isFinal && <Pill tone="accent">Final answer</Pill>}
+          </h3>
+          {role && <span className="outcard__role">{role}</span>}
+        </div>
+        <div className="outcard__meta">
+          <StatusBadge status={node.status} />
+          {node.durationMs != null && (
+            <span className="outcard__time" title="Time this agent took">
+              <Icon name="clock" size={12} />
+              {formatDuration(node.durationMs)}
+            </span>
+          )}
+          {node.attempts > 1 && <Pill tone="warn">{node.attempts} attempts</Pill>}
+          {output?.content && <CopyButton text={output.content} label="Copy" />}
+          <button
+            type="button"
+            className="iconbtn"
+            onClick={() => setOpen((o) => !o)}
+            aria-expanded={open}
+            aria-controls={bodyId}
+            aria-label={open ? `Collapse ${title}` : `Expand ${title}`}
+          >
+            <span className={open ? "chev chev--open" : "chev"}>
+              <Icon name="chevronDown" size={15} />
+            </span>
+          </button>
+        </div>
+      </header>
+
+      {open && (
+        <div className="outcard__body" id={bodyId}>
+          {output ? (
+            <>
+              <Markdown>{output.content}</Markdown>
+              <DataView data={output.data} />
+            </>
+          ) : node.status === "running" || node.status === "queued" ? (
+            <>
+              {node.retryError && (
+                <p className="outcard__note">Retrying after an error: {node.retryError}</p>
+              )}
+              <Skeleton lines={4} />
+            </>
+          ) : (
+            <p className={node.status === "failed" ? "outcard__error" : "outcard__note"}>
+              {node.error ?? "No output."}
+            </p>
+          )}
+        </div>
+      )}
+    </article>
+  );
+});
