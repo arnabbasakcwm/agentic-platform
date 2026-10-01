@@ -10,6 +10,7 @@ type, so clients never see a raw stack trace.
 
 from __future__ import annotations
 
+import json
 import uuid
 from typing import Any
 
@@ -17,7 +18,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import BackgroundTasks, Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, EmailStr, Field, ValidationError
 
@@ -52,7 +53,7 @@ from .errors import (
     UnknownToolError,
     UnsupportedProviderError,
 )
-from .graph_builder import compile_graph, run_graph, run_single_agent
+from .graph_builder import compile_graph, run_graph, run_graph_events, run_single_agent
 from .meta_planner_prompt import plan_project, revise_plan
 from .stores import ChatMessage, Deployment, ProjectRecord, UserRecord, make_stores
 from .tools import SIDE_EFFECT_TOOLS, TOOL_REGISTRY, TOOL_SUMMARIES, default_tool_names
@@ -426,6 +427,33 @@ def run_project(
         "errors": result["errors"],
         "halted": result["halted"],
     }
+
+
+@app.post("/projects/{project_id}/run/stream")
+def run_project_stream(
+    project_id: str, req: RunRequest, user: UserRecord = Depends(current_user)
+) -> StreamingResponse:
+    """Run the whole graph and stream its progress as Server-Sent Events.
+
+    Same input as /run. Events: run_started, node_started, node_retry, node_completed
+    (with the agent's output), node_failed, node_skipped, then run_completed (same
+    outputs/errors/halted as /run) or run_failed (e.g. RunTimeout). Errors before the run
+    starts (not compiled, not found) are ordinary JSON error responses.
+    """
+    project = _get_project(project_id, user)
+    if not project.is_compiled:
+        raise NotCompiledError(project_id)
+    graph = _compiled_graph(project)
+
+    def stream():
+        for event, data in run_graph_events(graph, req.input, project.plan.bounds):
+            yield f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.post("/projects/{project_id}/agents/{agent_id}/invoke")

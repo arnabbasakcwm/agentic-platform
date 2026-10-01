@@ -1,3 +1,5 @@
+import json
+
 import agentic_platform.app as app_module
 from agentic_platform.agent_schema import AgentPlan, AgentSpec, LLMConfig
 from agentic_platform.errors import StoreUnavailableError
@@ -362,3 +364,51 @@ def test_run_timeout_is_a_typed_504_not_a_bare_500(monkeypatch):
     assert body["error_type"] == "RunTimeout"
     assert "timeout_s" in body["message"]
     assert body["details"] == {"limit_s": 300.0}
+
+
+def _sse(text):
+    events = []
+    for block in text.strip().split("\n\n"):
+        lines = dict(line.split(": ", 1) for line in block.splitlines())
+        events.append((lines["event"], json.loads(lines["data"])))
+    return events
+
+
+def test_run_stream_sends_progress_then_the_same_result_as_run(monkeypatch):
+    c = _client(monkeypatch)
+    pid = c.post("/projects", json={"brief": "x"}).json()["project_id"]
+    c.post(f"/projects/{pid}/compile")
+
+    def fake_events(graph, task_input, bounds):
+        yield "run_started", {"at": 1.0, "timeout_s": bounds.timeout_s}
+        yield "node_started", {"node": "a", "at": 1.1}
+        yield "node_completed", {"node": "a", "at": 2.0, "duration_ms": 900, "attempts": 1,
+                                 "output": {"content": "# Hi\n\n- one", "data": {}}}
+        yield "run_completed", {"at": 2.1, "duration_ms": 1100, "halted": False, "errors": [],
+                                "outputs": {"a": {"content": "# Hi\n\n- one", "data": {}}}}
+
+    monkeypatch.setattr(app_module, "run_graph_events", fake_events)
+    r = c.post(f"/projects/{pid}/run/stream", json={"input": {"q": "x"}})
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/event-stream")
+    events = _sse(r.text)
+    assert [e for e, _ in events] == ["run_started", "node_started", "node_completed", "run_completed"]
+    # Line breaks survive the trip intact.
+    assert events[2][1]["output"]["content"] == "# Hi\n\n- one"
+
+
+def test_run_stream_needs_a_compiled_plan_and_an_owner(monkeypatch):
+    c = _client(monkeypatch)
+    pid = c.post("/projects", json={"brief": "x"}).json()["project_id"]
+    r = c.post(f"/projects/{pid}/run/stream", json={"input": {}})
+    assert r.status_code == 409
+    assert r.json()["error_type"] == "NotCompiled"
+    assert c.post("/projects/nope/run/stream", json={"input": {}}).status_code == 404
+
+
+def test_example_input_round_trips_with_the_plan(monkeypatch):
+    c = _client(monkeypatch)
+    plan = _plan().model_copy(update={"example_input": {"origin": "Kolkata", "destination": "Delhi"}})
+    monkeypatch.setattr(app_module, "plan_project", lambda **kw: plan)
+    body = c.post("/projects", json={"brief": "x"}).json()
+    assert body["plan"]["example_input"] == {"origin": "Kolkata", "destination": "Delhi"}

@@ -106,3 +106,22 @@ def test_supervisor_id_rejected_for_non_supervisor_pattern():
             orchestration_pattern="sequential",
             supervisor_id="a",
         )
+
+
+def test_agent_output_turns_double_escaped_newlines_into_line_breaks():
+    from agentic_platform.agent_schema import AgentOutput
+
+    flat = AgentOutput(content=r"# Title\n\n- one\n- two")
+    assert flat.content == "# Title\n\n- one\n- two"
+    # Text that already has real line breaks is left exactly as written.
+    mixed = "Use the escape \n in code:\nprint('a\nb')"
+    assert AgentOutput(content=mixed).content == mixed
+
+
+def test_agent_output_turns_html_br_tags_into_line_breaks():
+    from agentic_platform.agent_schema import AgentOutput
+
+    out = AgentOutput(content="Top 3:<br><br>1. IndiGo<br>- Fare: 4,500<BR/>2. Vistara")
+    assert out.content == "Top 3:\n\n1. IndiGo\n- Fare: 4,500\n2. Vistara"
+    kept = "Use <br> in HTML\nlike this."
+    assert AgentOutput(content=kept).content == kept

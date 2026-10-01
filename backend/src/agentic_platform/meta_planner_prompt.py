@@ -32,6 +32,11 @@ REVISION_HISTORY_LIMIT = 10
 _PLAN_RULES = """\
 - Each agent needs a unique `id` (short snake_case), a `role`, and a concrete
   `system_prompt` telling that agent exactly what to do with its input.
+- Agents receive the run's TASK INPUT (a JSON object) at run time. System prompts must
+  work from that input: never hardcode specifics that belong in it (places, dates,
+  names, numbers), so the same team works for any input.
+- Set `example_input` to one realistic task input object for this team, using the keys
+  the agents should read from it.
 - `tools` for each agent must be chosen ONLY from the available tool names given below.
   Use an empty list if an agent needs no tools. Never invent tool names.
 - `llm` for each agent must be chosen ONLY from the available LLM options given below

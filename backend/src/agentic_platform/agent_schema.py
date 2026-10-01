@@ -10,12 +10,15 @@ not baked into these base models. That keeps this module a pure, dependency-free
 
 from __future__ import annotations
 
+import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 ProviderName = Literal["openai", "anthropic", "google_genai", "groq", "moonshot", "ollama"]
 OrchestrationPattern = Literal["sequential", "parallel", "supervisor"]
+
+_BR_TAG = re.compile(r"<br\s*/?>", re.IGNORECASE)
 
 
 class LLMConfig(BaseModel):
@@ -35,8 +38,38 @@ class AgentOutput(BaseModel):
     hook for per-agent schemas registered by name, without changing this contract.
     """
 
-    content: str
-    data: dict[str, Any] = Field(default_factory=dict)
+    # The descriptions reach the model through the structured-output schema. Without the
+    # line-break instruction, models write `content` as one long line, which flattens
+    # Markdown headings and lists into a single paragraph.
+    content: str = Field(
+        description=(
+            "Your answer for the user, written as GitHub-flavored Markdown. Put each "
+            "heading, list item and paragraph on its own line, separated by newline "
+            "characters (\\n); never run them together on one line. Use real line breaks, "
+            "not the two characters backslash and n, and not HTML tags such as <br>."
+        )
+    )
+    data: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Optional machine-readable facts from the answer (numbers, lists of items). "
+            "Name money fields with their currency, e.g. price_inr or fare_usd."
+        ),
+    )
+
+    @field_validator("content")
+    @classmethod
+    def _real_line_breaks(cls, v: str) -> str:
+        # Models sometimes encode line breaks inside the JSON string in ways that render as
+        # one paragraph: double-escaped (the two characters `\` `n`), or as HTML <br> tags,
+        # which the console deliberately never renders as HTML. Normalised only when the
+        # text has no real line break at all, so an answer that discusses a literal "\n"
+        # or "<br>" (e.g. in code) is left as written.
+        if "\n" not in v:
+            if "\\n" in v:
+                v = v.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "\t")
+            v = _BR_TAG.sub("\n", v)
+        return v
 
 
 class AgentSpec(BaseModel):
@@ -72,6 +105,16 @@ class AgentPlan(BaseModel):
     # Must be None for sequential/parallel.
     supervisor_id: str | None = None
     bounds: RunBounds = Field(default_factory=RunBounds)
+    # One realistic task input for this team: the JSON object a caller sends to run it.
+    # Pre-fills the console's input box and documents the input a deployment expects.
+    example_input: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "One realistic example of the task input JSON object this team is run with, "
+            "using the keys the agents read (e.g. {\"origin\": \"Kolkata\", "
+            "\"destination\": \"Delhi\", \"month\": \"October\"})."
+        ),
+    )
 
     @model_validator(mode="after")
     def _validate_graph(self) -> "AgentPlan":

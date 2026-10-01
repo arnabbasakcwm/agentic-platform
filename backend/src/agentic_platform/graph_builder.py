@@ -11,8 +11,13 @@ from __future__ import annotations
 
 import operator
 import os
+import queue
+import re
+import threading
 import time
-from typing import Annotated, Any, TypedDict
+# Optional[...] rather than `| None`: LangGraph only passes `config` to a node whose
+# annotation it recognises by name, and it doesn't recognise the `X | None` spelling.
+from typing import Annotated, Any, Callable, Iterator, Optional, TypedDict  # noqa: UP035
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import (
@@ -21,6 +26,7 @@ from langchain_core.messages import (
     SystemMessage,
     ToolMessage,
 )
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
 
@@ -187,13 +193,67 @@ def _run_agent_once(
 
     structured = llm.with_structured_output(AgentOutput)
     messages.append(
-        HumanMessage(content="Now produce your final structured answer for this task.")
+        HumanMessage(
+            content=(
+                "Now produce your final structured answer for this task. Write `content` "
+                "as Markdown with real line breaks between headings, list items and "
+                "paragraphs."
+            )
+        )
     )
-    return structured.invoke(messages)
+    output = structured.invoke(messages)
+    if _looks_flattened(output.content):
+        # Models sometimes ignore the instruction and return the whole answer on one
+        # line, which renders as a single paragraph. Say exactly what's wrong and ask
+        # once more; if the rewrite is still flat, keep the original rather than fail an
+        # agent over formatting.
+        messages.append(
+            HumanMessage(
+                content=(
+                    f"Your `content` came back as {len(output.content)} characters on a "
+                    "single line, so its headings, list items and paragraphs run together. "
+                    "Return the same answer again with each heading, list item and "
+                    "paragraph on its own line."
+                )
+            )
+        )
+        retry = structured.invoke(messages)
+        if not _looks_flattened(retry.content):
+            output = retry
+    return output
+
+
+# Block-level Markdown that should start a line: headings, bullets, numbered items.
+_INLINE_BLOCK_MARKER = re.compile(r"\s(?:#{1,6}|[*-]|\d{1,2}\.)\s")
+
+
+def _looks_flattened(content: str) -> bool:
+    """True when an answer that should span several lines arrived as one: no line break,
+    and either Markdown block markers in mid-line or simply too long for one paragraph."""
+    if "\n" in content:
+        return False
+    return len(_INLINE_BLOCK_MARKER.findall(content)) >= 2 or len(content) > 700
+
+
+Emit = Callable[..., None]
+
+
+def _emitter(config: RunnableConfig | None) -> Emit:
+    """The run's event callback, if the caller asked for events (see run_graph_events);
+    otherwise a no-op. Passed per run through LangGraph's config, so one compiled graph
+    serves streaming and non-streaming runs alike."""
+    emit = ((config or {}).get("configurable") or {}).get("emit")
+    return emit if callable(emit) else (lambda event, **data: None)
 
 
 def _make_node(spec: AgentSpec, bounds: RunBounds, include_all_outputs: bool = False):
-    def node(state: GraphState) -> dict[str, Any]:
+    def node(state: GraphState, config: Optional[RunnableConfig] = None) -> dict[str, Any]:
+        emit = _emitter(config)
+        started = time.monotonic()
+
+        def elapsed_ms() -> int:
+            return int((time.monotonic() - started) * 1000)
+
         # Dependency gating (the parallel/DAG failure-isolation mechanism): if any agent
         # this node depends on failed and produced no output, skip rather than run on
         # missing input. In sequential mode the halted short-circuit means we never even
@@ -206,7 +266,10 @@ def _make_node(spec: AgentSpec, bounds: RunBounds, include_all_outputs: bool = F
                 f"output: {missing}",
                 attempts=0,
             )
+            emit("node_skipped", node=spec.id, reason=str(skipped))
             return {"errors": [skipped.to_dict()], "halted": True}
+
+        emit("node_started", node=spec.id)
 
         llm = get_llm(spec.llm)
         base_messages: list[AnyMessage] = [
@@ -230,10 +293,14 @@ def _make_node(spec: AgentSpec, bounds: RunBounds, include_all_outputs: bool = F
                 )
             try:
                 output = _run_agent_once(llm, spec, attempt_messages, bounds)
-                return {"outputs": {spec.id: output.model_dump()}}
+                dumped = output.model_dump()
+                emit("node_completed", node=spec.id, duration_ms=elapsed_ms(),
+                     attempts=attempt, output=dumped)
+                return {"outputs": {spec.id: dumped}}
             except Exception as e:  # noqa: BLE001 — deliberate: recover from any node failure
                 last_error = f"{type(e).__name__}: {e}"
                 if attempt < bounds.max_retries:
+                    emit("node_retry", node=spec.id, attempt=attempt, error=last_error)
                     time.sleep(_NODE_BACKOFF_S)
 
         # Ceiling exhausted: record a structured failure and halt the chain rather than
@@ -243,6 +310,8 @@ def _make_node(spec: AgentSpec, bounds: RunBounds, include_all_outputs: bool = F
             f"agent '{spec.id}' failed after {bounds.max_retries} attempts: {last_error}",
             attempts=bounds.max_retries,
         )
+        emit("node_failed", node=spec.id, duration_ms=elapsed_ms(),
+             attempts=bounds.max_retries, error=str(failure))
         return {"errors": [failure.to_dict()], "halted": True}
 
     return node
@@ -360,8 +429,11 @@ def _make_supervisor(sup_spec: AgentSpec, worker_ids: list[str], cap: int):
         f"worker ids: {worker_ids}. Do not invent ids."
     )
 
-    def node(state: GraphState) -> dict[str, Any]:
+    def node(state: GraphState, config: Optional[RunnableConfig] = None) -> dict[str, Any]:
+        emit = _emitter(config)
+        started = time.monotonic()
         steps = state.get("supervisor_steps", 0) + 1
+        emit("node_started", node=sup_spec.id)
         if steps > cap:
             # Bounded: never let the router loop forever (principle: every run is bounded).
             note = AgentExecutionError(
@@ -369,6 +441,8 @@ def _make_supervisor(sup_spec: AgentSpec, worker_ids: list[str], cap: int):
                 f"supervisor stopped after hitting its {cap}-iteration cap",
                 attempts=cap,
             )
+            emit("node_failed", node=sup_spec.id, error=str(note),
+                 duration_ms=int((time.monotonic() - started) * 1000), attempts=cap)
             return {"supervisor_steps": steps, "next_agent": "FINISH", "errors": [note.to_dict()]}
 
         llm = get_llm(sup_spec.llm)
@@ -385,8 +459,12 @@ def _make_supervisor(sup_spec: AgentSpec, worker_ids: list[str], cap: int):
             note = AgentExecutionError(
                 sup_spec.id, f"supervisor routing failed: {e}", attempts=1
             )
+            emit("node_failed", node=sup_spec.id, error=str(note),
+                 duration_ms=int((time.monotonic() - started) * 1000), attempts=1)
             return {"supervisor_steps": steps, "next_agent": "FINISH", "errors": [note.to_dict()]}
 
+        emit("node_completed", node=sup_spec.id, next_agent=nxt,
+             duration_ms=int((time.monotonic() - started) * 1000), attempts=1)
         return {"supervisor_steps": steps, "next_agent": nxt}
 
     return node
@@ -472,3 +550,68 @@ def run_graph(graph, task_input: dict[str, Any], bounds: RunBounds) -> dict[str,
         # Never block on the worker: a `with` block here would wait for it to finish,
         # which is exactly what made the timeout fire late.
         pool.shutdown(wait=False, cancel_futures=True)
+
+
+def run_graph_events(
+    graph, task_input: dict[str, Any], bounds: RunBounds
+) -> Iterator[tuple[str, dict[str, Any]]]:
+    """Run a compiled graph and yield (event, data) pairs as it happens:
+
+      run_started → node_started / node_retry / node_completed / node_failed /
+      node_skipped … → run_completed (with the same outputs/errors/halted as run_graph)
+      or run_failed (timeout or an unexpected error).
+
+    Every event carries `at` (Unix time, seconds). The same wall-clock limit as run_graph
+    applies; on timeout the abandoned run finishes in the background, as there.
+    """
+    events: queue.Queue = queue.Queue()
+    started = time.time()
+
+    def emit(event: str, **data: Any) -> None:
+        events.put((event, {**data, "at": time.time()}))
+
+    def work() -> None:
+        try:
+            result = graph.invoke(
+                initial_state(task_input),
+                {"recursion_limit": 50, "configurable": {"emit": emit}},
+            )
+            events.put(("__done__", result))
+        except Exception as e:  # noqa: BLE001 — reported to the caller as run_failed
+            events.put(("__error__", e))
+
+    threading.Thread(target=work, daemon=True, name="graph-run").start()
+    yield "run_started", {"at": started, "timeout_s": bounds.timeout_s}
+
+    deadline = started + bounds.timeout_s
+    while True:
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            yield "run_failed", {
+                "at": time.time(),
+                "error_type": "RunTimeout",
+                "message": f"the run exceeded its {bounds.timeout_s:g}s time limit",
+                "limit_s": bounds.timeout_s,
+            }
+            return
+        try:
+            event, data = events.get(timeout=min(remaining, 1.0))
+        except queue.Empty:
+            continue
+        if event == "__done__":
+            yield "run_completed", {
+                "at": time.time(),
+                "duration_ms": int((time.time() - started) * 1000),
+                "outputs": data["outputs"],
+                "errors": data["errors"],
+                "halted": data["halted"],
+            }
+            return
+        if event == "__error__":
+            yield "run_failed", {
+                "at": time.time(),
+                "error_type": type(data).__name__,
+                "message": str(data) or "the run failed",
+            }
+            return
+        yield event, data

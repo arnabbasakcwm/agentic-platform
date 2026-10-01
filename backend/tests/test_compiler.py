@@ -259,3 +259,117 @@ def test_run_graph_times_out_on_time_instead_of_waiting_for_the_run():
         assert "0.2s time limit" in str(e)
     # Returned at the limit, not after the 2 s run finished.
     assert _time.monotonic() - started < 1.0
+
+
+# ------------------------------------------------------------------ run events
+def _events(plan, monkeypatch, by_model, task_input=None):
+    from agentic_platform.graph_builder import run_graph_events
+
+    _patch(monkeypatch, by_model)
+    return list(run_graph_events(compile_graph(plan), task_input or {"q": "x"}, plan.bounds))
+
+
+def test_sequential_run_streams_each_agent_in_order(monkeypatch):
+    plan = AgentPlan(
+        agents=[_spec("a", "m-a"), _spec("b", "m-b", depends_on=["a"])],
+        orchestration_pattern="sequential",
+    )
+    events = _events(plan, monkeypatch, {
+        "m-a": _Structured([AgentOutput(content="from a")]),
+        "m-b": _Structured([AgentOutput(content="from b")]),
+    })
+    names = [(e, d.get("node")) for e, d in events]
+    assert names == [
+        ("run_started", None),
+        ("node_started", "a"), ("node_completed", "a"),
+        ("node_started", "b"), ("node_completed", "b"),
+        ("run_completed", None),
+    ]
+    completed_a = events[2][1]
+    assert completed_a["output"]["content"] == "from a"
+    assert completed_a["duration_ms"] >= 0 and completed_a["attempts"] == 1
+    final = events[-1][1]
+    assert set(final["outputs"]) == {"a", "b"} and final["halted"] is False
+    assert all("at" in d for _, d in events)
+
+
+def test_failures_retries_and_skips_are_streamed(monkeypatch):
+    plan = AgentPlan(
+        agents=[_spec("a", "bad"), _spec("b", "ok"), _spec("c", "ok", depends_on=["a", "b"])],
+        orchestration_pattern="parallel",
+        bounds=RunBounds(max_retries=2),
+    )
+    events = _events(plan, monkeypatch, {
+        "bad": _Structured([ValueError("boom")]),
+        "ok": _Structured([AgentOutput(content="fine")]),
+    })
+    kinds = {(e, d.get("node")) for e, d in events}
+    assert ("node_retry", "a") in kinds
+    assert ("node_failed", "a") in kinds
+    assert ("node_completed", "b") in kinds
+    assert ("node_skipped", "c") in kinds
+    assert events[-1][0] == "run_completed" and events[-1][1]["halted"] is True
+
+
+def test_supervisor_router_is_streamed_with_its_decisions(monkeypatch):
+    plan = AgentPlan(
+        agents=[_spec("sup", "router"), _spec("w", "worker")],
+        orchestration_pattern="supervisor",
+        supervisor_id="sup",
+    )
+    events = _events(plan, monkeypatch, {
+        "router": _Structured([_SupervisorDecision(next_agent="w"), _SupervisorDecision(next_agent="FINISH")]),
+        "worker": _Structured([AgentOutput(content="did it")]),
+    })
+    decisions = [d["next_agent"] for e, d in events if e == "node_completed" and d["node"] == "sup"]
+    assert decisions == ["w", "FINISH"]
+    assert ("node_completed", "w") in {(e, d.get("node")) for e, d in events}
+
+
+def test_streamed_run_times_out_on_time():
+    import time as _time
+
+    from agentic_platform.graph_builder import run_graph_events
+
+    class SlowGraph:
+        def invoke(self, state, config):
+            _time.sleep(2)
+
+    started = _time.monotonic()
+    events = list(run_graph_events(SlowGraph(), {}, RunBounds(timeout_s=0.3)))
+    assert [e for e, _ in events] == ["run_started", "run_failed"]
+    assert events[-1][1]["error_type"] == "RunTimeout"
+    assert _time.monotonic() - started < 1.5
+
+
+def test_agent_output_schema_asks_for_markdown_with_line_breaks():
+    schema = AgentOutput.model_json_schema()
+    description = schema["properties"]["content"]["description"]
+    assert "Markdown" in description and "own line" in description
+
+
+def test_flattened_answer_is_sent_back_once_for_line_breaks(monkeypatch):
+    flat = AgentOutput(content="Intro text. ### Option 1 * **Price:** 10 * **Time:** 2h ### Option 2 * **Price:** 12")
+    fixed = AgentOutput(content="Intro text.\n\n### Option 1\n* **Price:** 10")
+    structured = _Structured([flat, fixed])
+    _patch(monkeypatch, {"m": structured})
+    plan = AgentPlan(agents=[_spec("a", "m")], orchestration_pattern="sequential")
+    result = compile_graph(plan).invoke(initial_state({"q": "x"}))
+    assert result["outputs"]["a"]["content"] == fixed.content
+
+
+def test_still_flat_rewrite_keeps_the_original_answer(monkeypatch):
+    flat = AgentOutput(content="A. ### B * c * d")
+    _patch(monkeypatch, {"m": _Structured([flat])})  # always flat
+    plan = AgentPlan(agents=[_spec("a", "m")], orchestration_pattern="sequential")
+    result = compile_graph(plan).invoke(initial_state({"q": "x"}))
+    assert result["outputs"]["a"]["content"] == flat.content  # not failed over formatting
+    assert result["errors"] == []
+
+
+def test_short_or_multiline_answers_are_not_treated_as_flattened():
+    from agentic_platform.graph_builder import _looks_flattened
+
+    assert not _looks_flattened("The speed of light is 299,792 km/s.")
+    assert not _looks_flattened("# Title\n\n- one\n- two")
+    assert _looks_flattened("x " * 400)
