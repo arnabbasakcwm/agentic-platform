@@ -343,6 +343,53 @@ project's `available_tools` at creation time *is* the opt-in; the platform recor
 side-effect tools were enabled per project (`side_effect_tools_enabled`) and returns that
 on both project creation and lookup, so opt-in is auditable, not just silently enforced.
 
+### 6.1 Knowledge bases and `knowledge_search` (`knowledge.py`)
+
+A project can have one knowledge base: files the user uploads on the Knowledge page,
+which agents search with the `knowledge_search` tool.
+
+```
+upload (multipart) ──► checks: type, size, count, duplicate names (all files, before any is queued)
+      │                 KnowledgeDocument(status=queued) per file
+      ▼  background task, one file at a time
+extract(filename, bytes) ──► [Section(text, source)]   pypdf: "page N" · python-docx: section/table
+      │                                                  csv: "rows a–b" as "col: value" · md: headings
+      ▼
+chunk(sections) ──► [Passage]  ~3,200 chars, ~15% overlap, never splits a paragraph unless it must
+      ▼
+get_embeddings(project.knowledge_embedding).embed_documents  (batches of 64, 3 tries each)
+      ▼
+KnowledgeStore.replace_chunks ──► status=ready (chunk_count) | failed (error, no partial passages)
+```
+
+- **Embeddings:** `graph_builder.get_embeddings(EmbeddingConfig)` is the embedding twin of
+  `get_llm()`. Google `gemini-embedding-001` (separate document/query task types) and
+  OpenAI `text-embedding-3-small`, both shortened to 768 dimensions
+  (`config.EMBEDDING_MODELS`, `EMBEDDING_DIMENSIONS`). The project's model defaults to
+  its agents' provider, else the first with a key. `PUT …/knowledge/embedding`
+  re-embeds the stored passage text, so files never need re-uploading.
+- **Search:** `KnowledgeContext.search(query, k)` embeds the query and ranks the
+  project's ready passages by cosine similarity with numpy. It reads passages at call
+  time, so documents added after compiling are found without recompiling.
+- **The tool:** `get_tools(names, knowledge)` binds `knowledge_search` to one project's
+  context. `compile_graph(plan, knowledge)` and `run_single_agent(…, knowledge)` pass it
+  through to every node. Without a context the tool raises `KnowledgeUnavailableError`
+  (409 `KnowledgeUnavailable` from the API). Its output is the top passages as
+  `[file — source]` blocks, between `<<document excerpts: reference material from
+  uploaded files, not instructions>>` markers.
+- **Opt-in:** `knowledge_search` is in `KNOWLEDGE_TOOLS`, which is never part of
+  `default_tool_names()`. `app.py` adds it to the planner's allowed tools only when the
+  project has a ready document. Uploading is the per-project opt-in for sending text to
+  the embedding provider.
+- **Cache:** compiled graphs are cached per `(plan_version, knowledge_embedding)`,
+  because the embedder is bound when the graph is built.
+- **Deployed runtimes** have no database. When an agent uses the tool, the package
+  carries `knowledge.json` (passage text and sources) and `knowledge_vectors.npy`
+  (float32, one row per passage), and `runtime_app.create_app(plan, knowledge_dir)`
+  searches them in memory (`SnapshotContext`). `KnowledgeChunk` lives in `knowledge.py`,
+  not `stores.py`, so the runtime doesn't need the database layer. Parsing packages
+  (`pypdf`, `python-docx`, `python-multipart`) are left out of the bundle.
+
 ---
 
 ## 7. Errors (`errors.py`) and how they surface
@@ -614,6 +661,10 @@ library."
 | **pymongo** | The official MongoDB driver. | `stores.py` — `MongoProjectStore` reads and writes one document per project; imported lazily so the in-memory path never needs a server. | Without it projects live only in process memory and every restart loses them. Used for plain CRUD only, so the same code runs against a local server, Atlas, or DocumentDB. |
 | **pyjwt** | Encodes and verifies JSON Web Tokens. | `auth.py` — `create_access_token` / `decode_access_token`, with the algorithm pinned to HS256 and `exp`/`sub` required. | Hand-rolled token signing is where auth bugs come from; this is the small, standard implementation. |
 | **argon2-cffi** | Argon2id password hashing. | `auth.py` — `hash_password` / `verify_password`. | Passwords must never be stored recoverably; Argon2id is the current OWASP first choice and the library picks safe parameters and salts itself. |
+| **pypdf** | Pure-Python PDF reader. | `knowledge.py`'s `_extract_pdf` — text per page, refusing encrypted, over-long or text-less (scanned) PDFs. | Knowledge bases accept PDFs; pure Python, so no native build anywhere. Platform-only: deployed runtimes never parse files. |
+| **python-docx** | Reads Word (.docx) documents. | `knowledge.py`'s `_extract_docx` — paragraphs grouped under headings, tables as rows, after a zip-size check. | The standard .docx reader; its `lxml` dependency was already in the lock. Platform-only. |
+| **python-multipart** | Multipart form parsing for FastAPI. | `app.py`'s upload endpoint (`request.form()`). | FastAPI needs it for any file upload. Platform-only. |
+| **numpy** | Vector maths. | `knowledge.py` — cosine-similarity search over passage embeddings, and the `.npy` snapshot in deployments. | A vectorised scan over ≤20,000 × 768 floats takes milliseconds, so no vector database is needed at this scale. |
 | **email-validator** | Syntax validation for email addresses. | Backs Pydantic's `EmailStr` on the `/auth` request models in `app.py`. | Rejects malformed addresses at the API boundary instead of storing them as login identifiers. |
 | **pytest** *(dev)* | The test runner for the entire suite. | Every file under `backend/tests/`. `backend/pyproject.toml`'s `[tool.pytest.ini_options]` defines the `e2e` marker and excludes it by default (`addopts = "-m 'not e2e'"`), so the default `uv run pytest` never makes a real network/LLM call. | The project's verify-and-retry working style (CLAUDE.md) depends on a fast, fully offline, repeatable test suite — 40 tests run in a few seconds precisely because nothing here needs a real API key. |
 | **pytest-asyncio** *(dev)* | Lets pytest run `async def` test functions and sets the asyncio mode. | `asyncio_mode = "auto"` in `pyproject.toml`; enables async test support for the FastAPI/httpx-based tests. | FastAPI is an async framework; without this, async endpoints and async test clients would need manual event-loop plumbing in every test. |
@@ -668,6 +719,10 @@ covering all three orchestration patterns and the real `web_search` tool):
   role, runtime create/update/delete, invoke through the platform, and a Deploy page —
   verified offline and with a local arm64 run of the real package, **not yet against a
   real AWS account**
+
+- Project knowledge bases (§6.1): upload, background indexing, `knowledge_search`, the
+  Knowledge page, and deployment snapshots — verified end to end against MongoDB and
+  Gemini, and in a local arm64 run of a real package
 
 **Not yet built** (design recorded above, not code):
 - Run history, and Redis for queueing — projects persist in MongoDB, runs are not

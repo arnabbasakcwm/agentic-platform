@@ -8,7 +8,8 @@ API endpoints (one per agent, plus an optional combined/synthesis endpoint).
 Status: the MVP loop is built and tested — schema, planner, compiler (sequential,
 parallel, supervisor), tool registry, FastAPI serving layer, project persistence
 (MongoDB), user accounts with JWT sign-in, plan revision by conversation, deployment
-to Bedrock AgentCore Runtime (not yet exercised against a real AWS account), and a
+to Bedrock AgentCore Runtime (not yet exercised against a real AWS account), project
+knowledge bases (uploaded documents agents search with `knowledge_search`), and a
 React console. Not yet built: run history, background workers, per-project API keys,
 rate limiting, and observability. Full architecture
 reference lives in `docs/systemDescription.md`; `README.md` is the quick start; this file
@@ -134,7 +135,8 @@ backend/
     tools.py                # Closed, vetted tool registry + side-effect opt-in rules
     config.py               # Env loading, provider/model defaults
     errors.py               # Typed platform errors
-    stores.py               # ProjectStore/UserStore interfaces + in-memory and MongoDB implementations
+    stores.py               # ProjectStore/UserStore/KnowledgeStore interfaces + in-memory and MongoDB implementations
+    knowledge.py            # Knowledge bases: extract/chunk documents, index, search, deploy snapshot
     auth.py                 # Password hashing (Argon2id) + JWT access tokens
     runtime_app.py          # The /ping + /invocations app a deployed project runs on AgentCore
     deploy.py               # Packaging (arm64 zip) + background deploy/remove jobs
@@ -285,6 +287,44 @@ whenever a change departs from or extends the contract above — don't silently 
   states the server reported — never simulated progress. Frontend changes must pass
   `npm run lint`, `npm test` and `npm run e2e` (Playwright + axe, light and dark).
   Working log: `docs/run-page-audit.md`.
+
+### 2026-10-01 — Project knowledge bases: documents agents search with a tool
+- **Why:** agents could only use the task input and the public tools; users need them to
+  work from their own documents (policies, price lists, notes).
+- **Rule:**
+  - **Scope:** one knowledge base per project. PDF, .docx, .txt/.md and .csv are
+    extracted and chunked on the platform (`knowledge.py`); each passage keeps its source
+    (page, section, table, CSV rows).
+  - **Storage:** original files are not stored. Only the passages and their embeddings
+    are kept (`KnowledgeStore`: `knowledge_documents` / `knowledge_chunks`), which is all
+    re-embedding needs, and less of the user's data to hold.
+  - **Embeddings:** `get_embeddings()` sits beside `get_llm()` as the only place an
+    embedding provider is chosen. The default follows the project's provider (Gemini or
+    OpenAI, both at 768 dimensions), else the first with a key; changing it re-embeds
+    every passage.
+  - **Access:** agents reach documents only through the `knowledge_search` tool, bound to
+    their own project's `KnowledgeContext`. It searches at call time, so new uploads need
+    no recompile. Its output is fenced as reference material, not instructions, and cites
+    `[file — source]`.
+  - **Opt-in:** uploading is the per-project opt-in for sending text to the embedding
+    provider, and the page says so. `knowledge_search` is never in the default tool set
+    and is offered to the planner/assistant only once a document is ready. Compiling a
+    plan that uses it without documents fails with `KnowledgeUnavailable`.
+  - **Limits, enforced server-side:** 20 MB per file, 10 per request, 50 files and 20,000
+    passages per project, extension allow-list, zip-bomb and page caps, and nothing
+    queued unless every file in a request passes.
+  - **Deploys:** a plan that uses the tool carries a snapshot (`knowledge.json` +
+    `knowledge_vectors.npy`) and gets the embedding key. The runtime never parses files.
+
+### 2026-10-01 — Known deviation: knowledge indexing runs in-process; search is brute force
+- **Why:** no job queue or vector index yet; at ≤20,000 passages per project a numpy
+  cosine scan is milliseconds.
+- **Rule:** indexing is a FastAPI background task that records `queued → processing →
+  ready/failed` per file. A file stuck for 30 minutes is reported failed. Embedding
+  batches retry 3 times with backoff, and a failed file leaves no partial passages.
+  Move indexing to the job queue when it exists, and to Atlas Vector Search (or another
+  vector index) if per-project limits grow. A deployed snapshot reflects the knowledge
+  base at deploy time; redeploy after changing files.
 
 ## Working style — verify-and-retry, always
 

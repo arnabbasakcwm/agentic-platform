@@ -57,7 +57,8 @@ Backend and frontend are separate, independently runnable projects.
 │   │   ├── tools.py                # Closed, vetted tool registry
 │   │   ├── config.py               # Env loading, provider/model defaults
 │   │   ├── errors.py               # Typed platform errors
-│   │   ├── stores.py               # Project and user persistence (in-memory or MongoDB)
+│   │   ├── stores.py               # Project, user and knowledge persistence (in-memory or MongoDB)
+│   │   ├── knowledge.py            # Knowledge bases: document parsing, indexing, search
 │   │   ├── auth.py                 # Password hashing + JWT access tokens
 │   │   ├── runtime_app.py          # What a deployed project runs on AgentCore
 │   │   ├── deploy.py               # Packaging + deploy jobs
@@ -110,7 +111,8 @@ uv sync
 # 2. Configure environment
 cp .env.example .env
 # Fill in at least one LLM provider key (the default provider is Gemini, so
-# GOOGLE_API_KEY or GEMINI_API_KEY is the easiest to start with).
+# GOOGLE_API_KEY or GEMINI_API_KEY is the easiest to start with). Knowledge bases
+# also need a Gemini or OpenAI key, for embeddings.
 # TAVILY_API_KEY is only needed if a project opts into the web_search tool.
 # Set MONGODB_URI=mongodb://localhost:27017 to persist projects and accounts; leave it
 # unset and everything is kept in memory and lost when the server stops.
@@ -140,9 +142,15 @@ browser. Set `VITE_API_BASE` to point the console at a different API.
 2. **New project** — describe the task in the message box and press Enter. The planner
    designs the team and replies with a summary and a *Review plan* link. Team size, model
    and tools are optional; open them from the pill under the message box.
-3. **Brief / Plan / Compile / Run** — each project has one page per step. The plan
-   assistant beside Brief, Plan and Compile takes change requests in plain language; any
-   change makes a new plan version that has to be compiled again.
+3. **Brief / Knowledge / Plan / Compile / Run** — each project has one page per step. The
+   plan assistant beside Brief, Knowledge, Plan and Compile takes change requests in plain
+   language; any change makes a new plan version that has to be compiled again.
+   - **Knowledge** (optional) — add PDF, Word, text, Markdown or CSV files for the agents
+     to search. Each file is indexed in the background (its status updates live). *Test
+     search* shows what an agent would find. *Give agents access* asks the assistant to
+     give the `knowledge_search` tool to the agents that need it; their answers then cite
+     the file and page or rows. File text and search queries go to the embedding
+     provider shown on the page; the files themselves aren't stored.
 4. **Deploy** — after Run, the Deploy page puts the compiled plan on Amazon Bedrock
    AgentCore Runtime, lets you try the live deployment, and shows how to call it from an
    app. Needs AWS set up — see [Deploying to AWS](#deploying-to-aws-agentcore).
@@ -238,6 +246,11 @@ signed-in user's projects. Interactive docs: http://127.0.0.1:8000/docs.
 | `POST /projects/{id}/run` | Run the whole team on an input |
 | `POST /projects/{id}/run/stream` | Same, streaming each agent's progress as Server-Sent Events |
 | `POST /projects/{id}/agents/{agent_id}/invoke` | Run one agent on its own |
+| `GET /projects/{id}/knowledge` | Knowledge base: files with indexing status, embedding model, limits |
+| `POST /projects/{id}/knowledge/documents` | Upload files (multipart field `files`); indexed in the background |
+| `DELETE /projects/{id}/knowledge/documents/{doc_id}` | Remove a file and its passages |
+| `PUT /projects/{id}/knowledge/embedding` | Change the embedding model (re-embeds every passage) |
+| `POST /projects/{id}/knowledge/search` | Search the knowledge base the way `knowledge_search` does |
 | `POST /projects/{id}/deploy` | Deploy the compiled plan to AgentCore (runs in the background) |
 | `GET /projects/{id}/deployment` | Deployment status, and whether this server can deploy |
 | `POST /projects/{id}/deployment/invoke` | Run the deployed flow on AgentCore (same body as `/run`) |
@@ -281,6 +294,7 @@ rules it sets for future code; this is the short version.
 | **The planner chooses the team size by default** | Most people don't know how many agents a task needs. You can still set a number; the 10-agent maximum is enforced by the server either way. |
 | **Plan assistant: change the brief or plan by asking** | Small changes ("run these in parallel", "add a reviewer") shouldn't require editing JSON. Revised plans pass exactly the same validation as new ones, can't switch on external tools the project didn't opt into, and are never saved over a plan that changed in the meantime. |
 | **Deploy to Amazon Bedrock AgentCore** — one runtime per project, built from a zip (no Docker) | A finished flow needs a hosted endpoint apps can call. The deployed runtime runs the same compiler and runtime code with the same input/output as local runs, so behaviour matches. |
+| **Project knowledge bases** — upload PDF, Word, text, Markdown or CSV files; agents search them with the `knowledge_search` tool and cite the file and page | Agents could only use the task input and public tools. Files are indexed into cited passages (originals aren't kept); only projects with documents are offered the tool, and a deployment carries a snapshot so it answers the same way. |
 | **Redesigned console** — collapsible sidebar, Projects page, chat-style New project page, separate Brief / Plan / Compile / Run pages | The old single page mixed planning, compiling and running and became cluttered; you also had no way to find earlier projects. |
 
 ---
@@ -290,7 +304,7 @@ rules it sets for future code; this is the short version.
 | Phase | Scope | Status |
 |---|---|---|
 | **MVP** | Meta-planner + schema, compiler (all 3 patterns), FastAPI serving, real `web_search` tool + opt-in enforcement | **Done** |
-| **V1** | Project persistence in MongoDB (**done**); user accounts with JWT sign-in (**done**); plan-review/edit UX incl. plan assistant (**done**); run history and Redis-backed jobs; per-project API keys; synthesis (aggregate) endpoint; deploy a compiled project to Bedrock AgentCore Runtime (**built**; first real AWS deploy pending) | In progress |
+| **V1** | Project persistence in MongoDB (**done**); user accounts with JWT sign-in (**done**); plan-review/edit UX incl. plan assistant (**done**); run history and Redis-backed jobs; per-project API keys; synthesis (aggregate) endpoint; deploy a compiled project to Bedrock AgentCore Runtime (**built**; first real AWS deploy pending); project knowledge bases (**done**) | In progress |
 | **V2** | Dedicated AgentCore runtime per heavy/isolated tenant; AgentCore Observability + LangSmith; expanded tool registry; rate limiting and billing | Not started |
 
 ---
