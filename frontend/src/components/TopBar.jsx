@@ -1,3 +1,5 @@
+import { useTheme } from "../lib/theme.js";
+import { Icon } from "./icons.jsx";
 import { Pill } from "./ui.jsx";
 
 const STATUS = {
@@ -12,6 +14,23 @@ export function HealthPill({ health }) {
     <Pill tone={status.tone} dot>
       {status.label}
     </Pill>
+  );
+}
+
+/** Switches between light and dark; shows the theme you'd switch to. */
+export function ThemeToggle() {
+  const { theme, toggle } = useTheme();
+  const next = theme === "dark" ? "light" : "dark";
+  return (
+    <button
+      type="button"
+      className="iconbtn theme-toggle"
+      onClick={toggle}
+      aria-label={`Switch to ${next} mode`}
+      title={`Switch to ${next} mode`}
+    >
+      <Icon name={next === "dark" ? "moon" : "sun"} />
+    </button>
   );
 }
 
@@ -35,6 +54,7 @@ export function TopBar({ crumbs, health }) {
         })}
       </nav>
       <HealthPill health={health} />
+      <ThemeToggle />
     </header>
   );
 }

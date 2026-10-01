@@ -80,8 +80,10 @@
     monospace;
 }
 
+/* Dark theme: follows the system unless the toggle chose light, or when it chose dark. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
+
     color-scheme: dark;
 
     --canvas: #0b1120;
@@ -128,6 +130,54 @@
     --shadow-hover: 0 2px 8px rgba(0, 0, 0, 0.35);
     --shadow-overlay: -8px 0 24px rgba(0, 0, 0, 0.45);
   }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --canvas: #0b1120;
+  --surface: #111827;
+  --surface-sunken: #1c2638;
+
+  --border: #243045;
+  --border-strong: #35445e;
+
+  --text: #e5e9f0;
+  --text-muted: #aab4c4;
+  --text-subtle: #8a96a8;
+
+  --primary: #4f46e5;
+  --primary-hover: #5b54ec;
+  --on-primary: #ffffff;
+  --accent: #a5b4fc;
+  --accent-soft: #1e1b4b;
+  --accent-border: #3730a3;
+  --ring: rgba(165, 180, 252, 0.35);
+
+  --success: #34d399;
+  --success-soft: #052e24;
+  --success-border: #065f46;
+
+  --warn: #fbbf24;
+  --warn-soft: #2a1d05;
+  --warn-border: #78350f;
+
+  --danger: #f87171;
+  --danger-soft: #2a0f12;
+  --danger-border: #7f1d1d;
+
+  --info: #38bdf8;
+  --info-soft: #082f49;
+  --info-border: #075985;
+
+  --code-key: #a5b4fc;
+  --code-string: #6ee7b7;
+  --code-number: #fcd34d;
+  --code-literal: #f9a8d4;
+
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-hover: 0 2px 8px rgba(0, 0, 0, 0.35);
+  --shadow-overlay: -8px 0 24px rgba(0, 0, 0, 0.45);
 }
 
 *,
@@ -459,6 +509,10 @@ a {
   color: var(--text-muted);
   cursor: pointer;
   flex-shrink: 0;
+}
+
+.theme-toggle {
+  border: 1px solid var(--border);
 }
 
 .iconbtn:hover {

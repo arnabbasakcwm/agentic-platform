@@ -13,6 +13,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { END, START, buildGraph } from "../lib/flow.js";
 import { formatDuration } from "../lib/format.js";
 import { serverNow } from "../lib/runState.js";
+import { useTheme } from "../lib/theme.js";
 import { Icon } from "./icons.jsx";
 
 const AGENT_SIZE = { width: 216, height: 66 };
@@ -152,6 +153,7 @@ const edgeTypes = { flow: FlowEdge };
  */
 export function RunDiagram({ plan, run, clock, onSelectAgent }) {
   const graph = useMemo(() => buildGraph(plan), [plan]);
+  const { theme } = useTheme();
   const containerRef = useRef(null);
   const [direction, setDirection] = useState("LR");
 
@@ -248,7 +250,7 @@ export function RunDiagram({ plan, run, clock, onSelectAgent }) {
         elementsSelectable={false}
         zoomOnScroll={false}
         preventScrolling={false}
-        colorMode="system"
+        colorMode={theme}
         onNodeClick={(_event, node) => {
           if (node.type === "agent") onSelectAgent(node.id);
         }}

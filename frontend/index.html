@@ -4,6 +4,15 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Agentic Platform Console</title>
+    <script>
+      // Apply a saved light/dark choice before the first paint (see src/lib/theme.js).
+      try {
+        const theme = localStorage.getItem("agentic-platform.theme");
+        if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
+      } catch {
+        // Storage unavailable: follow the system theme.
+      }
+    </script>
     <!-- Inline icon: no /favicon.ico request, so no 404 in the console. -->
     <link
       rel="icon"

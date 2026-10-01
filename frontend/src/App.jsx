@@ -2,10 +2,11 @@ import { useCallback, useEffect, useState } from "react";
 import { AuthPanel } from "./components/AuthPanel.jsx";
 import { Icon } from "./components/icons.jsx";
 import { Sidebar } from "./components/Sidebar.jsx";
-import { HealthPill, TopBar } from "./components/TopBar.jsx";
+import { HealthPill, ThemeToggle, TopBar } from "./components/TopBar.jsx";
 import { api, session } from "./lib/api.js";
 import { projectTitle } from "./lib/format.js";
 import { navigate, paths, useRoute } from "./lib/router.js";
+import { ThemeContext, useThemeState } from "./lib/theme.js";
 import { useAction } from "./lib/useAction.js";
 import { NewProjectPage } from "./pages/NewProjectPage.jsx";
 import { ProjectWorkspace } from "./pages/ProjectWorkspace.jsx";
@@ -41,7 +42,7 @@ function crumbsFor(route, projects) {
   return [{ label: "Projects" }];
 }
 
-export default function App() {
+function Console() {
   const route = useRoute();
 
   const [health, setHealth] = useState("checking");
@@ -148,8 +149,9 @@ export default function App() {
             disabled={health === "offline"}
           />
         )}
-        <div className="authscreen__status">
+        <div className="authscreen__status row">
           <HealthPill health={health} />
+          <ThemeToggle />
         </div>
       </div>
     );
@@ -197,5 +199,14 @@ export default function App() {
         </main>
       </div>
     </div>
+  );
+}
+
+export default function App() {
+  const theme = useThemeState();
+  return (
+    <ThemeContext.Provider value={theme}>
+      <Console />
+    </ThemeContext.Provider>
   );
 }

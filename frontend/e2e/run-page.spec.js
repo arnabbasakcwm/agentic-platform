@@ -289,3 +289,32 @@ for (const scheme of ["light", "dark"]) {
     });
   }
 }
+
+// ---------------------------------------------------------------- theme toggle
+test("the theme toggle switches light and dark, overrides the system, and is remembered", async ({ page }) => {
+  const background = () => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+  const LIGHT = "rgb(248, 250, 252)";
+  const DARK = "rgb(11, 17, 32)";
+
+  // System light: the console starts light and offers dark.
+  await openRunPage(page, { scheme: "light" });
+  expect(await background()).toBe(LIGHT);
+  await page.getByRole("button", { name: "Switch to dark mode" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  expect(await background()).toBe(DARK);
+  await expect(page.locator(".react-flow")).toHaveClass(/\bdark\b/);
+  await axe(page);
+
+  // Remembered across a reload, before the app even renders (no flash).
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  expect(await background()).toBe(DARK);
+  await expect(page.getByRole("button", { name: "Switch to light mode" })).toBeVisible();
+
+  // A chosen theme wins over the system: light chosen while the system is dark.
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.getByRole("button", { name: "Switch to light mode" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  expect(await background()).toBe(LIGHT);
+  await axe(page);
+});
