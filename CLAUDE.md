@@ -274,6 +274,18 @@ whenever a change departs from or extends the contract above — don't silently 
   project; the request returns 202 at once. A deploy cut off by a restart shows as failed
   after 30 minutes without progress. Move it to the job queue when one exists.
 
+### 2026-10-01 — Run page: live events, readable output, frontend checks
+- **Why:** agent answers showed raw Markdown run together on one line, the Run page
+  mixed stale results with fresh inputs, and there was no way to watch a run happen.
+- **Rule:** an agent's `content` is GitHub-flavored Markdown with real line breaks — the
+  schema and final instruction say so, and the backend normalises or sends back flattened
+  answers; the console renders it as Markdown, never as HTML. Full runs stream per-agent
+  events (`POST /projects/{id}/run/stream`, Server-Sent Events) through a per-run `emit`
+  in LangGraph config; `/run` stays the non-streaming contract. The diagram shows only
+  states the server reported — never simulated progress. Frontend changes must pass
+  `npm run lint`, `npm test` and `npm run e2e` (Playwright + axe, light and dark).
+  Working log: `docs/run-page-audit.md`.
+
 ## Working style — verify-and-retry, always
 
 Never mark something done because the code looks right.

@@ -194,6 +194,16 @@ uv run pytest                       # offline, LLMs mocked — no API keys or ne
 uv run python scripts/smoke_e2e.py  # real LLM + tool calls end to end (needs .env keys)
 ```
 
+Console checks (from `frontend/`):
+
+```bash
+npm run lint   # ESLint
+npm test       # unit tests (Vitest)
+npm run e2e    # Playwright + axe against a scripted mock API; uses the installed Edge.
+               # Screenshots of the Run page (idle/running/completed/failed, 3 widths,
+               # light and dark) land in frontend/e2e/screenshots/
+```
+
 ---
 
 ## Orchestration patterns
@@ -226,6 +236,7 @@ signed-in user's projects. Interactive docs: http://127.0.0.1:8000/docs.
 | `PATCH /projects/{id}/plan` | Replace the plan with an edited one (re-validated) |
 | `POST /projects/{id}/compile` | Build the runnable graph (no model calls) |
 | `POST /projects/{id}/run` | Run the whole team on an input |
+| `POST /projects/{id}/run/stream` | Same, streaming each agent's progress as Server-Sent Events |
 | `POST /projects/{id}/agents/{agent_id}/invoke` | Run one agent on its own |
 | `POST /projects/{id}/deploy` | Deploy the compiled plan to AgentCore (runs in the background) |
 | `GET /projects/{id}/deployment` | Deployment status, and whether this server can deploy |
