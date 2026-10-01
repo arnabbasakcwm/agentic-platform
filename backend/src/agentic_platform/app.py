@@ -15,14 +15,16 @@ import uuid
 from typing import Any
 
 from botocore.exceptions import BotoCoreError, ClientError
-from fastapi import BackgroundTasks, Depends, FastAPI, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, Request, Response
+from fastapi.concurrency import run_in_threadpool
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, EmailStr, Field, ValidationError
 
-from .agent_schema import AgentPlan
+from . import knowledge as kb
+from .agent_schema import AgentPlan, EmbeddingConfig
 from .auth import create_access_token, decode_access_token, hash_password, verify_password
 from .agentcore import make_cloud
 from .config import (
@@ -31,6 +33,7 @@ from .config import (
     AGENTCORE_REGION,
     DEFAULT_MODELS,
     DEFAULT_PROVIDER,
+    EMBEDDING_MODELS,
     JWT_EXPIRES_MINUTES,
     MAX_AGENTS,
 )
@@ -43,6 +46,10 @@ from .errors import (
     DeployError,
     DeployInProgressError,
     DeployNotConfiguredError,
+    DocumentNotFoundError,
+    KnowledgeBusyError,
+    KnowledgeError,
+    KnowledgeUnavailableError,
     NotDeployedError,
     PlanConflictError,
     RunTimeoutError,
@@ -53,10 +60,17 @@ from .errors import (
     UnknownToolError,
     UnsupportedProviderError,
 )
-from .graph_builder import compile_graph, run_graph, run_graph_events, run_single_agent
+from .graph_builder import (
+    compile_graph,
+    embedding_available,
+    get_embeddings,
+    run_graph,
+    run_graph_events,
+    run_single_agent,
+)
 from .meta_planner_prompt import plan_project, revise_plan
-from .stores import ChatMessage, Deployment, ProjectRecord, UserRecord, make_stores
-from .tools import SIDE_EFFECT_TOOLS, TOOL_REGISTRY, TOOL_SUMMARIES, default_tool_names
+from .stores import ChatMessage, Deployment, KnowledgeDocument, ProjectRecord, UserRecord, make_stores
+from .tools import KNOWLEDGE_TOOLS, SIDE_EFFECT_TOOLS, TOOL_REGISTRY, TOOL_SUMMARIES, default_tool_names
 
 app = FastAPI(
     title="Agentic Platform",
@@ -88,11 +102,14 @@ def _make_cloud():
 # Swappable in tests: builds the deployment zip.
 _package_builder = build_package
 
-# Per-process cache of compiled graphs: project id -> (plan_version, graph). Purely an
-# optimisation — the store's compiled_version is the source of truth for whether a
-# project is runnable, and compiling makes no LLM calls, so a process that doesn't hold
-# the graph (after a restart, or a different worker) just rebuilds it.
-_COMPILED: dict[str, tuple[int, Any]] = {}
+# Per-process cache of compiled graphs: project id -> (plan_version, embedding model,
+# graph). Purely an optimisation — the store's compiled_version is the source of truth
+# for whether a project is runnable, and compiling makes no LLM calls, so a process that
+# doesn't hold the graph (after a restart, or a different worker) just rebuilds it.
+_COMPILED: dict[str, tuple[int, Any, Any]] = {}
+
+# Files accepted in one upload request (each up to kb.MAX_FILE_BYTES).
+MAX_FILES_PER_UPLOAD = 10
 
 
 # --------------------------------------------------------------------------- models
@@ -133,6 +150,11 @@ class RunRequest(BaseModel):
 class AgentInvokeRequest(BaseModel):
     input: dict[str, Any]
     upstream_outputs: dict[str, Any] = Field(default_factory=dict)
+
+
+class KnowledgeSearchRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=1000)
+    k: int = Field(default=5, ge=1, le=10)
 
 
 class ProjectNotFoundError(PlatformError):
@@ -199,6 +221,7 @@ def _project_body(project: ProjectRecord) -> dict[str, Any]:
         "side_effect_tools_enabled": project.side_effect_tools_enabled,
         "conversation": [m.model_dump() for m in project.conversation],
         "deployment": _deployment_body(project),
+        "knowledge": _knowledge_summary(project),
         "created_at": project.created_at,
         "updated_at": project.updated_at,
     }
@@ -215,11 +238,97 @@ def _get_project(project_id: str, user: UserRecord) -> ProjectRecord:
 
 def _compiled_graph(project: ProjectRecord) -> Any:
     cached = _COMPILED.get(project.id)
-    if cached is not None and cached[0] == project.plan_version:
-        return cached[1]
-    graph = compile_graph(project.plan)
-    _COMPILED[project.id] = (project.plan_version, graph)
+    if (
+        cached is not None
+        and cached[0] == project.plan_version
+        and cached[1] == project.knowledge_embedding
+    ):
+        return cached[2]
+    graph = compile_graph(project.plan, _knowledge_context(project))
+    _COMPILED[project.id] = (project.plan_version, project.knowledge_embedding, graph)
     return graph
+
+
+# --------------------------------------------------------------------------- knowledge
+def _uses_knowledge(plan: AgentPlan) -> bool:
+    return any(set(a.tools) & KNOWLEDGE_TOOLS for a in plan.agents)
+
+
+def _knowledge_context(project: ProjectRecord) -> kb.KnowledgeContext | None:
+    """The project's documents for knowledge_search, or None when no agent uses it or
+    there is nothing to search (compiling then fails with KnowledgeUnavailable)."""
+    if not _uses_knowledge(project.plan) or project.knowledge_embedding is None:
+        return None
+    if not _knowledge.list_documents(project.id):
+        return None
+    return kb.store_context(_knowledge, project.id, get_embeddings(project.knowledge_embedding))
+
+
+def _has_ready_knowledge(project_id: str) -> bool:
+    return any(d.status == "ready" for d in _knowledge.list_documents(project_id))
+
+
+def _offered_tools(project: ProjectRecord) -> list[str]:
+    """Tools the planner may give this project's agents: the built-ins, the external
+    tools this project opted into, and knowledge_search once it has documents to search."""
+    tools = set(default_tool_names()) | set(project.side_effect_tools_enabled)
+    if _has_ready_knowledge(project.id):
+        tools |= KNOWLEDGE_TOOLS
+    return sorted(tools)
+
+
+def _embedding_options() -> list[dict[str, Any]]:
+    return [
+        {"provider": p, "model": m, "available": embedding_available(p)}
+        for p, m in EMBEDDING_MODELS.items()
+    ]
+
+
+def _default_embedding(project: ProjectRecord) -> EmbeddingConfig:
+    """The embedding model of the provider the project's agents use, or else the first
+    one this server has a key for."""
+    preferred = [a.llm.provider for a in project.plan.agents] + list(EMBEDDING_MODELS)
+    for provider in preferred:
+        if provider in EMBEDDING_MODELS and embedding_available(provider):
+            return EmbeddingConfig(provider=provider, model=EMBEDDING_MODELS[provider])
+    raise KnowledgeError(
+        "no embedding model is configured on this server: add a Gemini (GOOGLE_API_KEY) "
+        "or OpenAI (OPENAI_API_KEY) key to use a knowledge base",
+        status=503,
+    )
+
+
+def _document_body(doc: KnowledgeDocument) -> dict[str, Any]:
+    return doc.effective().model_dump(exclude={"project_id", "tenant_id"})
+
+
+def _knowledge_summary(project: ProjectRecord) -> dict[str, Any]:
+    docs = [d.effective() for d in _knowledge.list_documents(project.id)]
+    return {
+        "documents": len(docs),
+        "ready": sum(d.status == "ready" for d in docs),
+        "embedding": project.knowledge_embedding.model_dump() if project.knowledge_embedding else None,
+    }
+
+
+def _index_upload(project_id: str, document_id: str, data: bytes, config: EmbeddingConfig) -> None:
+    """Background job for one uploaded file. Runs after the response, one file at a
+    time, so each file's passage budget accounts for the files indexed before it."""
+    used = sum(
+        d.chunk_count for d in _knowledge.list_documents(project_id) if d.id != document_id
+    )
+    try:
+        embedder = get_embeddings(config)
+    except Exception as e:  # noqa: BLE001 — recorded on the document, never raised
+        _knowledge.update_document(project_id, document_id, status="failed", error=kb._describe(e))
+        return
+    kb.index_document(
+        _knowledge, project_id, document_id, data, embedder, kb.MAX_CHUNKS_PER_PROJECT - used
+    )
+
+
+def _reembed(project_id: str, config: EmbeddingConfig) -> None:
+    kb.reembed_project(_knowledge, project_id, get_embeddings(config))
 
 
 # --------------------------------------------------------------------------- routes
@@ -291,6 +400,8 @@ def create_project(
     # Side-effecting tools (network egress, third-party APIs) are excluded by default;
     # a caller opts a project into one by naming it explicitly here.
     available_tools = req.available_tools if req.available_tools is not None else default_tool_names()
+    # A new project has no documents yet, so nothing for knowledge_search to search.
+    available_tools = [t for t in available_tools if t not in KNOWLEDGE_TOOLS]
     side_effect_tools_enabled = sorted(set(available_tools) & SIDE_EFFECT_TOOLS)
     plan = plan_project(
         user_brief=req.brief,
@@ -367,7 +478,7 @@ def revise_project(
     project = _get_project(project_id, user)
     # A revision may use any built-in tool, but external tools only if this project
     # already opted into them — a chat message is not an opt-in.
-    allowed_tools = sorted(set(default_tool_names()) | set(project.side_effect_tools_enabled))
+    allowed_tools = _offered_tools(project)
     allowed_llms = [{"provider": p, "model": m} for p, m in DEFAULT_MODELS.items()]
     for agent in project.plan.agents:
         current = {"provider": agent.llm.provider, "model": agent.llm.model}
@@ -466,7 +577,7 @@ def invoke_agent(
     project = _get_project(project_id, user)
     try:
         result = run_single_agent(
-            project.plan, agent_id, req.input, req.upstream_outputs
+            project.plan, agent_id, req.input, req.upstream_outputs, _knowledge_context(project)
         )
     except KeyError:
         return JSONResponse(
@@ -478,6 +589,192 @@ def invoke_agent(
             },
         )
     return {"project_id": project_id, "agent_id": agent_id, "result": result}
+
+
+# --------------------------------------------------------------------------- knowledge
+def _knowledge_body(project: ProjectRecord) -> dict[str, Any]:
+    docs = [_document_body(d) for d in _knowledge.list_documents(project.id)]
+    return {
+        "embedding": project.knowledge_embedding.model_dump() if project.knowledge_embedding else None,
+        "embedding_options": _embedding_options(),
+        "documents": docs,
+        "passages": sum(d["chunk_count"] for d in docs),
+        # Agents that can search these documents now.
+        "used_by": [a.id for a in project.plan.agents if set(a.tools) & KNOWLEDGE_TOOLS],
+        "limits": {
+            "max_file_bytes": kb.MAX_FILE_BYTES,
+            "max_files": kb.MAX_FILES_PER_PROJECT,
+            "max_files_per_upload": MAX_FILES_PER_UPLOAD,
+            "max_passages": kb.MAX_CHUNKS_PER_PROJECT,
+            "file_types": sorted(kb.ALLOWED_TYPES),
+        },
+    }
+
+
+@app.get("/projects/{project_id}/knowledge")
+def get_knowledge(project_id: str, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """The project's knowledge base: its files with their indexing status, the embedding
+    model, and the limits."""
+    return _knowledge_body(_get_project(project_id, user))
+
+
+def _queue_uploads(
+    project_id: str, user: UserRecord, files: list[tuple[str, bytes]], background: BackgroundTasks
+) -> dict[str, Any]:
+    project = _get_project(project_id, user)
+    existing = _knowledge.list_documents(project_id)
+    if len(existing) + len(files) > kb.MAX_FILES_PER_PROJECT:
+        raise KnowledgeError(
+            f"a knowledge base holds at most {kb.MAX_FILES_PER_PROJECT} files; "
+            f"this one has {len(existing)}"
+        )
+    names = {d.filename.lower() for d in existing}
+    for filename, data in files:  # check every file before queueing any
+        kb.file_kind(filename)
+        if filename.lower() in names:
+            raise KnowledgeError(f"'{filename}' is already in this knowledge base; delete it first to replace it", status=409)
+        names.add(filename.lower())
+        if not data:
+            raise KnowledgeError(f"'{filename}' is empty")
+
+    config = project.knowledge_embedding or _default_embedding(project)
+    get_embeddings(config)  # fail now, not in the background, if its key is missing
+    if project.knowledge_embedding is None:
+        _store.set_knowledge_embedding(project_id, config)
+
+    queued = []
+    for filename, data in files:
+        doc = KnowledgeDocument(
+            id=uuid.uuid4().hex,
+            project_id=project_id,
+            tenant_id=user.id,
+            filename=filename,
+            kind=kb.file_kind(filename),
+            size_bytes=len(data),
+        )
+        _knowledge.add_document(doc)
+        background.add_task(_index_upload, project_id, doc.id, data, config)
+        queued.append(_document_body(doc))
+    return {"documents": queued}
+
+
+_UPLOAD_BODY = {
+    "requestBody": {
+        "required": True,
+        "content": {
+            "multipart/form-data": {
+                "schema": {
+                    "type": "object",
+                    "required": ["files"],
+                    "properties": {
+                        "files": {"type": "array", "items": {"type": "string", "format": "binary"}}
+                    },
+                }
+            }
+        },
+    }
+}
+
+
+@app.post("/projects/{project_id}/knowledge/documents", status_code=202, openapi_extra=_UPLOAD_BODY)
+async def upload_documents(
+    project_id: str,
+    request: Request,
+    background: BackgroundTasks,
+    user: UserRecord = Depends(current_user),
+) -> dict[str, Any]:
+    """Add files (multipart field `files`, repeatable) to the knowledge base.
+
+    Returns at once with each file queued; extraction and embedding run in the
+    background, reported per file by GET /projects/{id}/knowledge. Accepts PDF, Word
+    (.docx), .txt, .md and .csv, up to 20 MB each. File contents, and later the agents'
+    search queries, are sent to the project's embedding provider; the files themselves
+    are not stored, only the text passages extracted from them.
+    """
+    # Refuse an oversized body before reading it.
+    limit = MAX_FILES_PER_UPLOAD * kb.MAX_FILE_BYTES + 1024 * 1024
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > limit:
+        raise KnowledgeError("upload too large: send at most 10 files of up to 20 MB each", status=413)
+    form = await request.form(max_files=MAX_FILES_PER_UPLOAD, max_fields=10)
+    files: list[tuple[str, bytes]] = []
+    try:
+        for item in form.getlist("files"):
+            if isinstance(item, str):
+                raise KnowledgeError("'files' must be file uploads")
+            filename = (item.filename or "").replace("\\", "/").rsplit("/", 1)[-1].strip()[:200]
+            if not filename:
+                raise KnowledgeError("every uploaded file needs a name")
+            data = await item.read(kb.MAX_FILE_BYTES + 1)
+            if len(data) > kb.MAX_FILE_BYTES:
+                raise KnowledgeError(f"'{filename}' is larger than 20 MB", status=413)
+            files.append((filename, data))
+    finally:
+        await form.close()
+    if not files:
+        raise KnowledgeError("no files were uploaded (use the multipart field 'files')")
+    return await run_in_threadpool(_queue_uploads, project_id, user, files, background)
+
+
+@app.delete("/projects/{project_id}/knowledge/documents/{document_id}")
+def delete_document(
+    project_id: str, document_id: str, user: UserRecord = Depends(current_user)
+) -> dict[str, Any]:
+    """Remove a file and all of its passages from the knowledge base."""
+    _get_project(project_id, user)
+    if not _knowledge.delete_document(project_id, document_id):
+        raise DocumentNotFoundError(document_id)
+    return {"deleted": document_id}
+
+
+@app.put("/projects/{project_id}/knowledge/embedding")
+def set_embedding(
+    project_id: str,
+    config: EmbeddingConfig,
+    background: BackgroundTasks,
+    response: Response,
+    user: UserRecord = Depends(current_user),
+) -> dict[str, Any]:
+    """Change the embedding model. Every stored passage is re-embedded in the background
+    (202); the files don't need to be uploaded again."""
+    project = _get_project(project_id, user)
+    if EMBEDDING_MODELS.get(config.provider) != config.model:
+        raise KnowledgeError(
+            f"unknown embedding model; choose one of {_embedding_options()}", status=422
+        )
+    if config == project.knowledge_embedding:
+        return _knowledge_body(project)
+    docs = [d.effective() for d in _knowledge.list_documents(project_id)]
+    if any(d.status in ("queued", "processing") for d in docs):
+        raise KnowledgeBusyError()
+    get_embeddings(config)  # missing key -> MissingProviderKey now
+    _store.set_knowledge_embedding(project_id, config)
+    if docs:
+        for d in docs:
+            if d.status == "ready":
+                _knowledge.update_document(project_id, d.id, status="processing")
+        background.add_task(_reembed, project_id, config)
+    response.status_code = 202
+    return _knowledge_body(_get_project(project_id, user))
+
+
+@app.post("/projects/{project_id}/knowledge/search")
+def search_knowledge(
+    project_id: str, req: KnowledgeSearchRequest, user: UserRecord = Depends(current_user)
+) -> dict[str, Any]:
+    """Search the knowledge base the way knowledge_search does, to check what agents
+    will find."""
+    project = _get_project(project_id, user)
+    if project.knowledge_embedding is None:
+        return {"results": []}
+    context = kb.store_context(_knowledge, project_id, get_embeddings(project.knowledge_embedding))
+    hits = context.search(req.query, req.k)
+    return {
+        "results": [
+            {"filename": h.filename, "source": h.source, "text": h.text, "score": h.score}
+            for h in hits
+        ]
+    }
 
 
 # --------------------------------------------------------------------------- deploy
@@ -677,6 +974,26 @@ def _handle_aws(_req: Request, exc: Exception):
 @app.exception_handler(DeployError)
 def _handle_deploy(_req: Request, exc: DeployError):
     return _error_response(502, "DeployFailed", str(exc))
+
+
+@app.exception_handler(KnowledgeError)
+def _handle_knowledge(_req: Request, exc: KnowledgeError):
+    return _error_response(exc.status, "KnowledgeRejected", str(exc))
+
+
+@app.exception_handler(KnowledgeUnavailableError)
+def _handle_knowledge_unavailable(_req: Request, exc: KnowledgeUnavailableError):
+    return _error_response(409, "KnowledgeUnavailable", str(exc))
+
+
+@app.exception_handler(KnowledgeBusyError)
+def _handle_knowledge_busy(_req: Request, exc: KnowledgeBusyError):
+    return _error_response(409, "KnowledgeBusy", str(exc))
+
+
+@app.exception_handler(DocumentNotFoundError)
+def _handle_document_not_found(_req: Request, exc: DocumentNotFoundError):
+    return _error_response(404, "DocumentNotFound", str(exc))
 
 
 @app.exception_handler(PlanConflictError)

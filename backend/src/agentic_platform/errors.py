@@ -120,6 +120,23 @@ class KnowledgeError(PlatformError):
     """A document can't be added to a knowledge base (type, size, content, limits).
     The message is written for the person who uploaded it."""
 
+    def __init__(self, message: str, status: int = 400):
+        self.status = status
+        super().__init__(message)
+
+
+class DocumentNotFoundError(PlatformError):
+    def __init__(self, document_id: str):
+        super().__init__(f"document not found: {document_id}")
+
+
+class KnowledgeBusyError(PlatformError):
+    def __init__(self) -> None:
+        super().__init__(
+            "documents are still being indexed; wait until they are ready before changing "
+            "the embedding model"
+        )
+
 
 class KnowledgeUnavailableError(PlatformError):
     """knowledge_search was requested where there is no knowledge base to search."""
