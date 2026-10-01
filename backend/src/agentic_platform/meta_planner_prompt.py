@@ -21,7 +21,7 @@ from .agent_schema import AgentPlan, LLMConfig, PlanRevision, RunBounds
 from .config import DEFAULT_MODELS, DEFAULT_PROVIDER, MAX_AGENTS
 from .errors import PlannerError
 from .graph_builder import get_llm
-from .tools import TOOL_REGISTRY
+from .tools import TOOL_SUMMARIES, default_tool_names
 
 _PLANNER_RETRY_CEILING = 3
 _PLANNER_BACKOFF_S = 1.0
@@ -96,10 +96,11 @@ T = TypeVar("T", bound=BaseModel)
 
 
 def _options_block(available_tools: list[str], available_llms: list[dict[str, Any]]) -> list[str]:
-    parts = [
-        f"\nAVAILABLE TOOL NAMES: {available_tools or '(none)'}",
-        "\nAVAILABLE LLM OPTIONS (choose provider+model from these only):",
-    ]
+    parts = [f"\nAVAILABLE TOOL NAMES: {available_tools or '(none)'}"]
+    for name in available_tools:
+        if TOOL_SUMMARIES.get(name):
+            parts.append(f"  - {name}: {TOOL_SUMMARIES[name]}")
+    parts.append("\nAVAILABLE LLM OPTIONS (choose provider+model from these only):")
     for opt in available_llms:
         parts.append(f"  - provider={opt['provider']}, model={opt['model']}")
     return parts
@@ -232,7 +233,7 @@ def _invoke_with_retries(
 def _resolve_options(
     available_tools: list[str] | None, available_llms: list[dict[str, Any]] | None
 ) -> tuple[list[str], list[dict[str, Any]]]:
-    tools = available_tools if available_tools is not None else list(TOOL_REGISTRY)
+    tools = available_tools if available_tools is not None else default_tool_names()
     llms = available_llms or [
         {"provider": DEFAULT_PROVIDER, "model": DEFAULT_MODELS[DEFAULT_PROVIDER]}
     ]

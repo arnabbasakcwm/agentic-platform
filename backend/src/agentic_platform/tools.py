@@ -19,12 +19,15 @@ import ast
 import os
 import urllib.parse
 import xml.etree.ElementTree as ET
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 import requests
 from langchain_core.tools import BaseTool, tool
 
-from .errors import MissingToolKeyError, UnknownToolError
+from .errors import KnowledgeUnavailableError, MissingToolKeyError, UnknownToolError
+
+if TYPE_CHECKING:
+    from .knowledge import KnowledgeContext
 
 # Wikipedia's API policy expects requests to identify themselves; the rest of the
 # services are fine with anything, so one constant covers every outbound call.
@@ -325,6 +328,7 @@ def _build_wolfram_alpha() -> BaseTool:
 # tools a project may use. Kept as data (not read off the tool objects) so listing the
 # registry never has to build a tool — and so never needs that tool's API key.
 TOOL_SUMMARIES: dict[str, str] = {
+    "knowledge_search": "Search the documents uploaded to this project's knowledge base (cited passages)",
     "lookup": "Small built-in reference table, for testing tool calls offline",
     "calculator": "Arithmetic on plain numbers",
     "web_search": "Live web search (Tavily)",
@@ -360,7 +364,31 @@ SIDE_EFFECT_TOOLS: frozenset[str] = frozenset(
     }
 )
 
+def _build_knowledge_search(knowledge: KnowledgeContext | None = None) -> BaseTool:
+    """The project's own documents. Bound to one project's KnowledgeContext, so an agent
+    can only ever search the knowledge base of the project it belongs to."""
+    if knowledge is None:
+        raise KnowledgeUnavailableError()
+    from .knowledge import format_hits
+
+    @tool
+    def knowledge_search(query: str) -> str:
+        """Search the documents the user uploaded to this project (PDF, Word, text,
+        Markdown, CSV) and return the most relevant passages, each cited as
+        [file name — page/section/rows]. Ask a specific question or name the facts you need;
+        search again with different words if the first results don't answer it. Cite the
+        file and location for any fact you use from these passages."""
+        return format_hits(query, knowledge.search(query))
+
+    return knowledge_search
+
+
+# Tools that need the project's own data (a KnowledgeContext) rather than an API key.
+# They are offered to the planner only when that data exists — see app.py.
+KNOWLEDGE_TOOLS: frozenset[str] = frozenset({"knowledge_search"})
+
 TOOL_REGISTRY: dict[str, Callable[[], BaseTool]] = {
+    "knowledge_search": _build_knowledge_search,
     "lookup": lambda: lookup,
     "calculator": lambda: calculator,
     "web_search": _build_web_search,
@@ -375,20 +403,22 @@ TOOL_REGISTRY: dict[str, Callable[[], BaseTool]] = {
 
 def default_tool_names() -> list[str]:
     """Tool names safe to expose to a project by default: the full registry minus any
-    side-effecting tool, which requires explicit per-project opt-in."""
-    return [n for n in TOOL_REGISTRY if n not in SIDE_EFFECT_TOOLS]
+    side-effecting tool, which requires explicit per-project opt-in, and the knowledge
+    tool, which needs uploaded documents."""
+    return [n for n in TOOL_REGISTRY if n not in SIDE_EFFECT_TOOLS | KNOWLEDGE_TOOLS]
 
 
-def get_tools(names: list[str]) -> list[BaseTool]:
+def get_tools(names: list[str], knowledge: KnowledgeContext | None = None) -> list[BaseTool]:
     """Resolve tool names against the registry.
 
     Raises UnknownToolError (naming every unresolved name, not just the first) instead
     of silently dropping a tool an agent was configured to use. Each resolved tool is
     built by calling its factory, so a missing API key surfaces as a clear
     MissingToolKeyError at resolution time (compile time, via graph_builder.compile_graph)
-    rather than mid-run.
+    rather than mid-run. `knowledge` binds knowledge_search to one project's documents;
+    without it that tool raises KnowledgeUnavailableError.
     """
     unknown = [n for n in names if n not in TOOL_REGISTRY]
     if unknown:
         raise UnknownToolError(unknown)
-    return [TOOL_REGISTRY[n]() for n in names]
+    return [_build_knowledge_search(knowledge) if n in KNOWLEDGE_TOOLS else TOOL_REGISTRY[n]() for n in names]

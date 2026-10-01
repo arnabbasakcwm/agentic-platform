@@ -220,6 +220,64 @@ def test_agent_with_tools_calls_tool_then_produces_structured_output(monkeypatch
     assert result["outputs"]["a"]["content"] == "done"
 
 
+def _knowledge_spec():
+    return AgentSpec(
+        id="a",
+        role="worker",
+        system_prompt="agent a",
+        llm=LLMConfig(provider="google_genai", model="tool-model"),
+        tools=["knowledge_search"],
+    )
+
+
+def test_knowledge_search_needs_a_knowledge_base_to_compile():
+    import pytest
+
+    from agentic_platform.errors import KnowledgeUnavailableError
+
+    plan = AgentPlan(agents=[_knowledge_spec()], orchestration_pattern="sequential")
+    with pytest.raises(KnowledgeUnavailableError):
+        compile_graph(plan)
+
+
+def test_agent_searches_the_projects_documents_and_gets_cited_passages(monkeypatch):
+    from agentic_platform.knowledge import EXCERPTS_OPEN, Hit, KnowledgeContext
+
+    queries = []
+
+    class Context(KnowledgeContext):
+        def search(self, query, k=5):
+            queries.append(query)
+            return [Hit("policy.pdf", "page 4", "The Delhi hotel cap is INR 9,000.", 0.8)]
+
+    class RecordingLLM(_FakeToolCallLLM):
+        seen = []
+
+        def invoke(self, messages):
+            RecordingLLM.seen = list(messages)
+            if self._calls == 0:
+                self._calls += 1
+                return _FakeAIMessage(
+                    tool_calls=[{"name": "knowledge_search", "args": {"query": "hotel cap"}, "id": "c1"}]
+                )
+            return _FakeAIMessage(tool_calls=[])
+
+    monkeypatch.setattr(gb, "get_llm", lambda cfg: RecordingLLM(_Structured([AgentOutput(content="done")])))
+    plan = AgentPlan(agents=[_knowledge_spec()], orchestration_pattern="sequential")
+    context = Context(embed_query=lambda q: [], load=lambda: ([], {}))
+    result = compile_graph(plan, knowledge=context).invoke(initial_state({"q": "x"}))
+
+    assert result["errors"] == []
+    assert queries == ["hotel cap"]
+    tool_result = RecordingLLM.seen[-1].content
+    assert tool_result.startswith(EXCERPTS_OPEN)
+    assert "[policy.pdf — page 4]" in tool_result
+
+
+def test_knowledge_search_is_never_offered_by_default():
+    assert "knowledge_search" not in tools_module.default_tool_names()
+
+
 def test_supervisor_invalid_route_target_finishes_safely(monkeypatch):
     # Supervisor names a non-existent worker -> route coerced to FINISH, no crash/loop.
     _patch(
