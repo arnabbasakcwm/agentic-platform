@@ -61,3 +61,12 @@ PROVIDER_ENV_VARS: dict[str, tuple[str, ...]] = {
 }
 
 MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1"
+
+# Embedding model per provider, for project knowledge bases. Only these providers offer
+# one; a project on another provider uses the first of these whose key is configured.
+EMBEDDING_MODELS: dict[str, str] = {
+    "google_genai": "gemini-embedding-001",
+    "openai": "text-embedding-3-small",
+}
+# Both models can shorten their vectors; one size keeps storage and search uniform.
+EMBEDDING_DIMENSIONS = 768

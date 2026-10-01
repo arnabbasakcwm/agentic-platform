@@ -30,8 +30,8 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
 
-from .agent_schema import AgentOutput, AgentPlan, AgentSpec, LLMConfig, RunBounds
-from .config import MOONSHOT_BASE_URL, PROVIDER_ENV_VARS
+from .agent_schema import AgentOutput, AgentPlan, AgentSpec, EmbeddingConfig, LLMConfig, RunBounds
+from .config import EMBEDDING_DIMENSIONS, EMBEDDING_MODELS, MOONSHOT_BASE_URL, PROVIDER_ENV_VARS
 from .errors import (
     AgentExecutionError,
     MissingProviderKeyError,
@@ -96,6 +96,47 @@ def get_llm(config: LLMConfig) -> BaseChatModel:
             **config.extra_params,
         )
 
+    raise UnsupportedProviderError(provider)
+
+
+class Embedder:
+    """Embeds knowledge-base passages and search queries with one model. Some models
+    embed a passage and a question differently (task types), so the two are separate."""
+
+    def __init__(self, embed_documents: Callable[[list[str]], list[list[float]]], embed_query: Callable[[str], list[float]]):
+        self.embed_documents = embed_documents
+        self.embed_query = embed_query
+
+
+def embedding_available(provider: str) -> bool:
+    """Whether this provider has an embedding model and its API key is configured."""
+    return provider in EMBEDDING_MODELS and any(os.environ.get(v) for v in PROVIDER_ENV_VARS[provider])
+
+
+def get_embeddings(config: EmbeddingConfig) -> Embedder:
+    """The embedding counterpart of get_llm(): the only place an embedding provider is chosen."""
+    provider = config.provider
+    if provider == "google_genai":
+        from langchain_google_genai import GoogleGenerativeAIEmbeddings
+
+        model = GoogleGenerativeAIEmbeddings(
+            model=f"models/{config.model}", google_api_key=_require_key(provider)
+        )
+        return Embedder(
+            lambda texts: model.embed_documents(
+                texts, task_type="RETRIEVAL_DOCUMENT", output_dimensionality=EMBEDDING_DIMENSIONS
+            ),
+            lambda text: model.embed_query(
+                text, task_type="RETRIEVAL_QUERY", output_dimensionality=EMBEDDING_DIMENSIONS
+            ),
+        )
+    if provider == "openai":
+        from langchain_openai import OpenAIEmbeddings
+
+        model = OpenAIEmbeddings(
+            model=config.model, dimensions=EMBEDDING_DIMENSIONS, api_key=_require_key(provider)
+        )
+        return Embedder(model.embed_documents, model.embed_query)
     raise UnsupportedProviderError(provider)
 
 

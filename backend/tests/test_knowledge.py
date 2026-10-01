@@ -142,3 +142,118 @@ def test_a_paragraph_longer_than_a_passage_is_split_at_sentences():
     assert len(passages) > 1
     assert all(p.source == "page 3" for p in passages)
     assert all(p.text.rstrip().endswith(".") for p in passages[:-1])
+
+
+# ---------------------------------------------------------------------------- indexing + search
+TOPICS = ["flight", "hotel", "visa", "food"]
+
+
+def _vector(text: str) -> list[float]:
+    """Deterministic fake embedding: how often each topic word appears."""
+    lower = text.lower()
+    return [float(lower.count(t)) + 0.01 for t in TOPICS]
+
+
+class FakeEmbedder:
+    def __init__(self, fail_times: int = 0):
+        self.calls = 0
+        self.fail_times = fail_times
+
+    def embed_documents(self, texts):
+        self.calls += 1
+        if self.calls <= self.fail_times:
+            raise RuntimeError("429 rate limited")
+        return [_vector(t) for t in texts]
+
+    def embed_query(self, text):
+        return _vector(text)
+
+
+@pytest.fixture
+def kstore():
+    from agentic_platform.stores import InMemoryKnowledgeStore, KnowledgeDocument
+
+    store = InMemoryKnowledgeStore()
+    store.add_document(
+        KnowledgeDocument(id="d1", project_id="p1", tenant_id="u1", filename="guide.md", kind=".md", size_bytes=1)
+    )
+    return store
+
+
+GUIDE = (
+    b"# Flights\nThe cheapest flight to Goa is Akasa at INR 7,004. Flight times vary.\n\n"
+    + b"filler text. " * 300
+    + b"\n# Hotels\nThe hotel cap in Delhi is INR 9,000 per night for any hotel.\n"
+)
+
+
+def test_indexing_stores_cited_passages_and_search_finds_the_right_one(kstore):
+    kb.index_document(kstore, "p1", "d1", GUIDE, FakeEmbedder(), chunk_budget=100)
+    doc = kstore.get_document("p1", "d1")
+    assert doc.status == "ready" and doc.chunk_count >= 2
+    context = kb.store_context(kstore, "p1", FakeEmbedder())
+    hits = context.search("which hotel is cheapest", k=1)
+    assert hits[0].filename == "guide.md"
+    assert 'section "Hotels"' in hits[0].source and "INR 9,000" in hits[0].text
+
+
+def test_a_failed_extraction_is_recorded_not_raised(kstore):
+    kb.index_document(kstore, "p1", "d1", b"", FakeEmbedder(), chunk_budget=100)
+    doc = kstore.get_document("p1", "d1")
+    assert doc.status == "failed" and "empty" in doc.error
+
+
+def test_embedding_retries_then_reports_the_provider_error(kstore, monkeypatch):
+    monkeypatch.setattr(kb, "_EMBED_BACKOFF_S", 0)
+    kb.index_document(kstore, "p1", "d1", GUIDE, FakeEmbedder(fail_times=2), chunk_budget=100)
+    assert kstore.get_document("p1", "d1").status == "ready"  # third attempt succeeded
+
+    kb.index_document(kstore, "p1", "d1", GUIDE, FakeEmbedder(fail_times=99), chunk_budget=100)
+    doc = kstore.get_document("p1", "d1")
+    assert doc.status == "failed" and "429" in doc.error
+    assert kstore.chunks_for_project("p1") == []  # no half-indexed passages left behind
+
+
+def test_the_project_passage_limit_is_enforced(kstore):
+    kb.index_document(kstore, "p1", "d1", GUIDE, FakeEmbedder(), chunk_budget=1)
+    doc = kstore.get_document("p1", "d1")
+    assert doc.status == "failed" and "limit" in doc.error
+
+
+def test_documents_still_indexing_are_not_searched(kstore):
+    kb.index_document(kstore, "p1", "d1", GUIDE, FakeEmbedder(), chunk_budget=100)
+    kstore.update_document("p1", "d1", status="processing")
+    assert kb.store_context(kstore, "p1", FakeEmbedder()).search("hotel") == []
+
+
+def test_reembedding_replaces_vectors_and_keeps_text(kstore):
+    kb.index_document(kstore, "p1", "d1", GUIDE, FakeEmbedder(), chunk_budget=100)
+    before = kstore.chunks_for_project("p1")
+
+    class Doubled(FakeEmbedder):
+        def embed_documents(self, texts):
+            return [[2 * x for x in _vector(t)] for t in texts]
+
+    kb.reembed_project(kstore, "p1", Doubled())
+    after = kstore.chunks_for_project("p1")
+    assert [c.text for c in after] == [c.text for c in before]
+    assert after[0].embedding == [2 * x for x in before[0].embedding]
+    assert kstore.get_document("p1", "d1").status == "ready"
+
+
+def test_search_ignores_vectors_of_another_size():
+    from agentic_platform.stores import KnowledgeChunk
+
+    chunks = [
+        KnowledgeChunk(id="a", project_id="p", document_id="d", ordinal=0, text="old", source="x", embedding=[1.0, 0.0]),
+        KnowledgeChunk(id="b", project_id="p", document_id="d", ordinal=1, text="new", source="y", embedding=[1.0, 0.0, 0.0]),
+    ]
+    hits = kb.search(chunks, {"d": "f.txt"}, [1.0, 0.0, 0.0], k=5)
+    assert [h.text for h in hits] == ["new"]
+
+
+def test_tool_output_is_fenced_and_cited():
+    out = kb.format_hits("q", [kb.Hit("guide.pdf", "page 3", "Akasa is cheapest.", 0.9)])
+    assert out.startswith(kb.EXCERPTS_OPEN) and out.endswith(kb.EXCERPTS_CLOSE)
+    assert "[guide.pdf — page 3]\nAkasa is cheapest." in out
+    assert "No passages" in kb.format_hits("q", [])
