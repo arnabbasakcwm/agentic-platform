@@ -6,13 +6,15 @@ FastAPI app uses, and accepts the same task-input JSON as `POST /projects/{id}/r
 plan behaves identically locally and deployed — only the serving envelope differs.
 
 It deliberately depends on nothing but the plan: no database, no user accounts. A
-deployment bakes the validated plan into the package (see deploy.py), and provider keys
+deployment bakes the validated plan into the package (see deploy.py) — plus a snapshot of
+the project's knowledge base when an agent uses knowledge_search — and provider keys
 arrive as environment variables.
 """
 
 from __future__ import annotations
 
 import time
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -22,7 +24,8 @@ from pydantic import BaseModel, Field
 
 from .agent_schema import AgentPlan
 from .errors import PlatformError
-from .graph_builder import compile_graph, run_graph, run_single_agent
+from .graph_builder import compile_graph, get_embeddings, run_graph, run_single_agent
+from .knowledge import KnowledgeContext, SnapshotContext, load_snapshot
 
 
 class InvocationRequest(BaseModel):
@@ -39,11 +42,21 @@ def _error(status: int, error_type: str, message: str) -> JSONResponse:
     )
 
 
-def create_app(plan_data: dict[str, Any]) -> FastAPI:
+def _snapshot_context(directory: Path | None) -> KnowledgeContext | None:
+    snapshot = load_snapshot(directory) if directory is not None else None
+    if snapshot is None:
+        return None
+    embedding, filenames, passages, matrix = snapshot
+    return SnapshotContext(get_embeddings(embedding).embed_query, filenames, passages, matrix)
+
+
+def create_app(plan_data: dict[str, Any], knowledge_dir: Path | None = None) -> FastAPI:
     """Build the runtime app for one plan. The plan is validated and compiled here, at
-    startup, so a broken deployment fails its health check instead of its first call."""
+    startup, so a broken deployment fails its health check instead of its first call.
+    `knowledge_dir` holds the knowledge-base snapshot, if the deployment has one."""
     plan = AgentPlan.model_validate(plan_data)
-    graph = compile_graph(plan)
+    knowledge = _snapshot_context(knowledge_dir)
+    graph = compile_graph(plan, knowledge)
     started = int(time.time())
 
     app = FastAPI(title="Agentic Platform runtime", docs_url=None, redoc_url=None)
@@ -56,7 +69,9 @@ def create_app(plan_data: dict[str, Any]) -> FastAPI:
     def invocations(req: InvocationRequest):
         if req.agent_id is not None:
             try:
-                result = run_single_agent(plan, req.agent_id, req.input, req.upstream_outputs)
+                result = run_single_agent(
+                    plan, req.agent_id, req.input, req.upstream_outputs, knowledge
+                )
             except KeyError:
                 return _error(404, "AgentNotFound", f"agent '{req.agent_id}' is not in this plan")
             return {

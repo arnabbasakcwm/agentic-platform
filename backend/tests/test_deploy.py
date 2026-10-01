@@ -76,7 +76,7 @@ def test_runtime_ping_and_invocations_match_the_local_run_contract(monkeypatch):
 def test_runtime_single_agent_and_unknown_agent(monkeypatch):
     monkeypatch.setattr(
         runtime_app, "run_single_agent",
-        lambda plan, agent_id, task_input, upstream: {"outputs": {agent_id: {"content": "ok"}}},
+        lambda plan, agent_id, task_input, upstream, knowledge=None: {"outputs": {agent_id: {"content": "ok"}}},
     )
     client = TestClient(runtime_app.create_app(_plan().model_dump()))
     r = client.post("/invocations", json={"input": {}, "agent_id": "a"})
@@ -533,3 +533,106 @@ def test_deployments_are_private_to_their_owner(api):
     ):
         assert r.status_code == 404
     assert api.get(f"/projects/{pid}/deployment", headers=ada).json()["deployment"]["live"] is True
+
+
+# ------------------------------------------------------------------ knowledge base snapshot
+def _knowledge_store():
+    from agentic_platform.agent_schema import EmbeddingConfig
+    from agentic_platform.stores import KnowledgeChunk, KnowledgeDocument
+
+    store = InMemoryKnowledgeStore()
+    store.add_document(KnowledgeDocument(id="d1", project_id="p", tenant_id="u", filename="policy.pdf",
+                                         kind=".pdf", size_bytes=1, status="ready", chunk_count=2))
+    store.replace_chunks("p", "d1", [
+        KnowledgeChunk(id="c1", project_id="p", document_id="d1", ordinal=0, text="Hotel cap INR 9,000.",
+                       source="page 2", embedding=[0.0, 1.0]),
+        KnowledgeChunk(id="c2", project_id="p", document_id="d1", ordinal=1, text="Flights: economy.",
+                       source="page 1", embedding=[1.0, 0.0]),
+    ])
+    return store, EmbeddingConfig(provider="openai", model="text-embedding-3-small")
+
+
+def test_runtime_searches_its_knowledge_snapshot(tmp_path, monkeypatch):
+    from agentic_platform import knowledge as kb
+    from agentic_platform.graph_builder import Embedder
+
+    store, embedding = _knowledge_store()
+    meta, vectors = kb.build_snapshot(store, "p", embedding)
+    (tmp_path / kb.SNAPSHOT_FILE).write_bytes(meta)
+    (tmp_path / kb.SNAPSHOT_VECTORS_FILE).write_bytes(vectors)
+
+    used = {}
+    monkeypatch.setattr(runtime_app, "get_embeddings",
+                        lambda cfg: used.setdefault("cfg", cfg) and Embedder(None, lambda q: [0.1, 0.9]))
+    captured = {}
+
+    def fake_compile(plan, knowledge=None):
+        captured["knowledge"] = knowledge
+        return object()
+
+    monkeypatch.setattr(runtime_app, "compile_graph", fake_compile)
+    runtime_app.create_app(_plan(tools=["knowledge_search"]).model_dump(), knowledge_dir=tmp_path)
+    assert used["cfg"] == embedding
+    hits = captured["knowledge"].search("hotel limit", k=1)
+    assert (hits[0].filename, hits[0].source, hits[0].text) == ("policy.pdf", "page 2", "Hotel cap INR 9,000.")
+
+
+def test_runtime_without_a_snapshot_cant_start_a_plan_that_searches_documents(tmp_path):
+    from agentic_platform.errors import KnowledgeUnavailableError
+
+    with pytest.raises(KnowledgeUnavailableError):
+        runtime_app.create_app(_plan(tools=["knowledge_search"]).model_dump(), knowledge_dir=tmp_path)
+
+
+def test_environment_adds_the_embedding_key_only_when_documents_are_searched(keys):
+    _, embedding = _knowledge_store()
+    assert deploy.runtime_environment(_plan(), embedding) == {"GEMINI_API_KEY": "gemini-secret"}
+    env = deploy.runtime_environment(_plan(tools=["knowledge_search"]), embedding)
+    assert env == {"GEMINI_API_KEY": "gemini-secret", "OPENAI_API_KEY": "openai-secret"}
+
+
+def test_package_includes_the_snapshot(tmp_path):
+    deps = tmp_path / "deps"
+    deps.mkdir()
+    out = tmp_path / "package.zip"
+    deploy.build_package(_plan(), out, dependencies=lambda: deps, knowledge=(b'{"x": 1}', b"vectors"))
+    with zipfile.ZipFile(out) as zf:
+        assert zf.read("knowledge.json") == b'{"x": 1}'
+        assert zf.read("knowledge_vectors.npy") == b"vectors"
+    assert "pypdf" in deploy.PLATFORM_ONLY_PACKAGES and "python-docx" in deploy.PLATFORM_ONLY_PACKAGES
+
+
+def test_deploy_bakes_in_the_knowledge_base_its_agents_search(api, monkeypatch):
+    from agentic_platform import knowledge as kb
+
+    store, embedding = _knowledge_store()
+    packaged = {}
+
+    def packager(plan, path, knowledge=None):
+        packaged["knowledge"] = knowledge
+        path.write_bytes(b"zip")
+
+    monkeypatch.setattr(app_module, "_package_builder", packager)
+    monkeypatch.setattr(app_module, "_knowledge_context", lambda project: None)
+    h = api.login("kb@example.com")
+    pid = _compiled_project(api, h)
+    plan = _plan(tools=["knowledge_search"])
+    project = app_module._store.get(pid)
+    app_module._store.update_plan(pid, plan)
+    app_module._store.mark_compiled(pid, project.plan_version + 1)
+
+    r = api.post(f"/projects/{pid}/deploy", headers=h)
+    assert r.status_code == 409 and r.json()["error_type"] == "KnowledgeUnavailable"
+
+    for doc in store.list_documents("p"):
+        app_module._knowledge.add_document(doc.model_copy(update={"project_id": pid}))
+        app_module._knowledge.replace_chunks(pid, doc.id, [
+            c.model_copy(update={"project_id": pid}) for c in store.chunks_for_project("p", [doc.id])
+        ])
+    app_module._store.set_knowledge_embedding(pid, embedding)
+    r = api.post(f"/projects/{pid}/deploy", headers=h)
+    assert r.status_code == 202
+    assert api.get(f"/projects/{pid}/deployment", headers=h).json()["deployment"]["status"] == "ready"
+    meta = json.loads(packaged["knowledge"][0])
+    assert meta["documents"] == {"d1": "policy.pdf"} and len(meta["passages"]) == 2
+    assert api.cloud.environment["OPENAI_API_KEY"] == "openai-secret"

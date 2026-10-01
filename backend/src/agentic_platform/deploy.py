@@ -25,11 +25,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
-from .agent_schema import AgentPlan
+from .agent_schema import AgentPlan, EmbeddingConfig
 from .agentcore import RUNTIME_NAME_PREFIX
 from .config import PROVIDER_ENV_VARS
 from .errors import DeployError, MissingProviderKeyError, MissingToolKeyError
-from .tools import TOOL_ENV_VARS
+from .knowledge import SNAPSHOT_FILE, SNAPSHOT_VECTORS_FILE
+from .tools import TOOL_ENV_VARS, uses_knowledge
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,17 @@ RUNTIME_PLATFORM = "aarch64-manylinux_2_28"
 # The deployed runtime only serves a plan: it never touches accounts, the database or AWS
 # itself. These platform-only packages (and their own dependencies) stay out of the
 # bundle — which also matters because not all of them ship Linux arm64 wheels.
-PLATFORM_ONLY_PACKAGES = ("argon2-cffi", "pyjwt", "email-validator", "pymongo", "boto3")
+PLATFORM_ONLY_PACKAGES = (
+    "argon2-cffi",
+    "pyjwt",
+    "email-validator",
+    "pymongo",
+    "boto3",
+    # Documents are parsed on the platform; a runtime only searches the snapshot.
+    "pypdf",
+    "python-docx",
+    "python-multipart",
+)
 PLATFORM_ONLY_MODULES = {"app.py", "auth.py", "stores.py", "agentcore.py", "deploy.py"}
 # AgentCore's limits for a direct-code package.
 MAX_ZIPPED_BYTES = 250 * 1024 * 1024
@@ -60,8 +71,9 @@ import uvicorn
 
 from agentic_platform.runtime_app import create_app
 
-PLAN = json.loads((pathlib.Path(__file__).parent / "plan.json").read_text(encoding="utf-8"))
-app = create_app(PLAN)
+HERE = pathlib.Path(__file__).parent
+PLAN = json.loads((HERE / "plan.json").read_text(encoding="utf-8"))
+app = create_app(PLAN, knowledge_dir=HERE)
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8080)
@@ -73,12 +85,16 @@ def runtime_name(project_id: str) -> str:
     return f"{RUNTIME_NAME_PREFIX}{project_id}"
 
 
-def runtime_environment(plan: AgentPlan) -> dict[str, str]:
+def runtime_environment(plan: AgentPlan, embedding: EmbeddingConfig | None = None) -> dict[str, str]:
     """The environment variables a deployed plan needs, and nothing else: one key per
-    provider its agents use, plus keys for the tools they use. Raises if one is missing
-    here, so a deployment never starts that could only fail at run time."""
+    provider its agents use (and for the knowledge base's embedding model, when an agent
+    searches it), plus keys for the tools they use. Raises if one is missing here, so a
+    deployment never starts that could only fail at run time."""
     env: dict[str, str] = {}
-    for provider in sorted({agent.llm.provider for agent in plan.agents}):
+    providers = {agent.llm.provider for agent in plan.agents}
+    if embedding is not None and uses_knowledge(plan):
+        providers.add(embedding.provider)
+    for provider in sorted(providers):
         if provider == "ollama":
             raise DeployError("ollama models run on your own machine and can't be deployed")
         names = PROVIDER_ENV_VARS[provider]
@@ -180,8 +196,10 @@ def build_package(
     plan: AgentPlan,
     out_path: Path,
     dependencies: Callable[[], Path] | None = None,
+    knowledge: tuple[bytes, bytes] | None = None,
 ) -> dict[str, int]:
-    """Write the deployment zip for `plan` to `out_path`; returns its sizes in bytes."""
+    """Write the deployment zip for `plan` to `out_path`; returns its sizes in bytes.
+    `knowledge` is the knowledge-base snapshot (knowledge.build_snapshot), if any."""
     deps_dir = dependencies() if dependencies else build_dependencies(runtime_requirements())
     shutil.copyfile(_dependencies_zip(deps_dir), out_path)
     with zipfile.ZipFile(out_path, "a") as zf:
@@ -191,6 +209,9 @@ def build_package(
                 _add_file(zf, arcname, path.read_bytes())
         _add_file(zf, "plan.json", json.dumps(plan.model_dump(), indent=2).encode("utf-8"))
         _add_file(zf, "main.py", MAIN_PY.encode("utf-8"))
+        if knowledge is not None:
+            _add_file(zf, SNAPSHOT_FILE, knowledge[0])
+            _add_file(zf, SNAPSHOT_VECTORS_FILE, knowledge[1])
         unzipped = sum(i.file_size for i in zf.infolist())
     zipped = out_path.stat().st_size
     if zipped > MAX_ZIPPED_BYTES or unzipped > MAX_UNZIPPED_BYTES:
@@ -218,7 +239,7 @@ class Cloud(Protocol):
     def invoke(self, runtime_arn: str, payload: dict[str, Any]) -> dict[str, Any]: ...
 
 
-Packager = Callable[[AgentPlan, Path], Any]
+Packager = Callable[..., Any]  # (plan, out_path, knowledge=...) -> sizes
 
 
 def _describe(error: Exception) -> str:
@@ -227,9 +248,16 @@ def _describe(error: Exception) -> str:
     return f"{type(error).__name__}: {text}"[:1000]
 
 
-def run_deployment(project_id: str, store: Any, cloud: Cloud, packager: Packager = build_package) -> None:
+def run_deployment(
+    project_id: str,
+    store: Any,
+    cloud: Cloud,
+    packager: Packager = build_package,
+    knowledge_snapshot: Callable[[], tuple[bytes, bytes] | None] | None = None,
+) -> None:
     """The background job: package, upload, provision, wait. Progress and the outcome are
-    written to the project's deployment record; this never raises."""
+    written to the project's deployment record; this never raises. `knowledge_snapshot`
+    supplies the knowledge base to bake in when an agent searches it."""
     from .stores import Deployment  # local import: stores imports nothing from here
 
     def update(**changes: Any) -> Deployment | None:
@@ -247,10 +275,14 @@ def run_deployment(project_id: str, store: Any, cloud: Cloud, packager: Packager
         return
     current: Deployment = project.deployment
     try:
-        environment = runtime_environment(project.plan)
+        environment = runtime_environment(project.plan, project.knowledge_embedding)
+        snapshot = knowledge_snapshot() if knowledge_snapshot is not None else None
         with tempfile.TemporaryDirectory(prefix="agentic-deploy-") as tmp:
             package = Path(tmp) / "package.zip"
-            packager(project.plan, package)
+            if snapshot is not None:
+                packager(project.plan, package, knowledge=snapshot)
+            else:
+                packager(project.plan, package)
 
             update(status="uploading")
             cloud.ensure_bucket()

@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, Iterator, Literal, Protocol
 from pydantic import BaseModel, Field
 
 from .agent_schema import AgentPlan, EmbeddingConfig
+from .knowledge import KnowledgeChunk
 from .config import MONGODB_DB, MONGODB_TIMEOUT_MS, MONGODB_URI
 from .errors import EmailTakenError, StoreUnavailableError
 
@@ -159,18 +160,6 @@ class KnowledgeDocument(BaseModel):
                 }
             )
         return self
-
-
-class KnowledgeChunk(BaseModel):
-    """A passage of a document, where it came from, and its embedding."""
-
-    id: str
-    project_id: str
-    document_id: str
-    ordinal: int
-    text: str
-    source: str
-    embedding: list[float] = Field(default_factory=list)
 
 
 class ProjectStore(Protocol):

@@ -133,8 +133,7 @@ class DocumentNotFoundError(PlatformError):
 class KnowledgeBusyError(PlatformError):
     def __init__(self) -> None:
         super().__init__(
-            "documents are still being indexed; wait until they are ready before changing "
-            "the embedding model"
+            "documents are still being indexed; wait until they are ready and try again"
         )
 
 

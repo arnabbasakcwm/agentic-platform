@@ -70,7 +70,14 @@ from .graph_builder import (
 )
 from .meta_planner_prompt import plan_project, revise_plan
 from .stores import ChatMessage, Deployment, KnowledgeDocument, ProjectRecord, UserRecord, make_stores
-from .tools import KNOWLEDGE_TOOLS, SIDE_EFFECT_TOOLS, TOOL_REGISTRY, TOOL_SUMMARIES, default_tool_names
+from .tools import (
+    KNOWLEDGE_TOOLS,
+    SIDE_EFFECT_TOOLS,
+    TOOL_REGISTRY,
+    TOOL_SUMMARIES,
+    default_tool_names,
+    uses_knowledge,
+)
 
 app = FastAPI(
     title="Agentic Platform",
@@ -250,14 +257,10 @@ def _compiled_graph(project: ProjectRecord) -> Any:
 
 
 # --------------------------------------------------------------------------- knowledge
-def _uses_knowledge(plan: AgentPlan) -> bool:
-    return any(set(a.tools) & KNOWLEDGE_TOOLS for a in plan.agents)
-
-
 def _knowledge_context(project: ProjectRecord) -> kb.KnowledgeContext | None:
     """The project's documents for knowledge_search, or None when no agent uses it or
     there is nothing to search (compiling then fails with KnowledgeUnavailable)."""
-    if not _uses_knowledge(project.plan) or project.knowledge_embedding is None:
+    if not uses_knowledge(project.plan) or project.knowledge_embedding is None:
         return None
     if not _knowledge.list_documents(project.id):
         return None
@@ -808,8 +811,21 @@ def deploy_project(
     previous = project.deployment.effective() if project.deployment else None
     if previous is not None and previous.in_progress:
         raise DeployInProgressError()
-    # Fail now, not minutes into the job, if a key the plan needs isn't configured.
-    runtime_environment(project.plan)
+    # Fail now, not minutes into the job, if a key the plan needs isn't configured or
+    # the knowledge base its agents search isn't ready to be copied.
+    snapshot = None
+    if uses_knowledge(project.plan):
+        docs = [d.effective() for d in _knowledge.list_documents(project_id)]
+        if any(d.status in ("queued", "processing") for d in docs):
+            raise KnowledgeBusyError()
+        if project.knowledge_embedding is None or not any(d.status == "ready" for d in docs):
+            raise KnowledgeUnavailableError()
+        embedding = project.knowledge_embedding
+
+        def snapshot():
+            return kb.build_snapshot(_knowledge, project_id, embedding)
+
+    runtime_environment(project.plan, project.knowledge_embedding)
 
     deployment = Deployment(
         status="packaging",
@@ -822,7 +838,7 @@ def deploy_project(
         deployed_at=previous.deployed_at if previous else None,
     )
     _store.set_deployment(project_id, deployment)
-    background.add_task(run_deployment, project_id, _store, cloud, _package_builder)
+    background.add_task(run_deployment, project_id, _store, cloud, _package_builder, snapshot)
     return {"deployment": _deployment_body(_get_project(project_id, user))}
 
 

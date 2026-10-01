@@ -401,6 +401,11 @@ TOOL_REGISTRY: dict[str, Callable[[], BaseTool]] = {
 }
 
 
+def uses_knowledge(plan) -> bool:
+    """Whether any agent in the plan searches the project's knowledge base."""
+    return any(set(agent.tools) & KNOWLEDGE_TOOLS for agent in plan.agents)
+
+
 def default_tool_names() -> list[str]:
     """Tool names safe to expose to a project by default: the full registry minus any
     side-effecting tool, which requires explicit per-project opt-in, and the knowledge
