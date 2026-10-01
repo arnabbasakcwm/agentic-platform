@@ -7,15 +7,17 @@ import { api } from "../lib/api.js";
 import { projectTitle } from "../lib/format.js";
 import { paths } from "../lib/router.js";
 import { useAction } from "../lib/useAction.js";
+import { knowledgeHint } from "../lib/knowledge.js";
 import { useProjectRun } from "../lib/useProjectRun.js";
 import { BriefStep } from "./project/BriefStep.jsx";
 import { CompileStep } from "./project/CompileStep.jsx";
 import { DeployStep } from "./project/DeployStep.jsx";
+import { KnowledgeStep } from "./project/KnowledgeStep.jsx";
 import { PlanStep } from "./project/PlanStep.jsx";
 import { RunStep } from "./project/RunStep.jsx";
 
 // The steps where the brief and plan can still change, so where the assistant is offered.
-const ASSISTANT_STEPS = ["brief", "plan", "compile"];
+const ASSISTANT_STEPS = ["brief", "knowledge", "plan", "compile"];
 const ASSISTANT_KEY = "agentic-platform.assistant-open";
 
 // Open by default where there's room for it beside the page; remembered per browser.
@@ -66,6 +68,10 @@ export function ProjectWorkspace({ id, step, onChanged }) {
     [onChanged],
   );
 
+  const knowledgeChanged = useCallback((knowledge) => {
+    setProject((p) => (p ? { ...p, knowledge } : p));
+  }, []);
+
   useEffect(() => {
     let current = true;
     runLoad(() => api.getProject(id)).then((loaded) => {
@@ -102,6 +108,12 @@ export function ProjectWorkspace({ id, step, onChanged }) {
   const agentCount = project.plan.agents.length;
   const steps = [
     { key: "brief", label: "Brief", hint: "Defined", done: true },
+    {
+      key: "knowledge",
+      label: "Knowledge",
+      hint: knowledgeHint(project.knowledge),
+      done: (project.knowledge?.ready ?? 0) > 0,
+    },
     {
       key: "plan",
       label: "Plan",
@@ -192,6 +204,15 @@ export function ProjectWorkspace({ id, step, onChanged }) {
         </div>
 
         {step === "brief" && <BriefStep key={stepKey} project={project} />}
+        {step === "knowledge" && (
+          // Not keyed by plan version: it holds no plan draft, and a revision made from it
+          // (giving agents access) shouldn't wipe the assistant's reply it shows.
+          <KnowledgeStep
+            project={project}
+            onKnowledgeChanged={knowledgeChanged}
+            onRevised={projectChanged}
+          />
+        )}
         {step === "plan" && (
           <PlanStep key={stepKey} project={project} onSaved={(next) => projectChanged(next)} />
         )}

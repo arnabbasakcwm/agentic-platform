@@ -7,7 +7,7 @@
 
 import { useEffect, useState } from "react";
 
-export const PROJECT_STEPS = ["brief", "plan", "compile", "run", "deploy"];
+export const PROJECT_STEPS = ["brief", "knowledge", "plan", "compile", "run", "deploy"];
 
 export function parseRoute(hash) {
   const [first, id, step] = hash.replace(/^#\/?/, "").split("/").filter(Boolean);

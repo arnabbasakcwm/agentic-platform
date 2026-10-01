@@ -13,7 +13,14 @@ import { ProjectWorkspace } from "./pages/ProjectWorkspace.jsx";
 import { ProjectsPage } from "./pages/ProjectsPage.jsx";
 
 const COLLAPSED_KEY = "agentic-platform.sidebar-collapsed";
-const STEP_LABELS = { brief: "Brief", plan: "Plan", compile: "Compile", run: "Run", deploy: "Deploy" };
+const STEP_LABELS = {
+  brief: "Brief",
+  knowledge: "Knowledge",
+  plan: "Plan",
+  compile: "Compile",
+  run: "Run",
+  deploy: "Deploy",
+};
 
 // A per-browser convenience only, so it lives in localStorage and the app works the
 // same if storage is unavailable.

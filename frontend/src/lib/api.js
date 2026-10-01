@@ -54,7 +54,9 @@ export const session = {
   },
 };
 
-async function send(path, { method = "GET", body, signal } = {}) {
+// `form` (a FormData, for file uploads) is sent as multipart; the browser sets its
+// Content-Type with the boundary.
+async function send(path, { method = "GET", body, form, signal } = {}) {
   const sentToken = token;
   const headers = {};
   if (body) headers["Content-Type"] = "application/json";
@@ -65,7 +67,7 @@ async function send(path, { method = "GET", body, signal } = {}) {
     response = await fetch(`${BASE}${path}`, {
       method,
       headers,
-      body: body ? JSON.stringify(body) : undefined,
+      body: form ?? (body ? JSON.stringify(body) : undefined),
       signal,
     });
   } catch (cause) {
@@ -141,6 +143,18 @@ export const api = {
   invokeDeployment: (id, input) =>
     request(`/projects/${id}/deployment/invoke`, { method: "POST", body: { input } }),
   removeDeployment: (id) => request(`/projects/${id}/deployment`, { method: "DELETE" }),
+  getKnowledge: (id) => request(`/projects/${id}/knowledge`),
+  uploadDocuments: (id, files) => {
+    const form = new FormData();
+    for (const file of files) form.append("files", file, file.name);
+    return request(`/projects/${id}/knowledge/documents`, { method: "POST", form });
+  },
+  deleteDocument: (id, documentId) =>
+    request(`/projects/${id}/knowledge/documents/${documentId}`, { method: "DELETE" }),
+  setEmbedding: (id, { provider, model }) =>
+    request(`/projects/${id}/knowledge/embedding`, { method: "PUT", body: { provider, model } }),
+  searchKnowledge: (id, query, k = 5) =>
+    request(`/projects/${id}/knowledge/search`, { method: "POST", body: { query, k } }),
   reviseProject: (id, message) =>
     request(`/projects/${id}/revise`, { method: "POST", body: { message } }),
   compile: (id) => request(`/projects/${id}/compile`, { method: "POST" }),

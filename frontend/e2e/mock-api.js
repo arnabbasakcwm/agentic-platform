@@ -36,6 +36,7 @@ const project = {
   side_effect_tools_enabled: ["web_search"],
   conversation: [],
   deployment: null,
+  knowledge: { documents: 0, ready: 0, embedding: null },
   created_at: "2026-10-01T06:00:00Z",
   updated_at: "2026-10-01T06:09:54Z",
 };
@@ -144,6 +145,96 @@ async function streamRun(req, res, input) {
   res.end();
 }
 
+// The knowledge spec changes the project (uploads, a revision); it resets it afterwards
+// so the other specs see the original.
+const PRISTINE = structuredClone(project);
+
+function reset() {
+  Object.assign(project, structuredClone(PRISTINE));
+  Object.assign(plan, project.plan);
+  project.plan = plan;
+  knowledge.embedding = null;
+  knowledge.documents = [];
+}
+
+// ---- knowledge base: uploads go from processing to ready after INDEX_MS.
+const INDEX_MS = 1200;
+const knowledge = { embedding: null, documents: [] };
+const LIMITS = {
+  max_file_bytes: 20 * 1024 * 1024,
+  max_files: 50,
+  max_files_per_upload: 10,
+  max_passages: 20000,
+  file_types: [".csv", ".docx", ".markdown", ".md", ".pdf", ".txt"],
+};
+
+function knowledgeBody() {
+  const now = Date.now();
+  const documents = knowledge.documents.map((d) =>
+    d.status === "processing" && now - d.added >= INDEX_MS ? Object.assign(d, { status: "ready", chunk_count: 4 }) : d,
+  );
+  project.knowledge = {
+    documents: documents.length,
+    ready: documents.filter((d) => d.status === "ready").length,
+    embedding: knowledge.embedding,
+  };
+  return {
+    embedding: knowledge.embedding,
+    embedding_options: [
+      { provider: "google_genai", model: "gemini-embedding-001", available: true },
+      { provider: "openai", model: "text-embedding-3-small", available: false },
+    ],
+    documents: documents.map(({ added, ...d }) => d),
+    passages: documents.reduce((n, d) => n + d.chunk_count, 0),
+    used_by: plan.agents.filter((a) => a.tools.includes("knowledge_search")).map((a) => a.id),
+    limits: LIMITS,
+  };
+}
+
+function readRaw(req) {
+  return new Promise((resolve) => {
+    const parts = [];
+    req.on("data", (c) => parts.push(c));
+    req.on("end", () => resolve(Buffer.concat(parts).toString("latin1")));
+  });
+}
+
+async function upload(req, res) {
+  const raw = await readRaw(req);
+  const names = [...raw.matchAll(/filename="([^"]+)"/g)].map((m) => m[1]);
+  knowledge.embedding ??= { provider: "google_genai", model: "gemini-embedding-001" };
+  const added = names.map((filename, i) => ({
+    id: `doc${Date.now()}${i}`,
+    filename,
+    kind: filename.slice(filename.lastIndexOf(".")).toLowerCase(),
+    size_bytes: 2048,
+    status: filename.startsWith("scan") ? "failed" : "processing",
+    error: filename.startsWith("scan") ? "no text could be extracted from this PDF; scanned PDFs need OCR, which isn't supported" : null,
+    chunk_count: 0,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    added: Date.now(),
+  }));
+  knowledge.documents.push(...added);
+  send(res, 202, { documents: added.map(({ added: _, ...d }) => d) });
+}
+
+function revise(res, message) {
+  if (/knowledge_search/.test(message)) {
+    plan.agents[0].tools = [...new Set([...plan.agents[0].tools, "knowledge_search"])];
+    project.plan_version += 1;
+    project.compiled = false;
+  }
+  const reply = {
+    role: "assistant",
+    content: "Gave flight_searcher the knowledge_search tool, with instructions to cite the file and page.",
+    plan_version: project.plan_version,
+    created_at: new Date().toISOString(),
+  };
+  project.conversation = [...project.conversation, { role: "user", content: message, plan_version: null, created_at: reply.created_at }, reply];
+  send(res, 200, { changed: true, reply, project });
+}
+
 const server = http.createServer(async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
@@ -154,6 +245,10 @@ const server = http.createServer(async (req, res) => {
   const p = `/projects/${PROJECT_ID}`;
 
   if (path === "/health") return send(res, 200, { status: "ok" });
+  if (path === "/__reset" && req.method === "POST") {
+    reset();
+    return send(res, 200, { reset: true });
+  }
   if (path === "/tools") return send(res, 200, { tools: [{ name: "calculator", side_effect: false, description: "Arithmetic" }], default: ["calculator"] });
   if (path === "/providers") return send(res, 200, { providers: [{ provider: "google_genai", model: "gemini-3.1-pro-preview", default: true }] });
   if (path === "/auth/me") return send(res, 200, { id: "u1", email: "e2e@example.com", created_at: "2026-10-01T00:00:00Z" });
@@ -162,7 +257,34 @@ const server = http.createServer(async (req, res) => {
       projects: [{ project_id: PROJECT_ID, brief: project.brief, orchestration_pattern: "sequential", agent_count: 3, compiled: true, created_at: project.created_at, updated_at: project.updated_at }],
     });
   }
-  if (path === p) return send(res, 200, project);
+  if (path === p) {
+    knowledgeBody();
+    return send(res, 200, project);
+  }
+  if (path === `${p}/knowledge` && req.method === "GET") return send(res, 200, knowledgeBody());
+  if (path === `${p}/knowledge/documents` && req.method === "POST") return upload(req, res);
+  const doc = path.match(new RegExp(`^${p}/knowledge/documents/([^/]+)$`));
+  if (doc && req.method === "DELETE") {
+    knowledge.documents = knowledge.documents.filter((d) => d.id !== doc[1]);
+    return send(res, 200, { deleted: doc[1] });
+  }
+  if (path === `${p}/knowledge/search` && req.method === "POST") {
+    const body = await readBody(req);
+    const ready = knowledge.documents.filter((d) => d.status === "ready");
+    return send(res, 200, {
+      results: ready.slice(0, 1).map((d) => ({
+        filename: d.filename,
+        source: "page 2",
+        text: `Matched "${body.query}": the nightly hotel cap in Delhi is INR 9,000.
+Meals are reimbursed up to INR 1,500 a day.`,
+        score: 0.82,
+      })),
+    });
+  }
+  if (path === `${p}/revise` && req.method === "POST") {
+    const body = await readBody(req);
+    return revise(res, body.message ?? "");
+  }
   if (path === `${p}/deployment`) return send(res, 200, { available: false, region: "ap-south-1", deployment: null });
   if (path === `${p}/run/stream` && req.method === "POST") {
     const body = await readBody(req);
