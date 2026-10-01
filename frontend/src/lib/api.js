@@ -13,12 +13,53 @@ export class ApiError extends Error {
   }
 }
 
+// The access token lives in sessionStorage: it survives a page refresh but not the tab
+// being closed, and is never shared with other tabs. Storage can be unavailable (private
+// mode, blocked site data), in which case the session simply lasts until a refresh.
+const TOKEN_KEY = "agentic-platform.token";
+
+function readStoredToken() {
+  try {
+    return sessionStorage.getItem(TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+let token = readStoredToken();
+let onSessionExpired = () => {};
+
+export const session = {
+  hasToken: () => Boolean(token),
+  set(next) {
+    token = next;
+    try {
+      if (next) sessionStorage.setItem(TOKEN_KEY, next);
+      else sessionStorage.removeItem(TOKEN_KEY);
+    } catch {
+      // In-memory token still works for this page load.
+    }
+  },
+  clear() {
+    session.set(null);
+  },
+  // Called when the API rejects a token this client was relying on.
+  onExpired(handler) {
+    onSessionExpired = handler;
+  },
+};
+
 async function request(path, { method = "GET", body } = {}) {
+  const sentToken = token;
+  const headers = {};
+  if (body) headers["Content-Type"] = "application/json";
+  if (sentToken) headers.Authorization = `Bearer ${sentToken}`;
+
   let response;
   try {
     response = await fetch(`${BASE}${path}`, {
       method,
-      headers: body ? { "Content-Type": "application/json" } : undefined,
+      headers,
       body: body ? JSON.stringify(body) : undefined,
     });
   } catch (cause) {
@@ -31,6 +72,13 @@ async function request(path, { method = "GET", body } = {}) {
   }
 
   const payload = await response.json().catch(() => null);
+
+  // A 401 on a request that carried a token means the token expired or was revoked.
+  // (A 401 without one is just a failed sign-in attempt.)
+  if (response.status === 401 && sentToken && sentToken === token) {
+    session.clear();
+    onSessionExpired();
+  }
 
   if (!response.ok) {
     throw new ApiError({
@@ -48,19 +96,29 @@ export const api = {
   tools: () => request("/tools"),
   providers: () => request("/providers"),
 
+  register: ({ email, password }) =>
+    request("/auth/register", { method: "POST", body: { email, password } }),
+  login: ({ email, password }) =>
+    request("/auth/login", { method: "POST", body: { email, password } }),
+  me: () => request("/auth/me"),
+
   createProject: ({ brief, agentCount, availableTools, availableLlms }) =>
     request("/projects", {
       method: "POST",
       body: {
         brief,
-        agent_count: agentCount,
+        // Omitted = the planner chooses the team size.
+        ...(agentCount ? { agent_count: agentCount } : {}),
         ...(availableTools ? { available_tools: availableTools } : {}),
         ...(availableLlms ? { available_llms: availableLlms } : {}),
       },
     }),
 
+  listProjects: () => request("/projects"),
   getProject: (id) => request(`/projects/${id}`),
   updatePlan: (id, plan) => request(`/projects/${id}/plan`, { method: "PATCH", body: plan }),
+  reviseProject: (id, message) =>
+    request(`/projects/${id}/revise`, { method: "POST", body: { message } }),
   compile: (id) => request(`/projects/${id}/compile`, { method: "POST" }),
   run: (id, input) => request(`/projects/${id}/run`, { method: "POST", body: { input } }),
   invokeAgent: (id, agentId, input, upstreamOutputs = {}) =>

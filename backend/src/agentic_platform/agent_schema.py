@@ -118,6 +118,15 @@ class AgentPlan(BaseModel):
         return self
 
 
+class PlanRevision(BaseModel):
+    """What the planner returns when asked to change an existing project: the (possibly
+    unchanged) brief and plan, plus a short reply explaining the change to the user."""
+
+    reply: str = Field(min_length=1, description="1-3 sentences on what changed, or why nothing did")
+    brief: str = Field(min_length=1)
+    plan: AgentPlan
+
+
 def _assert_acyclic(agents: list[AgentSpec]) -> None:
     graph = {a.id: a.depends_on for a in agents}
     visiting: set[str] = set()

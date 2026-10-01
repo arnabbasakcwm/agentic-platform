@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import sys
+import uuid
 
 from fastapi.testclient import TestClient
 
@@ -52,6 +53,16 @@ def _check_run(label: str, plan: AgentPlan, task_input: dict) -> None:
 
 def main() -> None:
     client = TestClient(app_module.app)
+
+    # 0. Project routes need a signed-in user; register a throwaway one.
+    r = client.post(
+        "/auth/register",
+        json={"email": f"smoke-{uuid.uuid4().hex[:8]}@example.com", "password": uuid.uuid4().hex},
+    )
+    if r.status_code != 201:
+        _fail(f"register returned {r.status_code}: {r.text}")
+    client.headers["Authorization"] = f"Bearer {r.json()['access_token']}"
+    print("[0] registered and signed in")
 
     # 1. Plan from a natural-language brief.
     r = client.post(

@@ -1,15 +1,28 @@
-const STEPS = ["Define brief", "Review plan", "Compile", "Run"];
+import { Icon } from "./icons.jsx";
 
-export function Stepper({ current }) {
+// `steps`: [{ key, label, hint, done, href }]. Every step is a link — the workflow
+// suggests an order but never locks a page.
+export function Stepper({ steps, current }) {
   return (
-    <nav className="stepper" aria-label="Progress">
-      {STEPS.map((label, i) => {
-        const state = i < current ? "done" : i === current ? "active" : "todo";
+    <nav className="stepper" aria-label="Project workflow">
+      {steps.map((step, i) => {
+        const isCurrent = step.key === current;
+        const state = isCurrent ? "current" : step.done ? "done" : "todo";
         return (
-          <div key={label} className={`step step--${state}`}>
-            <span className="step__index">{state === "done" ? "✓" : i + 1}</span>
-            <span className="step__label">{label}</span>
-          </div>
+          <a
+            key={step.key}
+            href={step.href}
+            className={`step step--${state}`}
+            aria-current={isCurrent ? "step" : undefined}
+          >
+            <span className="step__index">
+              {state === "done" ? <Icon name="check" size={12} /> : String(i + 1).padStart(2, "0")}
+            </span>
+            <span className="step__text">
+              <span className="step__label">{step.label}</span>
+              <span className="step__hint">{step.hint}</span>
+            </span>
+          </a>
         );
       })}
     </nav>

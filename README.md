@@ -53,6 +53,8 @@ Backend and frontend are separate, independently runnable projects.
 │   │   ├── tools.py                # Closed, vetted tool registry
 │   │   ├── config.py               # Env loading, provider/model defaults
 │   │   ├── errors.py               # Typed platform errors
+│   │   ├── stores.py               # Project and user persistence (in-memory or MongoDB)
+│   │   ├── auth.py                 # Password hashing + JWT access tokens
 │   │   └── app.py                  # FastAPI serving layer (local/MVP)
 │   ├── tests/                      # Offline, fully mocked test suite
 │   ├── scripts/smoke_e2e.py        # Real-API end-to-end smoke script
@@ -60,6 +62,9 @@ Backend and frontend are separate, independently runnable projects.
 │   └── pyproject.toml
 ├── frontend/                       # React + Vite web console
 │   ├── src/
+│   │   ├── pages/                  # Projects list, new project, per-step project pages
+│   │   ├── components/             # Sidebar, top bar, stepper, shared UI
+│   │   └── lib/                    # API client, hash router
 │   └── package.json
 ├── docs/
 │   ├── systemDescription.md        # Full architecture, flow diagrams, dependency rationale
@@ -87,6 +92,9 @@ cp .env.example .env
 # Fill in at least one LLM provider key (the default provider is Gemini, so
 # GOOGLE_API_KEY or GEMINI_API_KEY is the easiest to start with).
 # TAVILY_API_KEY is only needed if a project opts into the web_search tool.
+# Set MONGODB_URI to persist projects in MongoDB; leave it unset and projects are
+# kept in memory and lost when the server stops.
+# Set JWT_SECRET to a long random value so sign-ins survive a server restart.
 
 # 3. Run the API
 uv run uvicorn agentic_platform.app:app --reload
@@ -108,17 +116,28 @@ browser. Set `VITE_API_BASE` to point the console at a different API.
 Try it end to end with curl:
 
 ```bash
+# Create an account (or POST /auth/login with the same body once you have one)
+curl -s -X POST localhost:8000/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email": "you@example.com", "password": "at-least-8-characters"}'
+# -> {"access_token": "...", "token_type": "bearer", "expires_in": 3600, "user": {...}}
+TOKEN=<access_token>
+
 # Plan a project from a natural-language brief
 curl -s -X POST localhost:8000/projects \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"brief": "Answer a factual question, then write a one-sentence summary.", "agent_count": 2}'
+  -d '{"brief": "Answer a factual question, then write a one-sentence summary."}'
+# agent_count is optional: omit it and the planner chooses the team size (max 10)
 # -> {"project_id": "...", "plan": {...}, "side_effect_tools_enabled": []}
 
 # Compile the plan into a runnable graph
-curl -s -X POST localhost:8000/projects/<project_id>/compile
+curl -s -X POST localhost:8000/projects/<project_id>/compile \
+  -H "Authorization: Bearer $TOKEN"
 
 # Run it
 curl -s -X POST localhost:8000/projects/<project_id>/run \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"input": {"question": "What is the speed of light?"}}'
 ```
@@ -153,7 +172,7 @@ to a LangGraph graph.
 | Phase | Scope | Status |
 |---|---|---|
 | **MVP** | Meta-planner + schema, compiler (all 3 patterns), FastAPI serving, real `web_search` tool + opt-in enforcement | **Done** |
-| **V1** | Persistence (Postgres/Redis); per-project API keys; plan-review/edit UX; synthesis (aggregate) endpoint; package a compiled project as a Bedrock AgentCore runtime | Not started |
+| **V1** | Project persistence in MongoDB (**done**); user accounts with JWT sign-in (**done**); run history and Redis-backed jobs; per-project API keys; plan-review/edit UX; synthesis (aggregate) endpoint; package a compiled project as a Bedrock AgentCore runtime | In progress |
 | **V2** | Dedicated AgentCore runtime per heavy/isolated tenant; AgentCore Observability + LangSmith; expanded tool registry; rate limiting and billing | Not started |
 
 ---

@@ -6,8 +6,9 @@ plan into a runnable LangGraph graph, and a deployment layer exposes it as live 
 endpoints (one per agent, plus an optional combined/synthesis endpoint).
 
 Status: the MVP loop is built and tested — schema, planner, compiler (sequential,
-parallel, supervisor), tool registry, FastAPI serving layer, and a React console. Not yet
-built: persistence, background workers, observability, and the Bedrock AgentCore
+parallel, supervisor), tool registry, FastAPI serving layer, project persistence (MongoDB), user accounts with
+JWT sign-in, and a React console. Not yet built: run history, background workers,
+per-project API keys, rate limiting, observability, and the Bedrock AgentCore
 deployment layer. Full architecture reference lives in `docs/systemDescription.md`;
 `README.md` is the quick start; this file is the operating contract for whoever (human or
 AI) writes code here.
@@ -50,11 +51,16 @@ AI) writes code here.
 
 ## Scalability & reliability
 
-- Stateless application layer; plans, project metadata, compiled-graph cache, and run
-  history live in external stores (Postgres/Redis), not process memory.
+- Stateless application layer; plans, project metadata, and run history live in external
+  stores (MongoDB/Redis), not process memory. All database access goes through the
+  store interfaces in `stores.py` — routes never import a database driver.
 - Compilation and long-running agent executions are async background jobs — queue them,
   don't block request handlers.
-- Cache compiled graphs per project; invalidate on plan edits, not on a timer.
+- Cache compiled graphs per project; invalidate on plan edits, not on a timer. A
+  compiled graph is closures, not data, so the cache is per-process and keyed by the
+  stored `plan_version`; the store's `compiled_version` is the source of truth for
+  whether a project is runnable, and any process rebuilds the graph on demand
+  (compiling makes no LLM calls).
 - Multi-tenancy from day one — every resource keyed by project/tenant id, even while
   running as a single shared process.
 - Architecture must allow promoting a tenant to isolated infrastructure later without a
@@ -79,6 +85,11 @@ AI) writes code here.
 
 ## Security requirements
 
+- Every project route requires a signed-in user (JWT bearer token) and is scoped to
+  that user's own projects — another user's project is a 404, never a 403. Passwords
+  are stored only as Argon2id hashes; neither a password nor its hash ever appears in
+  a response, an error body, or a log. Login failures never reveal whether an email is
+  registered.
 - User-supplied (BYOK) API keys: encrypted at rest, decrypted only in-memory at call
   time — never logged, never stored on a plan object.
 - Rate-limit and budget-cap both planning calls and agent execution calls per tenant.
@@ -92,7 +103,7 @@ AI) writes code here.
 | Orchestration | LangGraph |
 | Agent/tool abstraction | LangChain |
 | API layer | FastAPI (async); OpenAPI docs are a real deliverable |
-| Primary datastore | PostgreSQL |
+| Primary datastore | MongoDB (`pymongo`) — chosen over the original PostgreSQL default because a project is one JSON plan document; stick to basic CRUD so it stays portable to Atlas / DocumentDB |
 | Cache/queue | Redis |
 | Background workers | Celery / RQ |
 | Observability | LangSmith (or equivalent) — every run and every retry must be traceable |
@@ -120,6 +131,8 @@ backend/
     tools.py                # Closed, vetted tool registry + side-effect opt-in rules
     config.py               # Env loading, provider/model defaults
     errors.py               # Typed platform errors
+    stores.py               # ProjectStore/UserStore interfaces + in-memory and MongoDB implementations
+    auth.py                 # Password hashing (Argon2id) + JWT access tokens
     app.py                  # FastAPI serving layer
   tests/                    # Offline, fully mocked suite
   scripts/                  # Real-API smoke checks

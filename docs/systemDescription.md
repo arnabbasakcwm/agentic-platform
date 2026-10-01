@@ -20,7 +20,7 @@ explicit about what's still just a design (see §12, "Current status").
 
 ```mermaid
 flowchart TD
-    A["1. User input<br/><small>brief + agent_count (+ optional tools/LLMs)</small>"]
+    A["1. User input<br/><small>brief (+ optional agent_count, tools, LLMs)</small>"]
       --> B["2. Meta-planner LLM<br/><small>plan_project() -> validated AgentPlan</small>"]
     B --> C["3. Plan review / edit<br/><small>PATCH plan; validators re-run</small>"]
     C --> D["4. Compiler<br/><small>compile_graph() -> LangGraph graph</small>"]
@@ -34,7 +34,7 @@ flowchart TD
 |---|---|---|---|
 | 1. Input | `POST /projects` | a `CreateProjectRequest` | trust the text as safe |
 | 2. Plan | `plan_project()` | a validated `AgentPlan` | talk to infrastructure |
-| 3. Edit | `PATCH /projects/{id}/plan` | a re-validated `AgentPlan` | accept invalid edits |
+| 3. Edit | `PATCH /projects/{id}/plan`, or `POST /projects/{id}/revise` in plain language | a re-validated `AgentPlan` | accept invalid edits |
 | 4. Compile | `compile_graph()` | a runnable LangGraph graph | call an LLM for planning |
 | 5. Serve | FastAPI / AgentCore | agent outputs + errors | execute model-generated code |
 
@@ -120,8 +120,14 @@ including on a plan edit (`PATCH`).
 
 ## 4. Stage 2 — planning (`meta_planner_prompt.py`)
 
-`plan_project(user_brief, requested_agent_count, available_tools?, available_llms?,
+`plan_project(user_brief, requested_agent_count?, available_tools?, available_llms?,
 planner_llm?)` is the only component that turns free text into a plan.
+
+The agent count is optional. Given one, the planner must not exceed it; omitted, the
+planner chooses the smallest team that does the task, capped at `MAX_AGENTS` (10, in
+`config.py`). Either way the cap is checked server-side in `_semantic_check`, so a plan
+with too many agents goes back to the model with the actual error, like any other
+rejected plan.
 
 Flow:
 
@@ -150,6 +156,28 @@ the plan is re-validated (schema + semantic) server-side before it can be compil
 allow-list, the planner can never route a project to it unless a caller explicitly names
 it in `available_tools` at project-creation time — that explicit naming *is* the
 per-project opt-in required by the security model (§10).**
+
+### Revising a plan in conversation — `revise_plan`
+
+`revise_plan(brief, plan, request, history?, available_tools?, available_llms?)` applies
+a plain-language change request ("run the researchers in parallel", "add a reviewer",
+"change the task to …") to an existing project. It returns a **`PlanRevision`** — the
+brief, the plan, and a short `reply` telling the user what changed — through the same
+retry loop (`_invoke_with_retries`) and the same `_semantic_check` as a new plan, so a
+revised plan is held to exactly the same rules. The model is told to change only what was
+asked, keep the brief unless the task itself changes, answer questions without changing
+anything, and say plainly when part of a request isn't possible. It sees the last
+`REVISION_HISTORY_LIMIT` (10) messages of the conversation so follow-ups like "undo that"
+work.
+
+`POST /projects/{id}/revise` offers it every built-in tool but only the external tools
+the project already opted into — a chat message is never an opt-in. When the revision
+changes anything, the store writes the new brief/plan, bumps `plan_version` (so the
+project must be compiled again) and appends the user message and reply to the project's
+`conversation` (last 100 kept), all in one conditional write against the version the
+revision was based on. If the plan moved on meanwhile (a manual edit, another revision),
+nothing is written and the API answers `409 PlanConflict`. A failed planner call writes
+nothing at all.
 
 ---
 
@@ -342,20 +370,41 @@ layer can react instead of the whole run collapsing.
 
 ## 8. Stage 5a — local serving (`app.py`, MVP)
 
-FastAPI app, in-memory stores keyed by project id (`_PROJECTS`, `_COMPILED`) so the later
-move to Postgres/Redis and multi-tenancy is additive, not a rewrite.
+FastAPI app over a `ProjectStore` (`stores.py`): MongoDB when `MONGODB_URI` is set, an
+in-memory store otherwise. Each project is one document — id, tenant id, brief, plan,
+`plan_version`, `compiled_version`, opted-in side-effect tools, timestamps. A project is
+runnable while `compiled_version == plan_version`; a plan edit bumps `plan_version`,
+which is what invalidates the compile. Compiled graphs themselves are closures and
+can't be stored, so `_COMPILED` is only a per-process cache keyed by `plan_version`,
+rebuilt on demand after a restart. A database failure surfaces as a typed
+`StoreUnavailable` 503.
 
 | Route | Purpose |
 |---|---|
 | `GET /health` | liveness |
-| `GET /tools` | the tool registry, each entry flagged `side_effect`, plus the default (opt-in-free) set |
+| `POST /auth/register` | create an account (email + password ≥ 8 chars) and sign it in; duplicate email → 409 |
+| `POST /auth/login` | email + password → `{access_token, token_type, expires_in, user}`; any failure → the same 401 |
+| `GET /auth/me` | the signed-in user |
+| `GET /tools` | the tool registry, each entry flagged `side_effect` and given a one-line description, plus the default (opt-in-free) set |
 | `GET /providers` | selectable provider/model pairs, with the platform default marked |
-| `POST /projects` | brief → `plan_project` → store plan, return `project_id` + plan + `side_effect_tools_enabled` |
-| `GET /projects/{id}` | fetch brief + plan + `compiled` flag + `side_effect_tools_enabled` |
-| `PATCH /projects/{id}/plan` | replace plan (validators re-run); invalidates stale compiled graph |
-| `POST /projects/{id}/compile` | `compile_graph(plan)` → cache in `_COMPILED` |
+| `POST /projects` | brief (+ optional `agent_count`; omitted, the planner picks the size) → `plan_project` → store plan, return `project_id` + plan + `side_effect_tools_enabled` |
+| `GET /projects` | the signed-in user's projects as summaries (brief, pattern, agent count, `compiled`, timestamps), most recently updated first |
+| `GET /projects/{id}` | fetch brief + plan + `compiled` flag + `side_effect_tools_enabled` + timestamps |
+| `PATCH /projects/{id}/plan` | replace plan (validators re-run); invalidates stale compiled graph; returns the full project |
+| `POST /projects/{id}/revise` | `{message}` → `revise_plan` → `{changed, reply, project}`; a change bumps `plan_version` and needs a new compile; stale base → 409 `PlanConflict` |
+| `POST /projects/{id}/compile` | `compile_graph(plan)` → cache in `_COMPILED`, record `compiled_version` in the store |
 | `POST /projects/{id}/run` | `run_graph(...)` → `{outputs, errors, halted}` |
 | `POST /projects/{id}/agents/{agent_id}/invoke` | `run_single_agent(...)`; unknown agent → 404 |
+
+**Authentication.** `/health`, `/tools`, `/providers` and the two sign-in routes are
+public; everything under `/projects` requires `Authorization: Bearer <token>`. The
+token is an HS256 JWT (signed with `JWT_SECRET`, valid `JWT_EXPIRES_MINUTES`, default
+60) carrying only the user id; each request re-loads that user from the `UserStore`.
+A project stores its owner's id as `tenant_id`, and a request for someone else's
+project gets the same 404 as a project that doesn't exist. Passwords are hashed with
+Argon2id (`auth.py`); a login for an unknown email still performs a full hash
+verification so timing doesn't reveal which emails are registered. There are no
+refresh tokens: when a token expires the console returns to the sign-in screen.
 
 ### Local request lifecycle (full run)
 
@@ -366,7 +415,7 @@ sequenceDiagram
     participant P as plan_project
     participant C as compile_graph
     participant G as run_graph / LangGraph
-    U->>API: POST /projects {brief, agent_count}
+    U->>API: POST /projects {brief, agent_count?}
     API->>P: plan_project(...)
     P-->>API: AgentPlan (validated)
     API-->>U: {project_id, plan, side_effect_tools_enabled}
@@ -389,15 +438,29 @@ business logic, and every rule it appears to enforce is really enforced server-s
 | Concern | Where it lives |
 |---|---|
 | API calls + typed error normalisation | `frontend/src/lib/api.js` — every failure becomes an `ApiError` carrying the backend's `{error_type, message, details}` |
-| Stage state machine | `frontend/src/App.jsx` — brief → plan → compiled → result, with one busy flag per concern so a slow run doesn't freeze the console |
-| Brief, agent count, model, tool opt-in | `frontend/src/components/DefinePanel.jsx` |
-| Plan review + raw JSON editing | `frontend/src/components/PlanPanel.jsx` (a plan edit clears the compiled flag, mirroring the server's cache invalidation) |
-| Full-graph and single-agent execution | `frontend/src/components/RunPanel.jsx` |
+| App shell: sign-in gate, collapsible sidebar, breadcrumb bar, page switch | `frontend/src/App.jsx`, `components/Sidebar.jsx`, `components/TopBar.jsx` |
+| Routing (hash-based, no router dependency) | `frontend/src/lib/router.js` — `#/projects`, `#/new`, `#/projects/<id>/<step>` |
+| Project list: every project the signed-in user owns | `frontend/src/pages/ProjectsPage.jsx` (`GET /projects`); the sidebar also lists the five most recent |
+| New project as a conversation: each message is a brief and gets a planned team (or the error) as the reply; team size, model and tools sit in an optional settings tray, defaulting to "planner chooses", the default model and the default tools | `frontend/src/pages/NewProjectPage.jsx` |
+| One project, one workflow step per page | `frontend/src/pages/ProjectWorkspace.jsx` + `pages/project/` — `BriefStep` (read-only brief and settings), `PlanStep` (agent cards, raw JSON editing), `CompileStep` (execution-flow view, compile), `RunStep` (full-graph and single-agent runs, results) |
+| Plan assistant: a chat beside the brief, plan and compile pages | `frontend/src/components/AssistantPanel.jsx` — sends `POST /projects/{id}/revise`, shows the stored conversation, marks replies that produced a new plan version |
+
+The four steps are separate pages behind a stepper so that reviewing a plan, compiling it
+and running it never compete for the same screen. The stepper links every step — it
+suggests an order but locks nothing, except that a full-graph run needs a compiled plan.
+A saved plan edit clears the compiled state in the page, mirroring the server's
+`plan_version` bump. The compile page draws the order the graph will run in from the plan
+itself (a chain for sequential, dependency stages for parallel, router and workers for
+supervisor) using the same ordering rule as the compiler.
 
 The tool picker seeds itself from `GET /tools`'s `default` list, so it opens showing
 exactly the tools the API would use if `available_tools` were omitted — the opt-in posture
-is visible rather than hidden. Ticking a `side_effect` tool surfaces an explicit
-"external access opted in" warning naming the services involved.
+is visible rather than hidden. Switching on a `side_effect` tool surfaces an explicit
+"external access on" warning naming the services involved. Tool descriptions come from the
+API (`TOOL_SUMMARIES` in `tools.py`), not from the console.
+
+The sidebar lists only destinations that exist (new project, projects, recent projects,
+API docs); its collapsed state is remembered per browser in `localStorage`.
 
 In development the console runs on Vite's port 5173 and proxies `/api` to port 8000, so
 the browser stays on one origin; `app.py` also carries a CORS allow-list scoped to those
@@ -480,7 +543,7 @@ another's.
 | Agent / tool abstraction | LangChain | **In use** |
 | API layer | FastAPI | **In use** |
 | Web console | React + Vite | **In use** (`frontend/`) |
-| Primary datastore | PostgreSQL | Planned (in-memory dicts today) |
+| Primary datastore | MongoDB | **In use** for projects (`stores.py`); in-memory fallback when `MONGODB_URI` is unset |
 | Cache / queue | Redis | Planned |
 | Background workers | Celery / RQ | Planned |
 | Observability | LangSmith (or equivalent) | Planned |
@@ -509,6 +572,10 @@ library."
 | **uvicorn[standard]** | The ASGI server that actually runs the FastAPI app; `[standard]` pulls in the faster/optional extras (`httptools`, `watchfiles`, etc.) used for local `--reload` dev. | Invoked directly: `uv run uvicorn agentic_platform.app:app --reload` (see README). | FastAPI defines routes; it doesn't listen on a socket. Something has to actually serve HTTP, and uvicorn is the reference ASGI server the FastAPI docs themselves recommend. |
 | **pydantic** | The schema/validation layer behind every structured contract in the system. | `agent_schema.py`'s `BaseModel`s (`LLMConfig`, `AgentSpec`, `AgentOutput`, `RunBounds`, `AgentPlan`) with `field_validator`/`model_validator` for the graph-integrity checks in §3; every FastAPI request/response model. | This is the concrete mechanism behind non-negotiable principle #3 (structured output everywhere) and #7 (never trust the model's own claim of well-formedness) — `with_structured_output(AgentPlan)` and the re-validation in `_semantic_check` both depend on `AgentPlan` being a real Pydantic model, not a loosely-typed dict. |
 | **python-dotenv** | Loads a local `.env` file into `os.environ`. | `config.py` calls `load_dotenv()` once at import, so every module's `os.environ.get(...)` (provider keys, `TAVILY_API_KEY`) sees the same environment without each module reimplementing env loading. | Pure local-dev convenience — lets contributors keep keys in a gitignored `.env` instead of exporting them in every shell session — with zero effect on production, where real env vars/secrets managers are used instead. |
+| **pymongo** | The official MongoDB driver. | `stores.py` — `MongoProjectStore` reads and writes one document per project; imported lazily so the in-memory path never needs a server. | Without it projects live only in process memory and every restart loses them. Used for plain CRUD only, so the same code runs against a local server, Atlas, or DocumentDB. |
+| **pyjwt** | Encodes and verifies JSON Web Tokens. | `auth.py` — `create_access_token` / `decode_access_token`, with the algorithm pinned to HS256 and `exp`/`sub` required. | Hand-rolled token signing is where auth bugs come from; this is the small, standard implementation. |
+| **argon2-cffi** | Argon2id password hashing. | `auth.py` — `hash_password` / `verify_password`. | Passwords must never be stored recoverably; Argon2id is the current OWASP first choice and the library picks safe parameters and salts itself. |
+| **email-validator** | Syntax validation for email addresses. | Backs Pydantic's `EmailStr` on the `/auth` request models in `app.py`. | Rejects malformed addresses at the API boundary instead of storing them as login identifiers. |
 | **pytest** *(dev)* | The test runner for the entire suite. | Every file under `backend/tests/`. `backend/pyproject.toml`'s `[tool.pytest.ini_options]` defines the `e2e` marker and excludes it by default (`addopts = "-m 'not e2e'"`), so the default `uv run pytest` never makes a real network/LLM call. | The project's verify-and-retry working style (CLAUDE.md) depends on a fast, fully offline, repeatable test suite — 40 tests run in a few seconds precisely because nothing here needs a real API key. |
 | **pytest-asyncio** *(dev)* | Lets pytest run `async def` test functions and sets the asyncio mode. | `asyncio_mode = "auto"` in `pyproject.toml`; enables async test support for the FastAPI/httpx-based tests. | FastAPI is an async framework; without this, async endpoints and async test clients would need manual event-loop plumbing in every test. |
 | **httpx** *(dev)* | The HTTP client `fastapi.testclient.TestClient` is built on. | Used implicitly by `TestClient(app_module.app)` in `backend/tests/test_api.py` and `backend/scripts/smoke_e2e.py` — every simulated request to the FastAPI app goes through it. | Lets tests and the smoke script call the real FastAPI app in-process (real routing, real validation, real exception handlers) without binding a socket or running a separate server process. |
@@ -539,7 +606,7 @@ library."
 
 ## 13. Current status
 
-**Built and verified today** (40-test offline suite passing, plus a real-API smoke script
+**Built and verified today** (offline suite passing, plus a real-API smoke script
 covering all three orchestration patterns and the real `web_search` tool):
 - Data contracts and graph-integrity validation (`agent_schema.py`)
 - Meta-planner with retry-on-validation-error (`meta_planner_prompt.py`)
@@ -550,15 +617,22 @@ covering all three orchestration patterns and the real `web_search` tool):
   `yahoo_finance_news`, `wolfram_alpha`) — with enforced default exclusion of every
   side-effecting tool (`tools.py`)
 - FastAPI local serving layer with typed error responses (`app.py`)
-- React + Vite web console covering the full brief → plan → compile → run loop
+- Project persistence behind a `ProjectStore` interface, with in-memory and MongoDB
+  implementations (`stores.py`)
+- User registration and JWT sign-in, with every project route scoped to its owner
+  (`auth.py`, `app.py`), and a sign-in / create-account screen in the console
+- React + Vite web console — project list, new-project form, and a page per workflow
+  step — covering the full brief → plan → compile → run loop
   (`frontend/`), verified against the live API in a browser
 
 **Not yet built** (design recorded above, not code):
 - Bedrock AgentCore deployment layer (§9) — entrypoint adapter, container build, runtime
   create/update, IAM role.
-- Persistence (Postgres/Redis) — `_PROJECTS`/`_COMPILED` are in-memory dicts today.
+- Run history, and Redis for queueing — projects persist in MongoDB, runs are not
+  recorded yet.
 - Async background compilation/execution (Celery/RQ).
-- Per-project API keys, auth, rate limiting, budget caps.
+- Per-project API keys for machine clients, rate limiting (including on sign-in
+  attempts), budget caps, refresh tokens, email verification and password reset.
 - KMS-backed BYOK secret storage (keys come from server env/`.env` today).
 - Observability (LangSmith / AgentCore Observability) wiring.
 - Dedicated synthesis/aggregator endpoint (currently `/run` returns the raw outputs map).

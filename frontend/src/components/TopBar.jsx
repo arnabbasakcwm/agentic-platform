@@ -6,27 +6,35 @@ const STATUS = {
   offline: { tone: "danger", label: "API unreachable" },
 };
 
-export function TopBar({ health }) {
+export function HealthPill({ health }) {
   const status = STATUS[health] ?? STATUS.checking;
   return (
+    <Pill tone={status.tone} dot>
+      {status.label}
+    </Pill>
+  );
+}
+
+// `crumbs` is the path to the current page: [{ label, href? }], last entry = this page.
+export function TopBar({ crumbs, health }) {
+  return (
     <header className="topbar">
-      <div className="brand">
-        <span className="brand__mark">AP</span>
-        <span className="brand__name">Agentic Platform</span>
-        <span className="brand__sub">Console</span>
-      </div>
-      <div className="topbar__spacer" />
-      <Pill tone={status.tone} dot>
-        {status.label}
-      </Pill>
-      <a
-        className="topbar__link"
-        href="http://127.0.0.1:8000/docs"
-        target="_blank"
-        rel="noreferrer"
-      >
-        API docs
-      </a>
+      <nav className="crumbs" aria-label="Breadcrumb">
+        {crumbs.map((crumb, i) => {
+          const last = i === crumbs.length - 1;
+          return (
+            <span key={i} style={{ display: "contents" }}>
+              {i > 0 && <span className="crumbs__sep">/</span>}
+              {last || !crumb.href ? (
+                <span className={last ? "crumbs__current" : undefined}>{crumb.label}</span>
+              ) : (
+                <a href={crumb.href}>{crumb.label}</a>
+              )}
+            </span>
+          );
+        })}
+      </nav>
+      <HealthPill health={health} />
     </header>
   );
 }

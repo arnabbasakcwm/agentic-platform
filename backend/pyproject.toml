@@ -15,6 +15,10 @@ dependencies = [
     "langchain-tavily>=0.2",
     "requests>=2.32",
     "yfinance>=1.7",
+    "pymongo>=4.10",
+    "pyjwt>=2.9",
+    "argon2-cffi>=23.1",
+    "email-validator>=2.2",
 ]
 
 [build-system]

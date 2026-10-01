@@ -45,6 +45,36 @@ class MissingToolKeyError(PlatformError):
         )
 
 
+class StoreUnavailableError(PlatformError):
+    """A store (database) could not be reached or failed an operation."""
+
+    def __init__(self, detail: str):
+        super().__init__(f"store unavailable: {detail}")
+
+
+class AuthenticationError(PlatformError):
+    """The request carries no valid credentials. Messages stay deliberately vague — they
+    never say whether an email exists or which part of a token was wrong."""
+
+    def __init__(self, message: str = "not authenticated"):
+        super().__init__(message)
+
+
+class EmailTakenError(PlatformError):
+    def __init__(self) -> None:
+        super().__init__("an account with this email already exists")
+
+
+class PlanConflictError(PlatformError):
+    """The plan changed between reading it and writing a revision of it."""
+
+    def __init__(self, project_id: str):
+        self.project_id = project_id
+        super().__init__(
+            "the plan changed while this request was being handled; review it and try again"
+        )
+
+
 class PlannerError(PlatformError):
     """Raised when the meta-planner cannot produce a valid AgentPlan within the retry ceiling."""
 

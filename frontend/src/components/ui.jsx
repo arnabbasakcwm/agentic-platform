@@ -1,16 +1,41 @@
-export function Panel({ title, actions, children, footer }) {
+export function Panel({ title, subtitle, actions, children, footer, flush }) {
   return (
     <section className="panel">
       {(title || actions) && (
         <header className="panel__header">
           {title && <h2 className="panel__title">{title}</h2>}
+          {subtitle && <span className="panel__sub">{subtitle}</span>}
           <div className="panel__spacer" />
           {actions}
         </header>
       )}
-      <div className="panel__body">{children}</div>
+      {flush ? children : <div className="panel__body">{children}</div>}
       {footer && <div className="panel__footer">{footer}</div>}
     </section>
+  );
+}
+
+export function PageHeader({ title, subtitle, meta, actions }) {
+  return (
+    <header className="pagehead">
+      <div className="pagehead__text">
+        <h1 className="pagehead__title">{title}</h1>
+        {subtitle && <p className="pagehead__sub">{subtitle}</p>}
+        {meta && <div className="pagehead__meta">{meta}</div>}
+      </div>
+      {actions}
+    </header>
+  );
+}
+
+// The bar pinned to the bottom of a page: a status note on the left, the page's
+// back/continue actions on the right.
+export function ActionBar({ note, children }) {
+  return (
+    <div className="actionbar">
+      <div className="actionbar__note">{note}</div>
+      {children}
+    </div>
   );
 }
 
@@ -24,20 +49,46 @@ export function Field({ label, hint, children }) {
   );
 }
 
-export function Button({ variant, size, block, loading, children, ...props }) {
-  const classes = [
-    "btn",
-    variant && `btn--${variant}`,
-    size && `btn--${size}`,
-    block && "btn--block",
-  ]
+function buttonClasses({ variant, size, block }) {
+  return ["btn", variant && `btn--${variant}`, size && `btn--${size}`, block && "btn--block"]
     .filter(Boolean)
     .join(" ");
+}
+
+export function Button({ variant, size, block, loading, children, ...props }) {
   return (
-    <button className={classes} disabled={loading || props.disabled} {...props}>
+    <button
+      type="button"
+      className={buttonClasses({ variant, size, block })}
+      {...props}
+      disabled={loading || props.disabled}
+    >
       {loading && <span className="spin" />}
       {children}
     </button>
+  );
+}
+
+// A link that looks like a button, for navigation between pages.
+export function LinkButton({ variant, size, block, children, ...props }) {
+  return (
+    <a className={buttonClasses({ variant, size, block })} {...props}>
+      {children}
+    </a>
+  );
+}
+
+export function Switch({ checked, onChange, disabled, label }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      className="switch"
+      aria-checked={checked}
+      aria-label={label}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+    />
   );
 }
 
@@ -77,11 +128,28 @@ export function ErrorCallout({ error }) {
   );
 }
 
-export function MetaRow({ label, children }) {
+export function Empty({ title, children, action }) {
   return (
-    <div className="metarow">
-      <span className="metarow__key">{label}</span>
-      <span className="metarow__val">{children}</span>
+    <div className="empty">
+      {title && <div className="empty__title">{title}</div>}
+      {children}
+      {action && <div className="empty__action">{action}</div>}
+    </div>
+  );
+}
+
+// Key/value rows: pass [label, value] pairs; rows whose value is null are skipped.
+export function MetaList({ rows }) {
+  return (
+    <div className="metalist">
+      {rows
+        .filter(([, value]) => value != null)
+        .map(([label, value]) => (
+          <div key={label} style={{ display: "contents" }}>
+            <span className="metalist__key">{label}</span>
+            <span className="metalist__val">{value}</span>
+          </div>
+        ))}
     </div>
   );
 }

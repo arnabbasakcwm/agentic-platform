@@ -1,27 +1,63 @@
 import { useCallback, useEffect, useState } from "react";
-import { api } from "./lib/api.js";
-import { DefinePanel } from "./components/DefinePanel.jsx";
-import { PlanPanel } from "./components/PlanPanel.jsx";
-import { RunPanel } from "./components/RunPanel.jsx";
-import { Stepper } from "./components/Stepper.jsx";
-import { TopBar } from "./components/TopBar.jsx";
-import { Button, Panel } from "./components/ui.jsx";
+import { AuthPanel } from "./components/AuthPanel.jsx";
+import { Icon } from "./components/icons.jsx";
+import { Sidebar } from "./components/Sidebar.jsx";
+import { HealthPill, TopBar } from "./components/TopBar.jsx";
+import { api, session } from "./lib/api.js";
+import { projectTitle } from "./lib/format.js";
+import { navigate, paths, useRoute } from "./lib/router.js";
+import { useAction } from "./lib/useAction.js";
+import { NewProjectPage } from "./pages/NewProjectPage.jsx";
+import { ProjectWorkspace } from "./pages/ProjectWorkspace.jsx";
+import { ProjectsPage } from "./pages/ProjectsPage.jsx";
+
+const COLLAPSED_KEY = "agentic-platform.sidebar-collapsed";
+const STEP_LABELS = { brief: "Brief", plan: "Plan", compile: "Compile", run: "Run" };
+
+// A per-browser convenience only, so it lives in localStorage and the app works the
+// same if storage is unavailable.
+function readCollapsed() {
+  try {
+    return localStorage.getItem(COLLAPSED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function crumbsFor(route, projects) {
+  const root = { label: "Projects", href: paths.projects };
+  if (route.page === "new") return [root, { label: "New project" }];
+  if (route.page === "project") {
+    const known = projects?.find((p) => p.project_id === route.id);
+    return [
+      root,
+      {
+        label: known ? projectTitle(known.brief, 48) : "Project",
+        href: paths.project(route.id, "plan"),
+      },
+      { label: STEP_LABELS[route.step] },
+    ];
+  }
+  return [{ label: "Projects" }];
+}
 
 export default function App() {
+  const route = useRoute();
+
   const [health, setHealth] = useState("checking");
   const [tools, setTools] = useState({ tools: [], default: [] });
   const [providers, setProviders] = useState([]);
 
-  const [project, setProject] = useState(null);
-  const [compiled, setCompiled] = useState(false);
-  const [result, setResult] = useState(null);
+  // undefined = still restoring a saved session, null = signed out.
+  const [user, setUser] = useState(session.hasToken() ? undefined : null);
+  const [authNotice, setAuthNotice] = useState(null);
+  const auth = useAction();
 
-  // One busy flag per concern, so a slow run never greys out the whole console.
-  const [busy, setBusy] = useState({});
-  const [errors, setErrors] = useState({});
+  // null = not loaded yet.
+  const [projects, setProjects] = useState(null);
+  const [projectsError, setProjectsError] = useState(null);
 
-  const setBusyFor = (key, value) => setBusy((b) => ({ ...b, [key]: value }));
-  const setErrorFor = (key, value) => setErrors((e) => ({ ...e, [key]: value }));
+  const [collapsed, setCollapsed] = useState(readCollapsed);
 
   useEffect(() => {
     api
@@ -35,117 +71,130 @@ export default function App() {
       .catch(() => {});
   }, []);
 
-  const call = useCallback(async (key, fn) => {
-    setBusyFor(key, true);
-    setErrorFor(key, null);
-    try {
-      return await fn();
-    } catch (error) {
-      setErrorFor(key, error);
-      return null;
-    } finally {
-      setBusyFor(key, false);
+  useEffect(() => {
+    session.onExpired(() => {
+      setUser(null);
+      setAuthNotice("Your session has expired. Sign in again to continue.");
+    });
+    // Restore a saved session; a rejected token is cleared by the handler above.
+    if (session.hasToken()) {
+      api
+        .me()
+        .then(setUser)
+        .catch(() => setUser(null));
     }
   }, []);
 
-  async function createProject(form) {
-    const created = await call("define", () => api.createProject(form));
-    if (!created) return;
-    setProject(created);
-    setCompiled(false);
-    setResult(null);
+  const refreshProjects = useCallback(() => {
+    api
+      .listProjects()
+      .then((r) => {
+        setProjects(r.projects);
+        setProjectsError(null);
+      })
+      .catch(setProjectsError);
+  }, []);
+
+  const userId = user?.id;
+  useEffect(() => {
+    setProjects(null);
+    setProjectsError(null);
+    if (userId) refreshProjects();
+  }, [userId, refreshProjects]);
+
+  async function authenticate(action, credentials) {
+    const result = await auth.run(() => action(credentials));
+    if (!result) return;
+    session.set(result.access_token);
+    setAuthNotice(null);
+    setUser(result.user);
   }
 
-  async function savePlan(plan, done) {
-    const updated = await call("plan", () => api.updatePlan(project.project_id, plan));
-    if (!updated) return;
-    // A plan edit invalidates the compiled graph server-side; mirror that here.
-    setProject((p) => ({ ...p, plan: updated.plan }));
-    setCompiled(false);
-    done();
+  function signOut() {
+    session.clear();
+    setUser(null);
+    setAuthNotice(null);
+    navigate(paths.projects);
   }
 
-  async function compile() {
-    const ok = await call("plan", () => api.compile(project.project_id));
-    if (ok) setCompiled(true);
-  }
-
-  async function runGraph(input) {
-    setResult(null);
-    const res = await call("run", () => api.run(project.project_id, input));
-    if (res) setResult(res);
-  }
-
-  async function invokeAgent(agentId, input) {
-    setResult(null);
-    const res = await call("run", () => api.invokeAgent(project.project_id, agentId, input));
-    if (!res) return;
-    // Normalise the single-agent shape into the same {outputs, errors, halted} view.
-    setResult({
-      outputs: res.result.outputs ?? {},
-      errors: res.result.errors ?? [],
-      halted: Boolean(res.result.halted),
+  function toggleSidebar() {
+    setCollapsed((was) => {
+      try {
+        localStorage.setItem(COLLAPSED_KEY, was ? "0" : "1");
+      } catch {
+        // Not remembered across visits; still works for this one.
+      }
+      return !was;
     });
   }
 
-  function reset() {
-    setProject(null);
-    setCompiled(false);
-    setResult(null);
-    setErrors({});
+  if (!user) {
+    return (
+      <div className="authscreen">
+        <div className="brand">
+          <span className="brand__mark">
+            <Icon name="brand" size={15} />
+          </span>
+          <span className="brand__name">Agentic Platform</span>
+        </div>
+        {user === null && (
+          <AuthPanel
+            onLogin={(c) => authenticate(api.login, c)}
+            onRegister={(c) => authenticate(api.register, c)}
+            busy={auth.busy}
+            error={auth.error}
+            notice={authNotice}
+            disabled={health === "offline"}
+          />
+        )}
+        <div className="authscreen__status">
+          <HealthPill health={health} />
+        </div>
+      </div>
+    );
   }
 
-  const step = !project ? 0 : !compiled ? 1 : result ? 3 : 2;
-
   return (
-    <div className="app">
-      <TopBar health={health} />
-      <main className="workspace">
-        <Stepper current={step} />
+    <div className={collapsed ? "shell shell--collapsed" : "shell"}>
+      <Sidebar
+        route={route}
+        projects={projects}
+        user={user}
+        collapsed={collapsed}
+        onToggle={toggleSidebar}
+        onSignOut={signOut}
+      />
 
-        <div className="columns">
-          <div className="stack">
-            <DefinePanel
+      <div className="main">
+        <TopBar crumbs={crumbsFor(route, projects)} health={health} />
+        {health === "offline" && (
+          <div className="banner" role="alert">
+            The API is unreachable. Start the backend on port 8000, then reload this page.
+          </div>
+        )}
+
+        <main className="content">
+          {route.page === "projects" && (
+            <ProjectsPage projects={projects} error={projectsError} onRetry={refreshProjects} />
+          )}
+          {route.page === "new" && (
+            <NewProjectPage
               tools={tools}
               providers={providers}
-              onSubmit={createProject}
-              busy={busy.define}
-              error={errors.define}
               disabled={health === "offline"}
+              onCreated={refreshProjects}
             />
-
-            {project && (
-              <Panel title="Session">
-                <Button block onClick={reset}>
-                  Start a new project
-                </Button>
-              </Panel>
-            )}
-          </div>
-
-          <div className="stack">
-            <PlanPanel
-              project={project}
-              compiled={compiled}
-              onSave={savePlan}
-              onCompile={compile}
-              busy={busy.plan}
-              error={errors.plan}
+          )}
+          {route.page === "project" && (
+            <ProjectWorkspace
+              key={route.id}
+              id={route.id}
+              step={route.step}
+              onChanged={refreshProjects}
             />
-            {project && (
-              <RunPanel
-                project={project}
-                compiled={compiled}
-                onRun={runGraph}
-                onInvoke={invokeAgent}
-                busy={busy.run}
-                error={errors.run}
-                result={result}
-              />
-            )}
-          </div>
-        </div>
-      </main>
+          )}
+        </main>
+      </div>
     </div>
   );
 }

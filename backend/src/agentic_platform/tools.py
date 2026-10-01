@@ -321,6 +321,21 @@ def _build_wolfram_alpha() -> BaseTool:
     return wolfram_alpha
 
 
+# One-line, user-facing description per tool, shown where an operator chooses which
+# tools a project may use. Kept as data (not read off the tool objects) so listing the
+# registry never has to build a tool — and so never needs that tool's API key.
+TOOL_SUMMARIES: dict[str, str] = {
+    "lookup": "Small built-in reference table, for testing tool calls offline",
+    "calculator": "Arithmetic on plain numbers",
+    "web_search": "Live web search (Tavily)",
+    "wikipedia": "Summary of the best-matching Wikipedia article",
+    "arxiv": "Search scientific preprints on arXiv",
+    "pubmed": "Search biomedical literature on PubMed",
+    "weather": "Current weather and forecast for a place (Open-Meteo)",
+    "yahoo_finance_news": "Recent news headlines for a stock ticker",
+    "wolfram_alpha": "Computation and curated facts (Wolfram Alpha)",
+}
+
 # Tools with real-world side effects — network egress to a third party, whether or not
 # they need an API key. The planner never auto-attaches these: see `default_tool_names()`
 # and its use in app.py::create_project. A caller must name one explicitly in

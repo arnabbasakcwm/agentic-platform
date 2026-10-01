@@ -7,9 +7,26 @@ stays a thin dispatch over data, not a pile of hardcoded strings.
 
 from __future__ import annotations
 
+import os
+
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# Project persistence. With MONGODB_URI unset the platform falls back to an in-process
+# store (nothing survives a restart) — fine for tests and a first run, not for real use.
+MONGODB_URI: str | None = os.environ.get("MONGODB_URI") or None
+MONGODB_DB: str = os.environ.get("MONGODB_DB") or "agentic_platform"
+# Bounded so an unreachable database fails a request quickly instead of hanging it.
+MONGODB_TIMEOUT_MS = 3000
+
+# Signs access tokens (HS256). Unset means a random per-process secret: still secure, but
+# every restart signs everyone out — set it for anything longer-lived than a test run.
+JWT_SECRET: str | None = os.environ.get("JWT_SECRET") or None
+JWT_EXPIRES_MINUTES = int(os.environ.get("JWT_EXPIRES_MINUTES") or 60)
+
+# Hard ceiling on team size, whether the user picks the count or the planner does.
+MAX_AGENTS = 10
 
 # Provider used by default when a brief doesn't name one.
 DEFAULT_PROVIDER = "google_genai"
