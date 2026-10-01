@@ -116,6 +116,21 @@ class DeployedRunError(PlatformError):
         super().__init__(message)
 
 
+class KnowledgeError(PlatformError):
+    """A document can't be added to a knowledge base (type, size, content, limits).
+    The message is written for the person who uploaded it."""
+
+
+class KnowledgeUnavailableError(PlatformError):
+    """knowledge_search was requested where there is no knowledge base to search."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "knowledge_search needs a knowledge base: upload documents on the project's "
+            "Knowledge page first"
+        )
+
+
 class PlannerError(PlatformError):
     """Raised when the meta-planner cannot produce a valid AgentPlan within the retry ceiling."""
 
