@@ -230,6 +230,9 @@ function usageBody(days, projectId) {
   };
 }
 
+// Deploys: off ("AWS not set up") unless a test turns them on with POST /__deploy_available.
+const deploys = { available: false, current: null, count: 0 };
+
 // The deployed-usage sync: "Sync now" moves the cursor and records the result.
 const usageSync = { at: null, last: null };
 
@@ -244,6 +247,7 @@ function reset() {
   project.plan = plan;
   knowledge.embedding = null;
   knowledge.documents = [];
+  Object.assign(deploys, { available: false, current: null, count: 0 });
 }
 
 // ---- knowledge library: files belong to the user and are attached to any number of
@@ -471,7 +475,33 @@ const server = http.createServer(async (req, res) => {
     const body = await readBody(req);
     return revise(res, body.message ?? "");
   }
-  if (path === `${p}/deployment`) return send(res, 200, { available: false, region: "ap-south-1", deployment: null });
+  if (path === "/__deploy_available" && req.method === "POST") {
+    deploys.available = true;
+    return send(res, 200, { ok: true });
+  }
+  if (path === `${p}/deployment` && req.method === "GET") {
+    return send(res, 200, { available: deploys.available, region: "ap-south-1", deployment: deploys.current });
+  }
+  if (path === `${p}/deploy` && req.method === "POST") {
+    // Goes live at once (the real one takes minutes); each new runtime gets a new ARN.
+    deploys.count += 1;
+    const keep = deploys.current;
+    const now = new Date(Date.now() + deploys.count * 1000).toISOString();
+    deploys.current = {
+      status: "ready", plan_version: project.plan_version, region: "ap-south-1", runtime_name: "agentic_e2e",
+      runtime_id: keep?.runtime_id ?? `agentic_e2e-${deploys.count}`,
+      runtime_arn: keep?.runtime_arn ?? `arn:aws:bedrock-agentcore:ap-south-1:123456789012:runtime/agentic_e2e-${deploys.count}`,
+      live_plan_version: project.plan_version, error: null, started_at: now, updated_at: now, deployed_at: now,
+      reports_usage: true, usage_synced_until: null, live: true, in_progress: false, outdated: false,
+    };
+    project.deployment = deploys.current;
+    return send(res, 202, { deployment: deploys.current });
+  }
+  if (path === `${p}/deployment` && req.method === "DELETE") {
+    deploys.current = null;
+    project.deployment = null;
+    return send(res, 200, { deployment: null });
+  }
   if (path === `${p}/run/stream` && req.method === "POST") {
     const body = await readBody(req);
     return streamRun(req, res, body.input ?? {});

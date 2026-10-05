@@ -75,7 +75,13 @@ function SetupHelp({ region }) {
 }
 
 function StatusPanel({ project, deployment, available, onDeploy, onRemove, deploying, removing }) {
-  const [confirmRemove, setConfirmRemove] = useState(false);
+  // The "Yes, remove it" confirmation belongs to the deployment it was opened for. After
+  // that deployment is removed or replaced (a redeploy, or a new deployment after a
+  // removal) it no longer applies, so the normal Remove button comes back by itself.
+  const deploymentKey = deployment ? `${deployment.runtime_arn}@${deployment.deployed_at}@${deployment.status}` : null;
+  const [confirmFor, setConfirmFor] = useState(null);
+  const confirmRemove = confirmFor !== null && confirmFor === deploymentKey;
+  const setConfirmRemove = (open) => setConfirmFor(open ? deploymentKey : null);
   const canDeploy = available && project.compiled && !deployment?.in_progress;
 
   const deployButton = (label) => (
