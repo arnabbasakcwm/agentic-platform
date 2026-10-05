@@ -335,6 +335,16 @@ whenever a change departs from or extends the contract above — don't silently 
   the project's Knowledge step. Both pages share `components/KnowledgeUpload.jsx`; the
   overview never lists files of projects the user doesn't own.
 
+### 2026-10-05 — Projects can be deleted, but never out from under a deployment
+- **Why:** users need to clear out old projects; a project record is also what tracks its
+  AgentCore runtime.
+- **Rule:** `DELETE /projects/{id}` (owner-scoped; someone else's project is a 404) removes
+  the project, its compiled-graph cache entry, and every knowledge document and passage.
+  The project record goes first, so a failure part-way leaves only files no listing shows.
+  A project with a deployment in progress or a runtime in AWS is refused with
+  `409 ProjectDeployed` — remove the deployment first, so no runtime is left running with
+  nothing pointing at it.
+
 ## Working style — verify-and-retry, always
 
 Never mark something done because the code looks right.

@@ -201,7 +201,15 @@ function Console() {
 
         <main className="content">
           {route.page === "projects" && (
-            <ProjectsPage projects={projects} error={projectsError} onRetry={refreshProjects} />
+            <ProjectsPage
+              projects={projects}
+              error={projectsError}
+              onRetry={refreshProjects}
+              onDeleted={() => {
+                refreshProjects();
+                refreshKnowledgeCount();
+              }}
+            />
           )}
           {route.page === "knowledge" && <KnowledgePage onCountChanged={setKnowledgeCount} />}
           {route.page === "new" && (

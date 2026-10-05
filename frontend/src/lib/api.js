@@ -137,6 +137,8 @@ export const api = {
 
   listProjects: () => request("/projects"),
   getProject: (id) => request(`/projects/${id}`),
+  // Deletes the project with its plan, conversation and knowledge-base files.
+  deleteProject: (id) => request(`/projects/${id}`, { method: "DELETE" }),
   updatePlan: (id, plan) => request(`/projects/${id}/plan`, { method: "PATCH", body: plan }),
   getDeployment: (id) => request(`/projects/${id}/deployment`),
   deploy: (id) => request(`/projects/${id}/deploy`, { method: "POST" }),

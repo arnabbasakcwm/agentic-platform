@@ -274,3 +274,49 @@ def test_files_of_a_deleted_project_are_not_listed(monkeypatch):
     _upload(c, pid, ("policy.md", GUIDE, "text/markdown"))
     app_module._store._records.pop(pid)
     assert c.get("/knowledge").json()["documents"] == []
+
+
+def test_deleting_a_project_removes_it_and_its_files(monkeypatch):
+    c, pid = _setup(monkeypatch)
+    keep = c.post("/projects", json={"brief": "keep me"}).json()["project_id"]
+    _upload(c, pid, ("policy.md", GUIDE, "text/markdown"))
+    _upload(c, keep, ("other.md", GUIDE, "text/markdown"))
+    c.post(f"/projects/{pid}/compile")
+
+    r = c.delete(f"/projects/{pid}")
+    assert r.status_code == 200
+    assert r.json() == {"deleted": pid, "knowledge_documents_deleted": 1}
+    assert c.get(f"/projects/{pid}").status_code == 404
+    assert pid not in app_module._COMPILED
+    assert [p["project_id"] for p in c.get("/projects").json()["projects"]] == [keep]
+    assert [d["filename"] for d in c.get("/knowledge").json()["documents"]] == ["other.md"]
+    assert app_module._knowledge.chunks_for_project(pid) == []
+    assert c.delete(f"/projects/{pid}").status_code == 404
+
+
+def test_another_users_project_cant_be_deleted(monkeypatch):
+    c, pid = _setup(monkeypatch)
+    other = TestClient(app_module.app)
+    token = other.post(
+        "/auth/register", json={"email": "other@example.com", "password": "a-long-password"}
+    ).json()["access_token"]
+    other.headers["Authorization"] = f"Bearer {token}"
+    r = other.delete(f"/projects/{pid}")
+    assert r.status_code == 404 and r.json()["error_type"] == "ProjectNotFound"
+    assert c.get(f"/projects/{pid}").status_code == 200
+
+
+def test_a_deployed_project_must_be_undeployed_first(monkeypatch):
+    from agentic_platform.stores import Deployment
+
+    c, pid = _setup(monkeypatch)
+    live = Deployment(status="ready", plan_version=1, region="ap-south-1", runtime_name="agentic_x",
+                      runtime_id="agentic_x-abc", runtime_arn="arn:x", live_plan_version=1)
+    app_module._store.set_deployment(pid, live)
+    r = c.delete(f"/projects/{pid}")
+    assert r.status_code == 409 and r.json()["error_type"] == "ProjectDeployed"
+    assert c.get(f"/projects/{pid}").status_code == 200
+
+    # A deploy that failed before creating a runtime leaves nothing in AWS to orphan.
+    app_module._store.set_deployment(pid, live.model_copy(update={"status": "failed", "runtime_id": None}))
+    assert c.delete(f"/projects/{pid}").status_code == 200

@@ -189,6 +189,10 @@ class ProjectStore(Protocol):
         """Record the embedding model the project's knowledge base uses."""
         ...
 
+    def delete(self, project_id: str) -> bool:
+        """Remove the project. False if it didn't exist."""
+        ...
+
     def record_exchange(
         self,
         project_id: str,
@@ -283,6 +287,9 @@ class InMemoryProjectStore:
             return False
         record.knowledge_embedding = config.model_copy() if config else None
         return True
+
+    def delete(self, project_id: str) -> bool:
+        return self._records.pop(project_id, None) is not None
 
 
 @contextmanager
@@ -441,6 +448,11 @@ class MongoProjectStore:
             )
         return result.matched_count == 1
 
+    def delete(self, project_id: str) -> bool:
+        with _mongo_errors():
+            result = self._projects.delete_one({"_id": project_id})
+        return result.deleted_count == 1
+
 
 class MongoUserStore:
     """One document per user in the `users` collection, user id as `_id`. A unique index
@@ -508,6 +520,10 @@ class KnowledgeStore(Protocol):
         """Remove a document and its passages. False if it didn't exist."""
         ...
 
+    def delete_project(self, project_id: str) -> int:
+        """Remove every document and passage of a project; returns how many documents."""
+        ...
+
     def chunks_for_project(self, project_id: str, document_ids: list[str] | None = None) -> list[KnowledgeChunk]:
         """Passages of the project (optionally only of these documents), in order."""
         ...
@@ -557,6 +573,14 @@ class InMemoryKnowledgeStore:
         del self._docs[document_id]
         self.replace_chunks(project_id, document_id, [])
         return True
+
+    def delete_project(self, project_id: str) -> int:
+        doc_ids = [d.id for d in self._docs.values() if d.project_id == project_id]
+        for doc_id in doc_ids:
+            del self._docs[doc_id]
+        for chunk_id in [c.id for c in self._chunks.values() if c.project_id == project_id]:
+            del self._chunks[chunk_id]
+        return len(doc_ids)
 
     def chunks_for_project(self, project_id: str, document_ids: list[str] | None = None) -> list[KnowledgeChunk]:
         chunks = [
@@ -648,6 +672,12 @@ class MongoKnowledgeStore:
             result = self._docs.delete_one({"_id": document_id, "project_id": project_id})
             self._chunks.delete_many({"project_id": project_id, "document_id": document_id})
         return result.deleted_count == 1
+
+    def delete_project(self, project_id: str) -> int:
+        with _mongo_errors():
+            result = self._docs.delete_many({"project_id": project_id})
+            self._chunks.delete_many({"project_id": project_id})
+        return result.deleted_count
 
     def chunks_for_project(self, project_id: str, document_ids: list[str] | None = None) -> list[KnowledgeChunk]:
         query: dict[str, Any] = {"project_id": project_id}

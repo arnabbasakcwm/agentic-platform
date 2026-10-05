@@ -155,7 +155,9 @@ browser. Set `VITE_API_BASE` to point the console at a different API.
    AgentCore Runtime, lets you try the live deployment, and shows how to call it from an
    app. Needs AWS set up — see [Deploying to AWS](#deploying-to-aws-agentcore).
 5. **Projects** — every project you've created, newest first; the sidebar also lists the
-   most recent ones.
+   most recent ones. The trash icon on a row deletes a project with its plan, conversation
+   and knowledge-base files (it asks first). A project deployed on AgentCore must have its
+   deployment removed on the Deploy page before it can be deleted.
 6. **Knowledge** (sidebar) — every knowledge-base file across your projects in one table:
    totals, live indexing status, filters by name, project and status, upload to any
    project, and delete. Each file links to its project's Knowledge step, which is where
@@ -245,6 +247,7 @@ signed-in user's projects. Interactive docs: http://127.0.0.1:8000/docs.
 | `POST /projects` | Plan a new project from a brief (`agent_count` optional) |
 | `GET /projects`, `GET /projects/{id}` | List your projects / fetch one with its plan and conversation |
 | `POST /projects/{id}/revise` | Change the brief or plan by asking in plain language |
+| `DELETE /projects/{id}` | Delete a project with its knowledge-base files (refused while it's deployed) |
 | `PATCH /projects/{id}/plan` | Replace the plan with an edited one (re-validated) |
 | `POST /projects/{id}/compile` | Build the runnable graph (no model calls) |
 | `POST /projects/{id}/run` | Run the whole team on an input |

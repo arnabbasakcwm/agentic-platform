@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Icon } from "./icons.jsx";
 
 export function Panel({ title, subtitle, actions, children, footer, flush }) {
@@ -183,5 +184,48 @@ export function Skeleton({ lines = 3 }) {
         <span key={i} className="skeleton__line" style={{ width: `${92 - i * 14}%` }} />
       ))}
     </div>
+  );
+}
+
+/**
+ * A trash button that asks for confirmation in place. `name` is what gets deleted (for the
+ * accessible label); `onDelete` resolves to true on success.
+ */
+export function DeleteButton({ name, onDelete, prompt }) {
+  const [confirm, setConfirm] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  async function remove() {
+    setDeleting(true);
+    const ok = await onDelete();
+    if (!ok) {
+      setDeleting(false);
+      setConfirm(false);
+    }
+  }
+
+  if (confirm) {
+    return (
+      <span className="row confirm-delete" role="group" aria-label={`Confirm deleting ${name}`}>
+        {prompt && <span className="confirm-delete__prompt">{prompt}</span>}
+        <Button size="sm" variant="danger" onClick={remove} loading={deleting}>
+          Delete
+        </Button>
+        <Button size="sm" onClick={() => setConfirm(false)} disabled={deleting}>
+          Keep
+        </Button>
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      className="iconbtn"
+      onClick={() => setConfirm(true)}
+      aria-label={`Delete ${name}`}
+      title="Delete"
+    >
+      <Icon name="trash" />
+    </button>
   );
 }

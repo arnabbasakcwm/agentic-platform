@@ -3325,9 +3325,11 @@ code {
   color: var(--info);
 }
 
+/* A fixed dark red in both themes: the dark theme's --danger is a light red for text,
+   which white button text can't sit on. */
 .btn--danger {
-  background: var(--danger);
-  border-color: var(--danger);
+  background: #b91c1c;
+  border-color: #b91c1c;
   color: #ffffff;
 }
 
@@ -3610,4 +3612,27 @@ code {
     max-width: none;
     flex: 1;
   }
+}
+
+
+/* ================================================================ delete confirmation */
+.table__actions {
+  width: 1%;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.table tbody tr .table__actions {
+  cursor: default;
+}
+
+.confirm-delete {
+  justify-content: flex-end;
+  flex-wrap: nowrap;
+}
+
+.confirm-delete__prompt {
+  font-size: var(--text-xs);
+  color: var(--danger);
+  white-space: nowrap;
 }

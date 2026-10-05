@@ -52,6 +52,7 @@ from .errors import (
     KnowledgeUnavailableError,
     NotDeployedError,
     PlanConflictError,
+    ProjectDeployedError,
     RunTimeoutError,
     MissingToolKeyError,
     PlannerError,
@@ -452,6 +453,24 @@ def list_projects(user: UserRecord = Depends(current_user)) -> dict[str, Any]:
 @app.get("/projects/{project_id}")
 def get_project(project_id: str, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
     return _project_body(_get_project(project_id, user))
+
+
+@app.delete("/projects/{project_id}")
+def delete_project(project_id: str, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """Delete a project with its plan, conversation and knowledge-base files. A project
+    with a deployment on AgentCore (or one being deployed) is refused until the deployment
+    is removed, so no runtime is left running unreachable in the AWS account."""
+    project = _get_project(project_id, user)
+    deployment = project.deployment.effective() if project.deployment else None
+    if deployment is not None and (deployment.in_progress or deployment.runtime_id):
+        raise ProjectDeployedError()
+    # The project goes first: if removing its files then failed, they'd belong to no
+    # project, and nothing lists files of projects that don't exist.
+    if not _store.delete(project_id):
+        raise ProjectNotFoundError(project_id)
+    _COMPILED.pop(project_id, None)
+    files = _knowledge.delete_project(project_id)
+    return {"deleted": project_id, "knowledge_documents_deleted": files}
 
 
 @app.patch("/projects/{project_id}/plan")
@@ -1047,6 +1066,11 @@ def _handle_knowledge_busy(_req: Request, exc: KnowledgeBusyError):
 @app.exception_handler(DocumentNotFoundError)
 def _handle_document_not_found(_req: Request, exc: DocumentNotFoundError):
     return _error_response(404, "DocumentNotFound", str(exc))
+
+
+@app.exception_handler(ProjectDeployedError)
+def _handle_project_deployed(_req: Request, exc: ProjectDeployedError):
+    return _error_response(409, "ProjectDeployed", str(exc))
 
 
 @app.exception_handler(PlanConflictError)

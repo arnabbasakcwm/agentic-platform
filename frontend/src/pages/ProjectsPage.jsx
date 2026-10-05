@@ -1,14 +1,25 @@
 import { Icon } from "../components/icons.jsx";
-import { Button, Empty, ErrorCallout, LinkButton, PageHeader, Panel, Pill } from "../components/ui.jsx";
+import {
+  Button,
+  DeleteButton,
+  Empty,
+  ErrorCallout,
+  LinkButton,
+  PageHeader,
+  Panel,
+  Pill,
+} from "../components/ui.jsx";
+import { api } from "../lib/api.js";
 import { fullDate, projectTitle, timeAgo } from "../lib/format.js";
 import { navigate, paths } from "../lib/router.js";
+import { useAction } from "../lib/useAction.js";
 
 // A compiled project opens where you'd use it; an uncompiled one where you'd finish it.
 function entryPath(project) {
   return paths.project(project.project_id, project.compiled ? "run" : "plan");
 }
 
-function ProjectRow({ project }) {
+function ProjectRow({ project, onDelete }) {
   const href = entryPath(project);
   return (
     <tr onClick={() => navigate(href)}>
@@ -34,12 +45,28 @@ function ProjectRow({ project }) {
       <td className="muted" title={fullDate(project.updated_at)} style={{ whiteSpace: "nowrap" }}>
         {timeAgo(project.updated_at)}
       </td>
+      {/* Clicks here mustn't open the project (the row itself is a link). */}
+      <td className="table__actions" onClick={(e) => e.stopPropagation()}>
+        <DeleteButton
+          name={projectTitle(project.brief, 60)}
+          prompt="Delete project and its files?"
+          onDelete={() => onDelete(project)}
+        />
+      </td>
     </tr>
   );
 }
 
-export function ProjectsPage({ projects, error, onRetry }) {
+export function ProjectsPage({ projects, error, onRetry, onDeleted }) {
   const count = projects?.length ?? 0;
+  const remove = useAction();
+
+  async function deleteProject(project) {
+    const res = await remove.run(() => api.deleteProject(project.project_id));
+    if (!res) return false;
+    onDeleted(project.project_id);
+    return true;
+  }
 
   return (
     <div className="page">
@@ -81,6 +108,11 @@ export function ProjectsPage({ projects, error, onRetry }) {
         </Panel>
       ) : (
         <Panel flush>
+          {remove.error && (
+            <div className="panel__body">
+              <ErrorCallout error={remove.error} />
+            </div>
+          )}
           <table className="table">
             <thead>
               <tr>
@@ -89,11 +121,14 @@ export function ProjectsPage({ projects, error, onRetry }) {
                 <th>Agents</th>
                 <th>Status</th>
                 <th>Updated</th>
+                <th className="table__actions">
+                  <span className="sr-only">Actions</span>
+                </th>
               </tr>
             </thead>
             <tbody>
               {projects.map((project) => (
-                <ProjectRow key={project.project_id} project={project} />
+                <ProjectRow key={project.project_id} project={project} onDelete={deleteProject} />
               ))}
             </tbody>
           </table>

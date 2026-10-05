@@ -339,3 +339,22 @@ def test_documents_list_per_tenant_newest_first(knowledge):
     knowledge.add_document(_kdoc("d2", "p2", created_at=t - timedelta(minutes=1)))
     knowledge.add_document(_kdoc("d3", "p3", tenant_id="someone-else"))
     assert [d.id for d in knowledge.list_documents_for_tenant("u1")] == ["d2", "d1"]
+
+
+def test_projects_can_be_deleted(store):
+    record = _record()
+    store.create(record)
+    assert store.delete(record.id) is True
+    assert store.get(record.id) is None
+    assert store.delete(record.id) is False
+
+
+def test_deleting_a_projects_knowledge_leaves_other_projects_alone(knowledge):
+    knowledge.add_document(_kdoc("d1", "p1"))
+    knowledge.add_document(_kdoc("d2", "p1"))
+    knowledge.add_document(_kdoc("d3", "p2"))
+    knowledge.replace_chunks("p1", "d1", [_kchunk("c1")])
+    knowledge.replace_chunks("p2", "d3", [_kchunk("c3", doc_id="d3", project_id="p2")])
+    assert knowledge.delete_project("p1") == 2
+    assert knowledge.list_documents("p1") == [] and knowledge.chunks_for_project("p1") == []
+    assert [c.id for c in knowledge.chunks_for_project("p2")] == ["c3"]

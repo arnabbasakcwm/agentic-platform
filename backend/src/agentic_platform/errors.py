@@ -65,6 +65,17 @@ class EmailTakenError(PlatformError):
         super().__init__("an account with this email already exists")
 
 
+class ProjectDeployedError(PlatformError):
+    """A project with a deployment on AgentCore can't be deleted: its runtime would be
+    left running, unreachable, in the AWS account."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "this project is deployed on AgentCore; remove the deployment on its Deploy page "
+            "before deleting the project"
+        )
+
+
 class PlanConflictError(PlatformError):
     """The plan changed between reading it and writing a revision of it."""
 

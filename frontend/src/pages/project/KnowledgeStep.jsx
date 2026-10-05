@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
-import { DeleteButton, UploadArea } from "../../components/KnowledgeUpload.jsx";
+import { UploadArea } from "../../components/KnowledgeUpload.jsx";
 import { Icon } from "../../components/icons.jsx";
 import {
   ActionBar,
   Button,
   Callout,
+  DeleteButton,
   Empty,
   ErrorCallout,
   Field,
@@ -47,7 +48,7 @@ function DocumentRow({ doc, onDelete }) {
         {doc.status === "failed" && doc.error && <div className="doclist__error">{doc.error}</div>}
       </div>
       <StatusBadge status={badge} label={label} />
-      <DeleteButton filename={doc.filename} onDelete={() => onDelete(doc)} />
+      <DeleteButton name={doc.filename} onDelete={() => onDelete(doc)} />
     </li>
   );
 }

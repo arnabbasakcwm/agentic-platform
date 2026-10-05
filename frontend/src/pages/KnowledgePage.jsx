@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { DeleteButton, UploadArea } from "../components/KnowledgeUpload.jsx";
+import { UploadArea } from "../components/KnowledgeUpload.jsx";
 import { Icon } from "../components/icons.jsx";
 import {
   Button,
   Callout,
+  DeleteButton,
   Empty,
   ErrorCallout,
   Field,
@@ -94,7 +95,7 @@ function FileRow({ doc, project, onDelete }) {
         <StatusBadge status={badge} label={label} />
       </td>
       <td className="kcol-actions">
-        <DeleteButton filename={doc.filename} onDelete={() => onDelete(doc)} />
+        <DeleteButton name={doc.filename} onDelete={() => onDelete(doc)} />
       </td>
     </tr>
   );

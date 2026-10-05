@@ -150,6 +150,7 @@ async function streamRun(req, res, input) {
 const PRISTINE = structuredClone(project);
 
 function reset() {
+  delete project.deleted;
   Object.assign(project, structuredClone(PRISTINE));
   Object.assign(plan, project.plan);
   project.plan = plan;
@@ -291,9 +292,16 @@ const server = http.createServer(async (req, res) => {
   if (path === "/providers") return send(res, 200, { providers: [{ provider: "google_genai", model: "gemini-3.1-pro-preview", default: true }] });
   if (path === "/auth/me") return send(res, 200, { id: "u1", email: "e2e@example.com", created_at: "2026-10-01T00:00:00Z" });
   if (path === "/projects") {
+    if (project.deleted) return send(res, 200, { projects: [] });
     return send(res, 200, {
       projects: [{ project_id: PROJECT_ID, brief: project.brief, orchestration_pattern: "sequential", agent_count: 3, compiled: true, created_at: project.created_at, updated_at: project.updated_at }],
     });
+  }
+  if (path === p && req.method === "DELETE") {
+    project.deleted = true;
+    const files = knowledge.documents.filter((d) => d.project_id === PROJECT_ID).length;
+    knowledge.documents = knowledge.documents.filter((d) => d.project_id !== PROJECT_ID);
+    return send(res, 200, { deleted: PROJECT_ID, knowledge_documents_deleted: files });
   }
   if (path === p) {
     knowledgeBody();
