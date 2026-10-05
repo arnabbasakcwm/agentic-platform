@@ -327,3 +327,15 @@ def test_project_embedding_setting_round_trips(store):
     config = EmbeddingConfig(provider="google_genai", model="gemini-embedding-001")
     assert store.set_knowledge_embedding(record.id, config)
     assert store.get(record.id).knowledge_embedding == config
+
+
+def test_documents_list_per_tenant_newest_first(knowledge):
+    from datetime import timedelta
+
+    from agentic_platform.stores import _now
+
+    t = _now()
+    knowledge.add_document(_kdoc("d1", "p1", created_at=t - timedelta(minutes=2)))
+    knowledge.add_document(_kdoc("d2", "p2", created_at=t - timedelta(minutes=1)))
+    knowledge.add_document(_kdoc("d3", "p3", tenant_id="someone-else"))
+    assert [d.id for d in knowledge.list_documents_for_tenant("u1")] == ["d2", "d1"]

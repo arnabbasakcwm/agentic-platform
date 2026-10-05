@@ -494,6 +494,10 @@ class KnowledgeStore(Protocol):
         """Oldest first."""
         ...
 
+    def list_documents_for_tenant(self, tenant_id: str) -> list[KnowledgeDocument]:
+        """Every document of every project the tenant owns, newest first."""
+        ...
+
     def update_document(self, project_id: str, document_id: str, **changes: Any) -> bool: ...
 
     def replace_chunks(self, project_id: str, document_id: str, chunks: list[KnowledgeChunk]) -> None:
@@ -528,6 +532,10 @@ class InMemoryKnowledgeStore:
     def list_documents(self, project_id: str) -> list[KnowledgeDocument]:
         docs = [d for d in self._docs.values() if d.project_id == project_id]
         return [d.model_copy() for d in sorted(docs, key=lambda d: d.created_at)]
+
+    def list_documents_for_tenant(self, tenant_id: str) -> list[KnowledgeDocument]:
+        docs = [d for d in self._docs.values() if d.tenant_id == tenant_id]
+        return [d.model_copy() for d in sorted(docs, key=lambda d: d.created_at, reverse=True)]
 
     def update_document(self, project_id: str, document_id: str, **changes: Any) -> bool:
         doc = self._docs.get(document_id)
@@ -576,6 +584,7 @@ class MongoKnowledgeStore:
     def _ensure_indexes(self) -> None:
         if not self._index_ready:
             self._docs.create_index([("project_id", 1), ("created_at", 1)])
+            self._docs.create_index([("tenant_id", 1), ("created_at", -1)])
             self._chunks.create_index([("project_id", 1), ("document_id", 1), ("ordinal", 1)])
             self._index_ready = True
 
@@ -606,6 +615,12 @@ class MongoKnowledgeStore:
     def list_documents(self, project_id: str) -> list[KnowledgeDocument]:
         with _mongo_errors():
             docs = list(self._docs.find({"project_id": project_id}).sort("created_at", 1))
+        return [self._doc_out(d) for d in docs]
+
+    def list_documents_for_tenant(self, tenant_id: str) -> list[KnowledgeDocument]:
+        with _mongo_errors():
+            self._ensure_indexes()
+            docs = list(self._docs.find({"tenant_id": tenant_id}).sort("created_at", -1))
         return [self._doc_out(d) for d in docs]
 
     def update_document(self, project_id: str, document_id: str, **changes: Any) -> bool:

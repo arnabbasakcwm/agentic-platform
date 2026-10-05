@@ -604,13 +604,50 @@ def _knowledge_body(project: ProjectRecord) -> dict[str, Any]:
         "passages": sum(d["chunk_count"] for d in docs),
         # Agents that can search these documents now.
         "used_by": [a.id for a in project.plan.agents if set(a.tools) & KNOWLEDGE_TOOLS],
-        "limits": {
-            "max_file_bytes": kb.MAX_FILE_BYTES,
-            "max_files": kb.MAX_FILES_PER_PROJECT,
-            "max_files_per_upload": MAX_FILES_PER_UPLOAD,
-            "max_passages": kb.MAX_CHUNKS_PER_PROJECT,
-            "file_types": sorted(kb.ALLOWED_TYPES),
-        },
+        "limits": _knowledge_limits(),
+    }
+
+
+def _knowledge_limits() -> dict[str, Any]:
+    return {
+        "max_file_bytes": kb.MAX_FILE_BYTES,
+        "max_files": kb.MAX_FILES_PER_PROJECT,
+        "max_files_per_upload": MAX_FILES_PER_UPLOAD,
+        "max_passages": kb.MAX_CHUNKS_PER_PROJECT,
+        "file_types": sorted(kb.ALLOWED_TYPES),
+    }
+
+
+@app.get("/knowledge")
+def knowledge_overview(user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """Every knowledge-base file across the signed-in user's projects, newest first, with
+    a summary per project (including projects with no files yet, so a file can be added
+    to any of them) and the limits."""
+    projects = _store.list_for_tenant(user.id)
+    owned = {p.id for p in projects}
+    # Documents of projects that no longer exist (or aren't this user's) are never shown.
+    docs = [d.effective() for d in _knowledge.list_documents_for_tenant(user.id) if d.project_id in owned]
+    by_project: dict[str, list[KnowledgeDocument]] = {}
+    for d in docs:
+        by_project.setdefault(d.project_id, []).append(d)
+    return {
+        "documents": [
+            {**d.model_dump(exclude={"tenant_id"})} for d in docs
+        ],
+        "projects": [
+            {
+                "project_id": p.id,
+                "brief": p.brief,
+                "embedding": p.knowledge_embedding.model_dump() if p.knowledge_embedding else None,
+                "documents": len(by_project.get(p.id, [])),
+                "ready": sum(d.status == "ready" for d in by_project.get(p.id, [])),
+                "passages": sum(d.chunk_count for d in by_project.get(p.id, [])),
+                "used_by": [a.id for a in p.plan.agents if set(a.tools) & KNOWLEDGE_TOOLS],
+                "updated_at": p.updated_at,
+            }
+            for p in projects
+        ],
+        "limits": _knowledge_limits(),
     }
 
 

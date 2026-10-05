@@ -240,3 +240,37 @@ def test_a_run_searches_the_projects_documents(monkeypatch):
     r = c.post(f"/projects/{pid}/run", json={"input": {"q": "hotel cap?"}})
     assert r.status_code == 200 and r.json()["errors"] == []
     assert "[policy.md — section \"Hotels\"" in seen[1].content and "INR 9,000" in seen[1].content
+
+
+def test_workspace_overview_lists_files_across_the_users_projects(monkeypatch):
+    c, pid = _setup(monkeypatch)
+    other_pid = c.post("/projects", json={"brief": "second"}).json()["project_id"]
+    _upload(c, pid, ("policy.md", GUIDE, "text/markdown"))
+    _upload(c, other_pid, ("fares.csv", b"city,fare\nGoa,7004\n", "text/csv"))
+
+    body = c.get("/knowledge").json()
+    assert [(d["filename"], d["project_id"]) for d in body["documents"]] == [
+        ("fares.csv", other_pid),
+        ("policy.md", pid),
+    ]
+    assert "tenant_id" not in body["documents"][0]
+    summary = {p["project_id"]: p for p in body["projects"]}
+    assert summary[pid]["documents"] == 1 and summary[pid]["ready"] == 1
+    assert summary[other_pid]["passages"] == 1
+    assert body["limits"]["max_files"] == 50
+
+    # Another user sees none of it.
+    other = TestClient(app_module.app)
+    token = other.post(
+        "/auth/register", json={"email": "other@example.com", "password": "a-long-password"}
+    ).json()["access_token"]
+    other.headers["Authorization"] = f"Bearer {token}"
+    assert other.get("/knowledge").json()["documents"] == []
+    assert TestClient(app_module.app).get("/knowledge").status_code == 401
+
+
+def test_files_of_a_deleted_project_are_not_listed(monkeypatch):
+    c, pid = _setup(monkeypatch)
+    _upload(c, pid, ("policy.md", GUIDE, "text/markdown"))
+    app_module._store._records.pop(pid)
+    assert c.get("/knowledge").json()["documents"] == []
