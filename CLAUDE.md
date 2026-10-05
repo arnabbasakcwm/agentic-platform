@@ -407,6 +407,23 @@ whenever a change departs from or extends the contract above — don't silently 
     when the Usage page loads (at most every two minutes per project) and via
     `POST /usage/sync`. Move it to the job queue when one exists.
 
+### 2026-10-05 — Landing page, per-agent model/tool edits, files in the new-project chat
+- **Why:** describing a task is the first thing users do; changing a model or tool
+  shouldn't need plan JSON; and users want to give a new project its documents up front.
+- **Rule:**
+  - **Landing page:** signing in (or an empty route) lands on New project.
+  - **`PUT /projects/{id}/agents`:**
+    - **Models:** each agent's model comes from the platform's list or the model it
+      already has. Provider-specific `extra_params` are dropped when the model changes.
+    - **Tools:** from the registry, with `knowledge_search` only when files are attached.
+    - **Opt-in:** an external tool switched on there is an explicit user action, so it
+      becomes the project's opt-in. It's saved with the plan in one `update_plan` write,
+      and the result goes through the same plan validation and makes a new version.
+    - (A chat message still is not an opt-in.)
+  - **Files on create:** `POST /projects` takes `document_ids` from the caller's own
+    library. The planner gets `knowledge_search` and the files' **names** only, never
+    their content, and the files are attached once the project exists.
+
 ## Working style — verify-and-retry, always
 
 Never mark something done because the code looks right.

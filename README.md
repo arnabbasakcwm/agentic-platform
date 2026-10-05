@@ -139,10 +139,15 @@ browser. Set `VITE_API_BASE` to point the console at a different API.
 ### Using the console
 
 1. **Create an account** on the sign-in screen (email and a password of 8+ characters).
-2. **New project** — describe the task in the message box and press Enter. The planner
-   designs the team and replies with a summary and a *Review plan* link. Team size, model
-   and tools are optional; open them from the pill under the message box.
-3. **Brief / Knowledge / Plan / Compile / Run** — each project has one page per step. The
+2. **New project** — the page you land on after signing in. Describe the task in the
+   message box and press Enter. The planner designs the team and replies with a summary
+   and a *Review plan* link.
+   - *Add files* attaches knowledge files: upload new ones (they also go into your
+     library) or tick existing library files. The planner is told about them and gives
+     the agents that need them `knowledge_search`.
+   - Team size, model and tools are optional; open them from the pill under the message
+     box.
+3. **Brief / Knowledge / Plan / Compile / Run** (Brief also lets you change each agent's model and tools) — each project has one page per step. The
    plan assistant beside Brief, Knowledge, Plan and Compile takes change requests in plain
    language; any change makes a new plan version that has to be compiled again.
    - **Knowledge** (optional) — the files attached to this project; its agents search
@@ -264,6 +269,7 @@ signed-in user's projects. Interactive docs: http://127.0.0.1:8000/docs.
 | `GET /projects`, `GET /projects/{id}` | List your projects / fetch one with its plan and conversation |
 | `POST /projects/{id}/revise` | Change the brief or plan by asking in plain language |
 | `DELETE /projects/{id}` | Delete a project; its files stay in your library (refused while it's deployed) |
+| `PUT /projects/{id}/agents` | Change agents' model and tools (turning on an external tool is the project's opt-in) |
 | `PATCH /projects/{id}/plan` | Replace the plan with an edited one (re-validated) |
 | `POST /projects/{id}/compile` | Build the runnable graph (no model calls) |
 | `POST /projects/{id}/run` | Run the whole team on an input |
