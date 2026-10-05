@@ -245,38 +245,40 @@ def _get_project(project_id: str, user: UserRecord) -> ProjectRecord:
 
 
 def _compiled_graph(project: ProjectRecord) -> Any:
+    # The embedder is bound when the graph is built, so the library's embedding model is
+    # part of the cache key.
+    embedding = _knowledge.get_embedding(project.tenant_id) if uses_knowledge(project.plan) else None
     cached = _COMPILED.get(project.id)
-    if (
-        cached is not None
-        and cached[0] == project.plan_version
-        and cached[1] == project.knowledge_embedding
-    ):
+    if cached is not None and cached[0] == project.plan_version and cached[1] == embedding:
         return cached[2]
-    graph = compile_graph(project.plan, _knowledge_context(project))
-    _COMPILED[project.id] = (project.plan_version, project.knowledge_embedding, graph)
+    graph = compile_graph(project.plan, _knowledge_context(project, embedding))
+    _COMPILED[project.id] = (project.plan_version, embedding, graph)
     return graph
 
 
 # --------------------------------------------------------------------------- knowledge
-def _knowledge_context(project: ProjectRecord) -> kb.KnowledgeContext | None:
-    """The project's documents for knowledge_search, or None when no agent uses it or
-    there is nothing to search (compiling then fails with KnowledgeUnavailable)."""
-    if not uses_knowledge(project.plan) or project.knowledge_embedding is None:
+def _knowledge_context(
+    project: ProjectRecord, embedding: EmbeddingConfig | None = None
+) -> kb.KnowledgeContext | None:
+    """The files attached to the project, for knowledge_search — or None when no agent uses
+    it or nothing is attached (compiling then fails with KnowledgeUnavailable)."""
+    if not uses_knowledge(project.plan):
         return None
-    if not _knowledge.list_documents(project.id):
+    embedding = embedding or _knowledge.get_embedding(project.tenant_id)
+    if embedding is None or not _knowledge.list_documents(project.tenant_id, project.id):
         return None
-    return kb.store_context(_knowledge, project.id, get_embeddings(project.knowledge_embedding))
+    return kb.store_context(_knowledge, project.tenant_id, project.id, get_embeddings(embedding))
 
 
-def _has_ready_knowledge(project_id: str) -> bool:
-    return any(d.status == "ready" for d in _knowledge.list_documents(project_id))
+def _has_ready_knowledge(project: ProjectRecord) -> bool:
+    return any(d.status == "ready" for d in _knowledge.list_documents(project.tenant_id, project.id))
 
 
 def _offered_tools(project: ProjectRecord) -> list[str]:
     """Tools the planner may give this project's agents: the built-ins, the external
-    tools this project opted into, and knowledge_search once it has documents to search."""
+    tools this project opted into, and knowledge_search once a ready file is attached."""
     tools = set(default_tool_names()) | set(project.side_effect_tools_enabled)
-    if _has_ready_knowledge(project.id):
+    if _has_ready_knowledge(project):
         tools |= KNOWLEDGE_TOOLS
     return sorted(tools)
 
@@ -288,51 +290,50 @@ def _embedding_options() -> list[dict[str, Any]]:
     ]
 
 
-def _default_embedding(project: ProjectRecord) -> EmbeddingConfig:
-    """The embedding model of the provider the project's agents use, or else the first
-    one this server has a key for."""
-    preferred = [a.llm.provider for a in project.plan.agents] + list(EMBEDDING_MODELS)
+def _default_embedding(project: ProjectRecord | None) -> EmbeddingConfig:
+    """For a library's first upload: the embedding model of the provider the project's
+    agents use (when uploading from a project), else the first one this server has a key
+    for, starting with the platform's default provider."""
+    preferred = [a.llm.provider for a in project.plan.agents] if project else []
+    preferred += [DEFAULT_PROVIDER, *EMBEDDING_MODELS]
     for provider in preferred:
         if provider in EMBEDDING_MODELS and embedding_available(provider):
             return EmbeddingConfig(provider=provider, model=EMBEDDING_MODELS[provider])
     raise KnowledgeError(
         "no embedding model is configured on this server: add a Gemini (GOOGLE_API_KEY) "
-        "or OpenAI (OPENAI_API_KEY) key to use a knowledge base",
+        "or OpenAI (OPENAI_API_KEY) key to use a knowledge library",
         status=503,
     )
 
 
 def _document_body(doc: KnowledgeDocument) -> dict[str, Any]:
-    return doc.effective().model_dump(exclude={"project_id", "tenant_id"})
+    return doc.effective().model_dump(exclude={"tenant_id"})
 
 
 def _knowledge_summary(project: ProjectRecord) -> dict[str, Any]:
-    docs = [d.effective() for d in _knowledge.list_documents(project.id)]
+    docs = [d.effective() for d in _knowledge.list_documents(project.tenant_id, project.id)]
+    embedding = _knowledge.get_embedding(project.tenant_id)
     return {
         "documents": len(docs),
         "ready": sum(d.status == "ready" for d in docs),
-        "embedding": project.knowledge_embedding.model_dump() if project.knowledge_embedding else None,
+        "embedding": embedding.model_dump() if embedding else None,
     }
 
 
-def _index_upload(project_id: str, document_id: str, data: bytes, config: EmbeddingConfig) -> None:
+def _index_upload(tenant_id: str, document_id: str, data: bytes, config: EmbeddingConfig) -> None:
     """Background job for one uploaded file. Runs after the response, one file at a
     time, so each file's passage budget accounts for the files indexed before it."""
-    used = sum(
-        d.chunk_count for d in _knowledge.list_documents(project_id) if d.id != document_id
-    )
+    used = sum(d.chunk_count for d in _knowledge.list_documents(tenant_id) if d.id != document_id)
     try:
         embedder = get_embeddings(config)
     except Exception as e:  # noqa: BLE001 — recorded on the document, never raised
-        _knowledge.update_document(project_id, document_id, status="failed", error=kb._describe(e))
+        _knowledge.update_document(tenant_id, document_id, status="failed", error=kb._describe(e))
         return
-    kb.index_document(
-        _knowledge, project_id, document_id, data, embedder, kb.MAX_CHUNKS_PER_PROJECT - used
-    )
+    kb.index_document(_knowledge, tenant_id, document_id, data, embedder, kb.MAX_CHUNKS_PER_LIBRARY - used)
 
 
-def _reembed(project_id: str, config: EmbeddingConfig) -> None:
-    kb.reembed_project(_knowledge, project_id, get_embeddings(config))
+def _reembed(tenant_id: str, config: EmbeddingConfig) -> None:
+    kb.reembed_library(_knowledge, tenant_id, get_embeddings(config))
 
 
 # --------------------------------------------------------------------------- routes
@@ -457,20 +458,21 @@ def get_project(project_id: str, user: UserRecord = Depends(current_user)) -> di
 
 @app.delete("/projects/{project_id}")
 def delete_project(project_id: str, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
-    """Delete a project with its plan, conversation and knowledge-base files. A project
-    with a deployment on AgentCore (or one being deployed) is refused until the deployment
-    is removed, so no runtime is left running unreachable in the AWS account."""
+    """Delete a project with its plan and conversation. Its knowledge files stay in your
+    library (detached from it). A project with a deployment on AgentCore (or one being
+    deployed) is refused until the deployment is removed, so no runtime is left running
+    unreachable in the AWS account."""
     project = _get_project(project_id, user)
     deployment = project.deployment.effective() if project.deployment else None
     if deployment is not None and (deployment.in_progress or deployment.runtime_id):
         raise ProjectDeployedError()
-    # The project goes first: if removing its files then failed, they'd belong to no
-    # project, and nothing lists files of projects that don't exist.
+    # The project goes first: if detaching then failed, the leftover attachments point
+    # at a project that doesn't exist, and nothing shows those.
     if not _store.delete(project_id):
         raise ProjectNotFoundError(project_id)
     _COMPILED.pop(project_id, None)
-    files = _knowledge.delete_project(project_id)
-    return {"deleted": project_id, "knowledge_documents_deleted": files}
+    detached = _knowledge.detach_project(user.id, project_id)
+    return {"deleted": project_id, "knowledge_documents_detached": detached}
 
 
 @app.patch("/projects/{project_id}/plan")
@@ -614,53 +616,55 @@ def invoke_agent(
 
 
 # --------------------------------------------------------------------------- knowledge
-def _knowledge_body(project: ProjectRecord) -> dict[str, Any]:
-    docs = [_document_body(d) for d in _knowledge.list_documents(project.id)]
-    return {
-        "embedding": project.knowledge_embedding.model_dump() if project.knowledge_embedding else None,
-        "embedding_options": _embedding_options(),
-        "documents": docs,
-        "passages": sum(d["chunk_count"] for d in docs),
-        # Agents that can search these documents now.
-        "used_by": [a.id for a in project.plan.agents if set(a.tools) & KNOWLEDGE_TOOLS],
-        "limits": _knowledge_limits(),
-    }
-
-
 def _knowledge_limits() -> dict[str, Any]:
     return {
         "max_file_bytes": kb.MAX_FILE_BYTES,
-        "max_files": kb.MAX_FILES_PER_PROJECT,
+        "max_files": kb.MAX_FILES_PER_LIBRARY,
         "max_files_per_upload": MAX_FILES_PER_UPLOAD,
-        "max_passages": kb.MAX_CHUNKS_PER_PROJECT,
+        "max_passages": kb.MAX_CHUNKS_PER_LIBRARY,
         "file_types": sorted(kb.ALLOWED_TYPES),
     }
 
 
+def _library_embedding_body(tenant_id: str) -> dict[str, Any]:
+    embedding = _knowledge.get_embedding(tenant_id)
+    return {
+        "embedding": embedding.model_dump() if embedding else None,
+        "embedding_options": _embedding_options(),
+    }
+
+
+def _get_document(document_id: str, user: UserRecord) -> KnowledgeDocument:
+    doc = _knowledge.get_document(user.id, document_id)
+    if doc is None:  # someone else's file is reported exactly like a missing one
+        raise DocumentNotFoundError(document_id)
+    return doc
+
+
 @app.get("/knowledge")
-def knowledge_overview(user: UserRecord = Depends(current_user)) -> dict[str, Any]:
-    """Every knowledge-base file across the signed-in user's projects, newest first, with
-    a summary per project (including projects with no files yet, so a file can be added
-    to any of them) and the limits."""
+def knowledge_library(user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """The signed-in user's knowledge library: every file (newest first) with the projects
+    it is attached to, a summary per project (including projects with nothing attached,
+    so files can be attached to any of them), the embedding model and the limits."""
     projects = _store.list_for_tenant(user.id)
     owned = {p.id for p in projects}
-    # Documents of projects that no longer exist (or aren't this user's) are never shown.
-    docs = [d.effective() for d in _knowledge.list_documents_for_tenant(user.id) if d.project_id in owned]
-    by_project: dict[str, list[KnowledgeDocument]] = {}
+    docs = [d.effective() for d in _knowledge.list_documents(user.id)]
+    documents = []
     for d in docs:
-        by_project.setdefault(d.project_id, []).append(d)
+        body = _document_body(d)
+        # Attachments to projects that no longer exist are never shown.
+        body["project_ids"] = [pid for pid in d.project_ids if pid in owned]
+        documents.append(body)
     return {
-        "documents": [
-            {**d.model_dump(exclude={"tenant_id"})} for d in docs
-        ],
+        **_library_embedding_body(user.id),
+        "documents": documents,
+        "passages": sum(d.chunk_count for d in docs),
         "projects": [
             {
                 "project_id": p.id,
                 "brief": p.brief,
-                "embedding": p.knowledge_embedding.model_dump() if p.knowledge_embedding else None,
-                "documents": len(by_project.get(p.id, [])),
-                "ready": sum(d.status == "ready" for d in by_project.get(p.id, [])),
-                "passages": sum(d.chunk_count for d in by_project.get(p.id, [])),
+                "documents": sum(p.id in d.project_ids for d in docs),
+                "ready": sum(p.id in d.project_ids and d.status == "ready" for d in docs),
                 "used_by": [a.id for a in p.plan.agents if set(a.tools) & KNOWLEDGE_TOOLS],
                 "updated_at": p.updated_at,
             }
@@ -672,47 +676,67 @@ def knowledge_overview(user: UserRecord = Depends(current_user)) -> dict[str, An
 
 @app.get("/projects/{project_id}/knowledge")
 def get_knowledge(project_id: str, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
-    """The project's knowledge base: its files with their indexing status, the embedding
-    model, and the limits."""
-    return _knowledge_body(_get_project(project_id, user))
+    """The files attached to this project (its agents search only these), the library
+    files that could be attached, the library's embedding model and the limits."""
+    project = _get_project(project_id, user)
+    library = _knowledge.list_documents(user.id)
+    attached = [_document_body(d) for d in library if project_id in d.project_ids]
+    return {
+        **_library_embedding_body(user.id),
+        "documents": attached,
+        "available": [_document_body(d) for d in library if project_id not in d.project_ids],
+        "passages": sum(d["chunk_count"] for d in attached),
+        # Agents that can search the attached files now.
+        "used_by": [a.id for a in project.plan.agents if set(a.tools) & KNOWLEDGE_TOOLS],
+        "limits": _knowledge_limits(),
+    }
 
 
 def _queue_uploads(
-    project_id: str, user: UserRecord, files: list[tuple[str, bytes]], background: BackgroundTasks
+    user: UserRecord,
+    files: list[tuple[str, bytes]],
+    background: BackgroundTasks,
+    project_id: str | None = None,
 ) -> dict[str, Any]:
-    project = _get_project(project_id, user)
-    existing = _knowledge.list_documents(project_id)
-    if len(existing) + len(files) > kb.MAX_FILES_PER_PROJECT:
+    """Add files to the user's library (checked in full before anything is queued) and,
+    with `project_id`, attach them to that project."""
+    project = _get_project(project_id, user) if project_id else None
+    existing = _knowledge.list_documents(user.id)
+    if len(existing) + len(files) > kb.MAX_FILES_PER_LIBRARY:
         raise KnowledgeError(
-            f"a knowledge base holds at most {kb.MAX_FILES_PER_PROJECT} files; "
-            f"this one has {len(existing)}"
+            f"a knowledge library holds at most {kb.MAX_FILES_PER_LIBRARY} files; "
+            f"yours has {len(existing)}"
         )
     names = {d.filename.lower() for d in existing}
-    for filename, data in files:  # check every file before queueing any
+    for filename, data in files:
         kb.file_kind(filename)
         if filename.lower() in names:
-            raise KnowledgeError(f"'{filename}' is already in this knowledge base; delete it first to replace it", status=409)
+            raise KnowledgeError(
+                f"'{filename}' is already in your knowledge library; attach that one, or delete "
+                "it first to replace it",
+                status=409,
+            )
         names.add(filename.lower())
         if not data:
             raise KnowledgeError(f"'{filename}' is empty")
 
-    config = project.knowledge_embedding or _default_embedding(project)
+    config = _knowledge.get_embedding(user.id) or _default_embedding(project)
     get_embeddings(config)  # fail now, not in the background, if its key is missing
-    if project.knowledge_embedding is None:
-        _store.set_knowledge_embedding(project_id, config)
+    if _knowledge.get_embedding(user.id) is None:
+        _knowledge.set_embedding(user.id, config)
 
     queued = []
     for filename, data in files:
         doc = KnowledgeDocument(
             id=uuid.uuid4().hex,
-            project_id=project_id,
             tenant_id=user.id,
+            project_ids=[project_id] if project_id else [],
             filename=filename,
             kind=kb.file_kind(filename),
             size_bytes=len(data),
         )
         _knowledge.add_document(doc)
-        background.add_task(_index_upload, project_id, doc.id, data, config)
+        background.add_task(_index_upload, user.id, doc.id, data, config)
         queued.append(_document_body(doc))
     return {"documents": queued}
 
@@ -735,21 +759,7 @@ _UPLOAD_BODY = {
 }
 
 
-@app.post("/projects/{project_id}/knowledge/documents", status_code=202, openapi_extra=_UPLOAD_BODY)
-async def upload_documents(
-    project_id: str,
-    request: Request,
-    background: BackgroundTasks,
-    user: UserRecord = Depends(current_user),
-) -> dict[str, Any]:
-    """Add files (multipart field `files`, repeatable) to the knowledge base.
-
-    Returns at once with each file queued; extraction and embedding run in the
-    background, reported per file by GET /projects/{id}/knowledge. Accepts PDF, Word
-    (.docx), .txt, .md and .csv, up to 20 MB each. File contents, and later the agents'
-    search queries, are sent to the project's embedding provider; the files themselves
-    are not stored, only the text passages extracted from them.
-    """
+async def _read_upload(request: Request) -> list[tuple[str, bytes]]:
     # Refuse an oversized body before reading it.
     limit = MAX_FILES_PER_UPLOAD * kb.MAX_FILE_BYTES + 1024 * 1024
     declared = request.headers.get("content-length")
@@ -772,68 +782,148 @@ async def upload_documents(
         await form.close()
     if not files:
         raise KnowledgeError("no files were uploaded (use the multipart field 'files')")
-    return await run_in_threadpool(_queue_uploads, project_id, user, files, background)
+    return files
 
 
-@app.delete("/projects/{project_id}/knowledge/documents/{document_id}")
-def delete_document(
-    project_id: str, document_id: str, user: UserRecord = Depends(current_user)
+@app.post("/knowledge/documents", status_code=202, openapi_extra=_UPLOAD_BODY)
+async def upload_to_library(
+    request: Request, background: BackgroundTasks, user: UserRecord = Depends(current_user)
 ) -> dict[str, Any]:
-    """Remove a file and all of its passages from the knowledge base."""
-    _get_project(project_id, user)
-    if not _knowledge.delete_document(project_id, document_id):
+    """Add files (multipart field `files`, repeatable) to your knowledge library, attached
+    to no project yet.
+
+    Returns at once with each file queued; extraction and embedding run in the
+    background, reported per file by GET /knowledge. Accepts PDF, Word (.docx), .txt, .md
+    and .csv, up to 20 MB each. File contents, and later the agents' search queries, are
+    sent to the library's embedding provider; the files themselves are not stored, only
+    the text passages extracted from them.
+    """
+    files = await _read_upload(request)
+    return await run_in_threadpool(_queue_uploads, user, files, background)
+
+
+@app.post("/projects/{project_id}/knowledge/documents", status_code=202, openapi_extra=_UPLOAD_BODY)
+async def upload_documents(
+    project_id: str,
+    request: Request,
+    background: BackgroundTasks,
+    user: UserRecord = Depends(current_user),
+) -> dict[str, Any]:
+    """Add files to your knowledge library and attach them to this project — the same as
+    POST /knowledge/documents followed by attaching each file."""
+    files = await _read_upload(request)
+    return await run_in_threadpool(_queue_uploads, user, files, background, project_id)
+
+
+@app.delete("/knowledge/documents/{document_id}")
+def delete_from_library(document_id: str, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """Delete a file and its passages from your library, detaching it from every project."""
+    if not _knowledge.delete_document(user.id, document_id):
         raise DocumentNotFoundError(document_id)
     return {"deleted": document_id}
 
 
-@app.put("/projects/{project_id}/knowledge/embedding")
+class AttachmentsRequest(BaseModel):
+    project_ids: list[str] = Field(max_length=200)
+
+
+@app.put("/knowledge/documents/{document_id}/projects")
+def set_attachments(
+    document_id: str, req: AttachmentsRequest, user: UserRecord = Depends(current_user)
+) -> dict[str, Any]:
+    """Set exactly which of your projects a library file is attached to."""
+    doc = _get_document(document_id, user)
+    wanted = list(dict.fromkeys(req.project_ids))
+    for project_id in wanted:
+        _get_project(project_id, user)  # each must be one of yours (else 404)
+    for project_id in set(doc.project_ids) - set(wanted):
+        _knowledge.detach(user.id, document_id, project_id)
+    for project_id in wanted:
+        _knowledge.attach(user.id, document_id, project_id)
+    return {"document": _document_body(_get_document(document_id, user))}
+
+
+@app.post("/projects/{project_id}/knowledge/documents/{document_id}")
+def attach_document(
+    project_id: str, document_id: str, user: UserRecord = Depends(current_user)
+) -> dict[str, Any]:
+    """Attach a file from your library to this project. Agents with knowledge_search find
+    it right away — no recompile."""
+    _get_project(project_id, user)
+    _get_document(document_id, user)
+    _knowledge.attach(user.id, document_id, project_id)
+    return {"document": _document_body(_get_document(document_id, user))}
+
+
+@app.delete("/projects/{project_id}/knowledge/documents/{document_id}")
+def detach_document(
+    project_id: str, document_id: str, user: UserRecord = Depends(current_user)
+) -> dict[str, Any]:
+    """Detach a file from this project. It stays in your library (and in any other
+    project it is attached to)."""
+    _get_project(project_id, user)
+    if not _knowledge.detach(user.id, document_id, project_id):
+        raise DocumentNotFoundError(document_id)
+    return {"detached": document_id}
+
+
+@app.put("/knowledge/embedding")
 def set_embedding(
-    project_id: str,
     config: EmbeddingConfig,
     background: BackgroundTasks,
     response: Response,
     user: UserRecord = Depends(current_user),
 ) -> dict[str, Any]:
-    """Change the embedding model. Every stored passage is re-embedded in the background
-    (202); the files don't need to be uploaded again."""
-    project = _get_project(project_id, user)
+    """Change your library's embedding model. Every stored passage is re-embedded in the
+    background (202); no file needs uploading again."""
     if EMBEDDING_MODELS.get(config.provider) != config.model:
         raise KnowledgeError(
             f"unknown embedding model; choose one of {_embedding_options()}", status=422
         )
-    if config == project.knowledge_embedding:
-        return _knowledge_body(project)
-    docs = [d.effective() for d in _knowledge.list_documents(project_id)]
+    current = _knowledge.get_embedding(user.id)
+    if config == current:
+        return knowledge_library(user)
+    docs = [d.effective() for d in _knowledge.list_documents(user.id)]
     if any(d.status in ("queued", "processing") for d in docs):
         raise KnowledgeBusyError()
     get_embeddings(config)  # missing key -> MissingProviderKey now
-    _store.set_knowledge_embedding(project_id, config)
+    _knowledge.set_embedding(user.id, config)
     if docs:
         for d in docs:
             if d.status == "ready":
-                _knowledge.update_document(project_id, d.id, status="processing")
-        background.add_task(_reembed, project_id, config)
+                _knowledge.update_document(user.id, d.id, status="processing")
+        background.add_task(_reembed, user.id, config)
     response.status_code = 202
-    return _knowledge_body(_get_project(project_id, user))
+    return knowledge_library(user)
+
+
+def _search_body(tenant_id: str, project_id: str | None, req: KnowledgeSearchRequest) -> dict[str, Any]:
+    embedding = _knowledge.get_embedding(tenant_id)
+    if embedding is None:
+        return {"results": []}
+    context = kb.store_context(_knowledge, tenant_id, project_id, get_embeddings(embedding))
+    return {
+        "results": [
+            {"filename": h.filename, "source": h.source, "text": h.text, "score": h.score}
+            for h in context.search(req.query, req.k)
+        ]
+    }
+
+
+@app.post("/knowledge/search")
+def search_library(req: KnowledgeSearchRequest, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """Search your whole library."""
+    return _search_body(user.id, None, req)
 
 
 @app.post("/projects/{project_id}/knowledge/search")
 def search_knowledge(
     project_id: str, req: KnowledgeSearchRequest, user: UserRecord = Depends(current_user)
 ) -> dict[str, Any]:
-    """Search the knowledge base the way knowledge_search does, to check what agents
-    will find."""
-    project = _get_project(project_id, user)
-    if project.knowledge_embedding is None:
-        return {"results": []}
-    context = kb.store_context(_knowledge, project_id, get_embeddings(project.knowledge_embedding))
-    hits = context.search(req.query, req.k)
-    return {
-        "results": [
-            {"filename": h.filename, "source": h.source, "text": h.text, "score": h.score}
-            for h in hits
-        ]
-    }
+    """Search the files attached to this project, the way its agents' knowledge_search
+    does."""
+    _get_project(project_id, user)
+    return _search_body(user.id, project_id, req)
 
 
 # --------------------------------------------------------------------------- deploy
@@ -870,18 +960,19 @@ def deploy_project(
     # Fail now, not minutes into the job, if a key the plan needs isn't configured or
     # the knowledge base its agents search isn't ready to be copied.
     snapshot = None
+    embedding = None
     if uses_knowledge(project.plan):
-        docs = [d.effective() for d in _knowledge.list_documents(project_id)]
+        docs = [d.effective() for d in _knowledge.list_documents(user.id, project_id)]
         if any(d.status in ("queued", "processing") for d in docs):
             raise KnowledgeBusyError()
-        if project.knowledge_embedding is None or not any(d.status == "ready" for d in docs):
+        embedding = _knowledge.get_embedding(user.id)
+        if embedding is None or not any(d.status == "ready" for d in docs):
             raise KnowledgeUnavailableError()
-        embedding = project.knowledge_embedding
 
         def snapshot():
-            return kb.build_snapshot(_knowledge, project_id, embedding)
+            return kb.build_snapshot(_knowledge, user.id, project_id, embedding)
 
-    runtime_environment(project.plan, project.knowledge_embedding)
+    runtime_environment(project.plan, embedding)
 
     deployment = Deployment(
         status="packaging",
@@ -894,7 +985,7 @@ def deploy_project(
         deployed_at=previous.deployed_at if previous else None,
     )
     _store.set_deployment(project_id, deployment)
-    background.add_task(run_deployment, project_id, _store, cloud, _package_builder, snapshot)
+    background.add_task(run_deployment, project_id, _store, cloud, _package_builder, snapshot, embedding)
     return {"deployment": _deployment_body(_get_project(project_id, user))}
 
 

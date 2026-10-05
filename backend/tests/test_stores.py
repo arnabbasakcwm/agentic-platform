@@ -252,7 +252,7 @@ def test_conversation_keeps_only_the_most_recent_messages(store):
     assert updated.conversation[-1].content == f"m{CONVERSATION_LIMIT + 4}"
 
 
-# ------------------------------------------------------------------ KnowledgeStore
+# ------------------------------------------------------------------ KnowledgeStore (libraries)
 @pytest.fixture
 def knowledge(backend):
     from agentic_platform.stores import InMemoryKnowledgeStore, MongoKnowledgeStore
@@ -260,55 +260,104 @@ def knowledge(backend):
     return InMemoryKnowledgeStore() if backend is None else MongoKnowledgeStore(backend)
 
 
-def _kdoc(doc_id="d1", project_id="p1", **overrides):
+def _kdoc(doc_id="d1", tenant_id="u1", project_ids=(), **overrides):
     from agentic_platform.stores import KnowledgeDocument
 
-    fields = dict(id=doc_id, project_id=project_id, tenant_id="u1", filename="guide.pdf", kind=".pdf", size_bytes=10)
+    fields = dict(id=doc_id, tenant_id=tenant_id, project_ids=list(project_ids), filename=f"{doc_id}.pdf",
+                  kind=".pdf", size_bytes=10)
     return KnowledgeDocument(**{**fields, **overrides})
 
 
-def _kchunk(chunk_id, doc_id="d1", project_id="p1", ordinal=0, embedding=None):
+def _kchunk(chunk_id, doc_id="d1", tenant_id="u1", ordinal=0, embedding=None):
     from agentic_platform.stores import KnowledgeChunk
 
     return KnowledgeChunk(
-        id=chunk_id, project_id=project_id, document_id=doc_id, ordinal=ordinal,
+        id=chunk_id, tenant_id=tenant_id, document_id=doc_id, ordinal=ordinal,
         text=f"text {chunk_id}", source="page 1", embedding=embedding or [0.1, 0.2],
     )
 
 
-def test_documents_are_scoped_to_their_project(knowledge):
-    knowledge.add_document(_kdoc("d1", "p1"))
-    knowledge.add_document(_kdoc("d2", "p2"))
-    assert [d.id for d in knowledge.list_documents("p1")] == ["d1"]
-    assert knowledge.get_document("p2", "d1") is None  # another project's id
-    assert knowledge.update_document("p2", "d1", status="ready") is False
+def test_libraries_are_scoped_to_their_owner(knowledge):
+    knowledge.add_document(_kdoc("d1", "u1"))
+    knowledge.add_document(_kdoc("d2", "u2"))
+    assert [d.id for d in knowledge.list_documents("u1")] == ["d1"]
+    assert knowledge.get_document("u2", "d1") is None  # another user's id
+    assert knowledge.update_document("u2", "d1", status="ready") is False
+    assert knowledge.attach("u2", "d1", "p1") is False
+    assert knowledge.delete_document("u2", "d1") is False
+
+
+def test_library_lists_newest_first_and_filters_by_project(knowledge):
+    from datetime import timedelta
+
+    from agentic_platform.stores import _now
+
+    t = _now()
+    knowledge.add_document(_kdoc("d1", project_ids=["p1"], created_at=t - timedelta(minutes=2)))
+    knowledge.add_document(_kdoc("d2", project_ids=["p1", "p2"], created_at=t - timedelta(minutes=1)))
+    knowledge.add_document(_kdoc("d3", created_at=t))  # in no project yet
+    assert [d.id for d in knowledge.list_documents("u1")] == ["d3", "d2", "d1"]
+    assert [d.id for d in knowledge.list_documents("u1", "p1")] == ["d2", "d1"]
+    assert [d.id for d in knowledge.list_documents("u1", "p2")] == ["d2"]
+
+
+def test_attach_and_detach(knowledge):
+    knowledge.add_document(_kdoc("d1"))
+    assert knowledge.attach("u1", "d1", "p1") and knowledge.attach("u1", "d1", "p1")  # idempotent
+    assert knowledge.attach("u1", "d1", "p2")
+    assert knowledge.get_document("u1", "d1").project_ids == ["p1", "p2"]
+    assert knowledge.detach("u1", "d1", "p1") is True
+    assert knowledge.detach("u1", "d1", "p1") is False
+    assert knowledge.get_document("u1", "d1").project_ids == ["p2"]
+    assert knowledge.attach("u1", "missing", "p1") is False
+
+
+def test_deleting_a_project_detaches_without_deleting_files(knowledge):
+    knowledge.add_document(_kdoc("d1", project_ids=["p1", "p2"]))
+    knowledge.add_document(_kdoc("d2", project_ids=["p1"]))
+    knowledge.add_document(_kdoc("d3", project_ids=["p2"]))
+    assert knowledge.detach_project("u1", "p1") == 2
+    assert {d.id: d.project_ids for d in knowledge.list_documents("u1")} == {"d1": ["p2"], "d2": [], "d3": ["p2"]}
 
 
 def test_document_status_updates(knowledge):
     knowledge.add_document(_kdoc())
-    assert knowledge.update_document("p1", "d1", status="ready", chunk_count=3)
-    doc = knowledge.get_document("p1", "d1")
+    assert knowledge.update_document("u1", "d1", status="ready", chunk_count=3)
+    doc = knowledge.get_document("u1", "d1")
     assert (doc.status, doc.chunk_count) == ("ready", 3)
 
 
 def test_chunks_replace_filter_and_delete_with_their_document(knowledge):
     knowledge.add_document(_kdoc("d1"))
     knowledge.add_document(_kdoc("d2"))
-    knowledge.replace_chunks("p1", "d1", [_kchunk("c1", ordinal=0), _kchunk("c2", ordinal=1)])
-    knowledge.replace_chunks("p1", "d2", [_kchunk("c3", doc_id="d2")])
-    knowledge.replace_chunks("p1", "d1", [_kchunk("c4")])  # replaces c1, c2
-    assert sorted(c.id for c in knowledge.chunks_for_project("p1")) == ["c3", "c4"]
-    assert [c.id for c in knowledge.chunks_for_project("p1", ["d2"])] == ["c3"]
-    assert knowledge.delete_document("p1", "d1") is True
-    assert [c.id for c in knowledge.chunks_for_project("p1")] == ["c3"]
-    assert knowledge.delete_document("p1", "d1") is False
+    knowledge.replace_chunks("u1", "d1", [_kchunk("c1", ordinal=0), _kchunk("c2", ordinal=1)])
+    knowledge.replace_chunks("u1", "d2", [_kchunk("c3", doc_id="d2")])
+    knowledge.replace_chunks("u1", "d1", [_kchunk("c4")])  # replaces c1, c2
+    assert sorted(c.id for c in knowledge.chunks_for_documents("u1", ["d1", "d2"])) == ["c3", "c4"]
+    assert [c.id for c in knowledge.chunks_for_documents("u1", ["d2"])] == ["c3"]
+    assert knowledge.chunks_for_documents("u2", ["d1", "d2"]) == []  # never another user's
+    assert knowledge.chunks_for_documents("u1", []) == []
+    assert knowledge.delete_document("u1", "d1") is True
+    assert [c.id for c in knowledge.chunks_for_documents("u1", ["d1", "d2"])] == ["c3"]
 
 
 def test_embeddings_can_be_replaced(knowledge):
     knowledge.add_document(_kdoc())
-    knowledge.replace_chunks("p1", "d1", [_kchunk("c1")])
-    knowledge.set_embeddings("p1", {"c1": [1.0, 0.0, 0.0]})
-    assert knowledge.chunks_for_project("p1")[0].embedding == [1.0, 0.0, 0.0]
+    knowledge.replace_chunks("u1", "d1", [_kchunk("c1")])
+    knowledge.set_embeddings("u2", {"c1": [9.0]})  # another user: ignored
+    knowledge.set_embeddings("u1", {"c1": [1.0, 0.0, 0.0]})
+    assert knowledge.chunks_for_documents("u1", ["d1"])[0].embedding == [1.0, 0.0, 0.0]
+
+
+def test_library_embedding_setting_round_trips(knowledge):
+    from agentic_platform.agent_schema import EmbeddingConfig
+
+    assert knowledge.get_embedding("u1") is None
+    config = EmbeddingConfig(provider="google_genai", model="gemini-embedding-001")
+    knowledge.set_embedding("u1", config)
+    knowledge.set_embedding("u1", config)
+    assert knowledge.get_embedding("u1") == config
+    assert knowledge.get_embedding("u2") is None
 
 
 def test_stalled_indexing_is_reported_as_failed():
@@ -319,28 +368,6 @@ def test_stalled_indexing_is_reported_as_failed():
     assert _kdoc(status="processing").effective().status == "processing"
 
 
-def test_project_embedding_setting_round_trips(store):
-    from agentic_platform.agent_schema import EmbeddingConfig
-
-    record = _record()
-    store.create(record)
-    config = EmbeddingConfig(provider="google_genai", model="gemini-embedding-001")
-    assert store.set_knowledge_embedding(record.id, config)
-    assert store.get(record.id).knowledge_embedding == config
-
-
-def test_documents_list_per_tenant_newest_first(knowledge):
-    from datetime import timedelta
-
-    from agentic_platform.stores import _now
-
-    t = _now()
-    knowledge.add_document(_kdoc("d1", "p1", created_at=t - timedelta(minutes=2)))
-    knowledge.add_document(_kdoc("d2", "p2", created_at=t - timedelta(minutes=1)))
-    knowledge.add_document(_kdoc("d3", "p3", tenant_id="someone-else"))
-    assert [d.id for d in knowledge.list_documents_for_tenant("u1")] == ["d2", "d1"]
-
-
 def test_projects_can_be_deleted(store):
     record = _record()
     store.create(record)
@@ -349,12 +376,39 @@ def test_projects_can_be_deleted(store):
     assert store.delete(record.id) is False
 
 
-def test_deleting_a_projects_knowledge_leaves_other_projects_alone(knowledge):
-    knowledge.add_document(_kdoc("d1", "p1"))
-    knowledge.add_document(_kdoc("d2", "p1"))
-    knowledge.add_document(_kdoc("d3", "p2"))
-    knowledge.replace_chunks("p1", "d1", [_kchunk("c1")])
-    knowledge.replace_chunks("p2", "d3", [_kchunk("c3", doc_id="d3", project_id="p2")])
-    assert knowledge.delete_project("p1") == 2
-    assert knowledge.list_documents("p1") == [] and knowledge.chunks_for_project("p1") == []
-    assert [c.id for c in knowledge.chunks_for_project("p2")] == ["c3"]
+def test_project_scoped_knowledge_is_migrated_into_libraries():
+    """Knowledge stored before libraries (one project per file) joins its owner's library,
+    attached to that project, with the project's embedding model."""
+    from pymongo.errors import PyMongoError
+
+    from agentic_platform.agent_schema import EmbeddingConfig
+    from agentic_platform.stores import MongoKnowledgeStore, _now
+
+    uri = os.environ.get("MONGODB_URI") or "mongodb://localhost:27017"
+    db = mongo_database(uri, f"agentic_platform_test_{uuid.uuid4().hex[:8]}", timeout_ms=500)
+    try:
+        db.client.admin.command("ping")
+    except PyMongoError:
+        db.client.close()
+        pytest.skip("no MongoDB server reachable")
+    try:
+        embedding = {"provider": "google_genai", "model": "gemini-embedding-001"}
+        db["projects"].insert_one({"_id": "p1", "knowledge_embedding": embedding})
+        db["knowledge_documents"].insert_one({
+            "_id": "d1", "project_id": "p1", "tenant_id": "u1", "filename": "old.pdf", "kind": ".pdf",
+            "size_bytes": 5, "status": "ready", "chunk_count": 1, "error": None,
+            "created_at": _now(), "updated_at": _now(),
+        })
+        db["knowledge_chunks"].insert_one({
+            "_id": "c1", "project_id": "p1", "document_id": "d1", "ordinal": 0, "text": "t",
+            "source": "page 1", "embedding": [1.0],
+        })
+        knowledge = MongoKnowledgeStore(db)
+        assert [(d.id, d.project_ids) for d in knowledge.list_documents("u1")] == [("d1", ["p1"])]
+        assert [c.id for c in knowledge.chunks_for_documents("u1", ["d1"])] == ["c1"]
+        assert knowledge.get_embedding("u1") == EmbeddingConfig(**embedding)
+        assert db["knowledge_documents"].count_documents({"project_id": {"$exists": True}}) == 0
+        assert db["knowledge_chunks"].count_documents({"project_id": {"$exists": True}}) == 0
+    finally:
+        db.client.drop_database(db.name)
+        db.client.close()

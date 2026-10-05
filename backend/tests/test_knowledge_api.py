@@ -105,16 +105,6 @@ def test_uploads_are_checked_before_anything_is_queued(monkeypatch):
     assert c.post(f"/projects/{pid}/knowledge/documents", data={"files": "text"}).status_code == 400
 
 
-def test_file_size_and_count_limits(monkeypatch):
-    c, pid = _setup(monkeypatch)
-    monkeypatch.setattr(kb, "MAX_FILE_BYTES", 100)
-    r = _upload(c, pid, ("big.txt", b"x" * 101, "text/plain"))
-    assert r.status_code == 413
-
-    monkeypatch.setattr(kb, "MAX_FILES_PER_PROJECT", 2)
-    r = _upload(c, pid, *[(f"f{i}.txt", b"hotel", "text/plain") for i in range(3)])
-    assert r.status_code == 400 and "at most 2" in r.json()["message"]
-
 
 def test_another_users_project_knowledge_is_a_404(monkeypatch):
     c, pid = _setup(monkeypatch)
@@ -149,19 +139,6 @@ def test_no_embedding_key_is_a_clear_503(monkeypatch):
     r = _upload(c, pid, ("policy.md", GUIDE, "text/markdown"))
     assert r.status_code == 503 and "embedding" in r.json()["message"]
 
-
-def test_changing_the_embedding_model_reembeds_everything(monkeypatch):
-    c, pid = _setup(monkeypatch)
-    monkeypatch.setattr(app_module, "embedding_available", lambda provider: True)
-    _upload(c, pid, ("policy.md", GUIDE, "text/markdown"))
-    r = c.put(f"/projects/{pid}/knowledge/embedding", json={"provider": "openai", "model": "text-embedding-3-small"})
-    assert r.status_code == 202
-    body = c.get(f"/projects/{pid}/knowledge").json()
-    assert body["embedding"]["provider"] == "openai"
-    assert body["documents"][0]["status"] == "ready"
-
-    r = c.put(f"/projects/{pid}/knowledge/embedding", json={"provider": "openai", "model": "gpt-4o"})
-    assert r.status_code == 422
 
 
 def test_knowledge_search_is_offered_only_once_documents_are_ready(monkeypatch):
@@ -242,57 +219,6 @@ def test_a_run_searches_the_projects_documents(monkeypatch):
     assert "[policy.md — section \"Hotels\"" in seen[1].content and "INR 9,000" in seen[1].content
 
 
-def test_workspace_overview_lists_files_across_the_users_projects(monkeypatch):
-    c, pid = _setup(monkeypatch)
-    other_pid = c.post("/projects", json={"brief": "second"}).json()["project_id"]
-    _upload(c, pid, ("policy.md", GUIDE, "text/markdown"))
-    _upload(c, other_pid, ("fares.csv", b"city,fare\nGoa,7004\n", "text/csv"))
-
-    body = c.get("/knowledge").json()
-    assert [(d["filename"], d["project_id"]) for d in body["documents"]] == [
-        ("fares.csv", other_pid),
-        ("policy.md", pid),
-    ]
-    assert "tenant_id" not in body["documents"][0]
-    summary = {p["project_id"]: p for p in body["projects"]}
-    assert summary[pid]["documents"] == 1 and summary[pid]["ready"] == 1
-    assert summary[other_pid]["passages"] == 1
-    assert body["limits"]["max_files"] == 50
-
-    # Another user sees none of it.
-    other = TestClient(app_module.app)
-    token = other.post(
-        "/auth/register", json={"email": "other@example.com", "password": "a-long-password"}
-    ).json()["access_token"]
-    other.headers["Authorization"] = f"Bearer {token}"
-    assert other.get("/knowledge").json()["documents"] == []
-    assert TestClient(app_module.app).get("/knowledge").status_code == 401
-
-
-def test_files_of_a_deleted_project_are_not_listed(monkeypatch):
-    c, pid = _setup(monkeypatch)
-    _upload(c, pid, ("policy.md", GUIDE, "text/markdown"))
-    app_module._store._records.pop(pid)
-    assert c.get("/knowledge").json()["documents"] == []
-
-
-def test_deleting_a_project_removes_it_and_its_files(monkeypatch):
-    c, pid = _setup(monkeypatch)
-    keep = c.post("/projects", json={"brief": "keep me"}).json()["project_id"]
-    _upload(c, pid, ("policy.md", GUIDE, "text/markdown"))
-    _upload(c, keep, ("other.md", GUIDE, "text/markdown"))
-    c.post(f"/projects/{pid}/compile")
-
-    r = c.delete(f"/projects/{pid}")
-    assert r.status_code == 200
-    assert r.json() == {"deleted": pid, "knowledge_documents_deleted": 1}
-    assert c.get(f"/projects/{pid}").status_code == 404
-    assert pid not in app_module._COMPILED
-    assert [p["project_id"] for p in c.get("/projects").json()["projects"]] == [keep]
-    assert [d["filename"] for d in c.get("/knowledge").json()["documents"]] == ["other.md"]
-    assert app_module._knowledge.chunks_for_project(pid) == []
-    assert c.delete(f"/projects/{pid}").status_code == 404
-
 
 def test_another_users_project_cant_be_deleted(monkeypatch):
     c, pid = _setup(monkeypatch)
@@ -320,3 +246,141 @@ def test_a_deployed_project_must_be_undeployed_first(monkeypatch):
     # A deploy that failed before creating a runtime leaves nothing in AWS to orphan.
     app_module._store.set_deployment(pid, live.model_copy(update={"status": "failed", "runtime_id": None}))
     assert c.delete(f"/projects/{pid}").status_code == 200
+
+
+def _library_upload(c, *files):
+    return c.post("/knowledge/documents", files=[("files", f) for f in files])
+
+
+def _other_user():
+    other = TestClient(app_module.app)
+    token = other.post(
+        "/auth/register", json={"email": "other@example.com", "password": "a-long-password"}
+    ).json()["access_token"]
+    other.headers["Authorization"] = f"Bearer {token}"
+    return other
+
+
+def test_files_can_be_uploaded_to_the_library_without_a_project(monkeypatch):
+    c, pid = _setup(monkeypatch)
+    r = _library_upload(c, ("policy.md", GUIDE, "text/markdown"))
+    assert r.status_code == 202
+    assert r.json()["documents"][0]["project_ids"] == []
+
+    body = c.get("/knowledge").json()
+    doc = body["documents"][0]
+    assert (doc["filename"], doc["status"], doc["project_ids"]) == ("policy.md", "ready", [])
+    assert "tenant_id" not in doc
+    assert body["embedding"] == {"provider": "google_genai", "model": "gemini-embedding-001"}
+    assert body["passages"] == 1
+    # Searchable in the library, but no project has it yet.
+    assert c.post("/knowledge/search", json={"query": "hotel"}).json()["results"][0]["filename"] == "policy.md"
+    assert c.post(f"/projects/{pid}/knowledge/search", json={"query": "hotel"}).json()["results"] == []
+    project_view = c.get(f"/projects/{pid}/knowledge").json()
+    assert project_view["documents"] == []
+    assert [d["filename"] for d in project_view["available"]] == ["policy.md"]
+
+
+def test_one_file_can_be_attached_to_several_projects_and_detached(monkeypatch):
+    c, pid = _setup(monkeypatch)
+    second = c.post("/projects", json={"brief": "second"}).json()["project_id"]
+    doc_id = _library_upload(c, ("policy.md", GUIDE, "text/markdown")).json()["documents"][0]["id"]
+
+    assert c.post(f"/projects/{pid}/knowledge/documents/{doc_id}").status_code == 200
+    r = c.put(f"/knowledge/documents/{doc_id}/projects", json={"project_ids": [pid, second]})
+    assert sorted(r.json()["document"]["project_ids"]) == sorted([pid, second])
+    for project_id in (pid, second):
+        hits = c.post(f"/projects/{project_id}/knowledge/search", json={"query": "hotel"}).json()["results"]
+        assert hits[0]["filename"] == "policy.md"
+    summary = {p["project_id"]: p for p in c.get("/knowledge").json()["projects"]}
+    assert summary[pid]["documents"] == 1 and summary[second]["ready"] == 1
+
+    # Detaching from one project leaves it in the library and in the other project.
+    assert c.delete(f"/projects/{pid}/knowledge/documents/{doc_id}").status_code == 200
+    assert c.get(f"/projects/{pid}/knowledge").json()["documents"] == []
+    assert [d["id"] for d in c.get(f"/projects/{second}/knowledge").json()["documents"]] == [doc_id]
+    assert c.delete(f"/projects/{pid}/knowledge/documents/{doc_id}").status_code == 404
+
+    # Setting the list replaces it entirely.
+    r = c.put(f"/knowledge/documents/{doc_id}/projects", json={"project_ids": []})
+    assert r.json()["document"]["project_ids"] == []
+
+
+def test_uploading_from_a_project_attaches_the_file_to_it(monkeypatch):
+    c, pid = _setup(monkeypatch)
+    _upload(c, pid, ("policy.md", GUIDE, "text/markdown"))
+    doc = c.get("/knowledge").json()["documents"][0]
+    assert doc["project_ids"] == [pid]
+
+
+def test_attachments_are_limited_to_your_own_projects_and_files(monkeypatch):
+    c, pid = _setup(monkeypatch)
+    doc_id = _library_upload(c, ("policy.md", GUIDE, "text/markdown")).json()["documents"][0]["id"]
+    other = _other_user()
+    other_pid = other.post("/projects", json={"brief": "theirs"}).json()["project_id"]
+
+    # Their project with my file, my project with their (unknown) ids: all 404, nothing changes.
+    assert c.post(f"/projects/{other_pid}/knowledge/documents/{doc_id}").status_code == 404
+    assert c.put(f"/knowledge/documents/{doc_id}/projects", json={"project_ids": [pid, other_pid]}).status_code == 404
+    assert other.post(f"/projects/{other_pid}/knowledge/documents/{doc_id}").status_code == 404
+    assert other.delete(f"/knowledge/documents/{doc_id}").status_code == 404
+    assert other.get("/knowledge").json()["documents"] == []
+    assert c.get("/knowledge").json()["documents"][0]["project_ids"] == []
+    assert TestClient(app_module.app).get("/knowledge").status_code == 401
+
+
+def test_deleting_from_the_library_detaches_everywhere(monkeypatch):
+    c, pid = _setup(monkeypatch)
+    _upload(c, pid, ("policy.md", GUIDE, "text/markdown"))
+    doc_id = c.get("/knowledge").json()["documents"][0]["id"]
+    assert c.delete(f"/knowledge/documents/{doc_id}").status_code == 200
+    assert c.get("/knowledge").json()["documents"] == []
+    assert c.post(f"/projects/{pid}/knowledge/search", json={"query": "hotel"}).json()["results"] == []
+    r = c.delete(f"/knowledge/documents/{doc_id}")
+    assert r.status_code == 404 and r.json()["error_type"] == "DocumentNotFound"
+
+
+def test_library_file_size_count_and_name_limits(monkeypatch):
+    c, pid = _setup(monkeypatch)
+    monkeypatch.setattr(kb, "MAX_FILE_BYTES", 100)
+    assert _library_upload(c, ("big.txt", b"x" * 101, "text/plain")).status_code == 413
+
+    monkeypatch.setattr(kb, "MAX_FILES_PER_LIBRARY", 2)
+    r = _library_upload(c, *[(f"f{i}.txt", b"hotel", "text/plain") for i in range(3)])
+    assert r.status_code == 400 and "at most 2" in r.json()["message"]
+
+    _library_upload(c, ("a.txt", b"hotel", "text/plain"))
+    r = _upload(c, pid, ("A.TXT", b"hotel", "text/plain"))  # same name, from a project
+    assert r.status_code == 409 and "attach" in r.json()["message"]
+
+
+def test_changing_the_library_embedding_model_reembeds_everything(monkeypatch):
+    c, pid = _setup(monkeypatch)
+    monkeypatch.setattr(app_module, "embedding_available", lambda provider: True)
+    _library_upload(c, ("policy.md", GUIDE, "text/markdown"))
+    r = c.put("/knowledge/embedding", json={"provider": "openai", "model": "text-embedding-3-small"})
+    assert r.status_code == 202
+    body = c.get("/knowledge").json()
+    assert body["embedding"]["provider"] == "openai"
+    assert body["documents"][0]["status"] == "ready"
+    assert c.get(f"/projects/{pid}").json()["knowledge"]["embedding"]["provider"] == "openai"
+    assert c.put("/knowledge/embedding", json={"provider": "openai", "model": "gpt-4o"}).status_code == 422
+
+
+def test_deleting_a_project_keeps_its_files_in_the_library(monkeypatch):
+    c, pid = _setup(monkeypatch)
+    keep = c.post("/projects", json={"brief": "keep me"}).json()["project_id"]
+    _upload(c, pid, ("policy.md", GUIDE, "text/markdown"))
+    doc_id = c.get("/knowledge").json()["documents"][0]["id"]
+    c.put(f"/knowledge/documents/{doc_id}/projects", json={"project_ids": [pid, keep]})
+    c.post(f"/projects/{pid}/compile")
+
+    r = c.delete(f"/projects/{pid}")
+    assert r.status_code == 200
+    assert r.json() == {"deleted": pid, "knowledge_documents_detached": 1}
+    assert c.get(f"/projects/{pid}").status_code == 404
+    assert pid not in app_module._COMPILED
+    assert [p["project_id"] for p in c.get("/projects").json()["projects"]] == [keep]
+    assert c.get("/knowledge").json()["documents"][0]["project_ids"] == [keep]
+    assert c.delete(f"/projects/{pid}").status_code == 404
+

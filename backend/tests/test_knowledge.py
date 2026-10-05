@@ -175,7 +175,7 @@ def kstore():
 
     store = InMemoryKnowledgeStore()
     store.add_document(
-        KnowledgeDocument(id="d1", project_id="p1", tenant_id="u1", filename="guide.md", kind=".md", size_bytes=1)
+        KnowledgeDocument(id="d1", tenant_id="u1", project_ids=["p1"], filename="guide.md", kind=".md", size_bytes=1)
     )
     return store
 
@@ -188,65 +188,78 @@ GUIDE = (
 
 
 def test_indexing_stores_cited_passages_and_search_finds_the_right_one(kstore):
-    kb.index_document(kstore, "p1", "d1", GUIDE, FakeEmbedder(), chunk_budget=100)
-    doc = kstore.get_document("p1", "d1")
+    kb.index_document(kstore, "u1", "d1", GUIDE, FakeEmbedder(), chunk_budget=100)
+    doc = kstore.get_document("u1", "d1")
     assert doc.status == "ready" and doc.chunk_count >= 2
-    context = kb.store_context(kstore, "p1", FakeEmbedder())
+    context = kb.store_context(kstore, "u1", "p1", FakeEmbedder())
     hits = context.search("which hotel is cheapest", k=1)
     assert hits[0].filename == "guide.md"
     assert 'section "Hotels"' in hits[0].source and "INR 9,000" in hits[0].text
 
 
+def test_a_project_searches_only_its_attached_files(kstore):
+    from agentic_platform.stores import KnowledgeDocument
+
+    kstore.add_document(KnowledgeDocument(id="d2", tenant_id="u1", filename="other.md", kind=".md", size_bytes=1))
+    kb.index_document(kstore, "u1", "d1", GUIDE, FakeEmbedder(), chunk_budget=100)
+    kb.index_document(kstore, "u1", "d2", b"# Visa\nVisa on arrival for hotel guests.", FakeEmbedder(), chunk_budget=100)
+    in_project = {h.filename for h in kb.store_context(kstore, "u1", "p1", FakeEmbedder()).search("visa hotel", k=5)}
+    in_library = {h.filename for h in kb.store_context(kstore, "u1", None, FakeEmbedder()).search("visa hotel", k=5)}
+    assert in_project == {"guide.md"}
+    assert in_library == {"guide.md", "other.md"}
+    assert kb.store_context(kstore, "u1", "p2", FakeEmbedder()).search("hotel") == []
+
+
 def test_a_failed_extraction_is_recorded_not_raised(kstore):
-    kb.index_document(kstore, "p1", "d1", b"", FakeEmbedder(), chunk_budget=100)
-    doc = kstore.get_document("p1", "d1")
+    kb.index_document(kstore, "u1", "d1", b"", FakeEmbedder(), chunk_budget=100)
+    doc = kstore.get_document("u1", "d1")
     assert doc.status == "failed" and "empty" in doc.error
 
 
 def test_embedding_retries_then_reports_the_provider_error(kstore, monkeypatch):
     monkeypatch.setattr(kb, "_EMBED_BACKOFF_S", 0)
-    kb.index_document(kstore, "p1", "d1", GUIDE, FakeEmbedder(fail_times=2), chunk_budget=100)
-    assert kstore.get_document("p1", "d1").status == "ready"  # third attempt succeeded
+    kb.index_document(kstore, "u1", "d1", GUIDE, FakeEmbedder(fail_times=2), chunk_budget=100)
+    assert kstore.get_document("u1", "d1").status == "ready"  # third attempt succeeded
 
-    kb.index_document(kstore, "p1", "d1", GUIDE, FakeEmbedder(fail_times=99), chunk_budget=100)
-    doc = kstore.get_document("p1", "d1")
+    kb.index_document(kstore, "u1", "d1", GUIDE, FakeEmbedder(fail_times=99), chunk_budget=100)
+    doc = kstore.get_document("u1", "d1")
     assert doc.status == "failed" and "429" in doc.error
-    assert kstore.chunks_for_project("p1") == []  # no half-indexed passages left behind
+    assert kstore.chunks_for_documents("u1", ["d1"]) == []  # no half-indexed passages left behind
 
 
-def test_the_project_passage_limit_is_enforced(kstore):
-    kb.index_document(kstore, "p1", "d1", GUIDE, FakeEmbedder(), chunk_budget=1)
-    doc = kstore.get_document("p1", "d1")
+def test_the_library_passage_limit_is_enforced(kstore):
+    kb.index_document(kstore, "u1", "d1", GUIDE, FakeEmbedder(), chunk_budget=1)
+    doc = kstore.get_document("u1", "d1")
     assert doc.status == "failed" and "limit" in doc.error
 
 
 def test_documents_still_indexing_are_not_searched(kstore):
-    kb.index_document(kstore, "p1", "d1", GUIDE, FakeEmbedder(), chunk_budget=100)
-    kstore.update_document("p1", "d1", status="processing")
-    assert kb.store_context(kstore, "p1", FakeEmbedder()).search("hotel") == []
+    kb.index_document(kstore, "u1", "d1", GUIDE, FakeEmbedder(), chunk_budget=100)
+    kstore.update_document("u1", "d1", status="processing")
+    assert kb.store_context(kstore, "u1", "p1", FakeEmbedder()).search("hotel") == []
 
 
 def test_reembedding_replaces_vectors_and_keeps_text(kstore):
-    kb.index_document(kstore, "p1", "d1", GUIDE, FakeEmbedder(), chunk_budget=100)
-    before = kstore.chunks_for_project("p1")
+    kb.index_document(kstore, "u1", "d1", GUIDE, FakeEmbedder(), chunk_budget=100)
+    before = kstore.chunks_for_documents("u1", ["d1"])
 
     class Doubled(FakeEmbedder):
         def embed_documents(self, texts):
             return [[2 * x for x in _vector(t)] for t in texts]
 
-    kb.reembed_project(kstore, "p1", Doubled())
-    after = kstore.chunks_for_project("p1")
+    kb.reembed_library(kstore, "u1", Doubled())
+    after = kstore.chunks_for_documents("u1", ["d1"])
     assert [c.text for c in after] == [c.text for c in before]
     assert after[0].embedding == [2 * x for x in before[0].embedding]
-    assert kstore.get_document("p1", "d1").status == "ready"
+    assert kstore.get_document("u1", "d1").status == "ready"
 
 
 def test_search_ignores_vectors_of_another_size():
     from agentic_platform.stores import KnowledgeChunk
 
     chunks = [
-        KnowledgeChunk(id="a", project_id="p", document_id="d", ordinal=0, text="old", source="x", embedding=[1.0, 0.0]),
-        KnowledgeChunk(id="b", project_id="p", document_id="d", ordinal=1, text="new", source="y", embedding=[1.0, 0.0, 0.0]),
+        KnowledgeChunk(id="a", tenant_id="u", document_id="d", ordinal=0, text="old", source="x", embedding=[1.0, 0.0]),
+        KnowledgeChunk(id="b", tenant_id="u", document_id="d", ordinal=1, text="new", source="y", embedding=[1.0, 0.0, 0.0]),
     ]
     hits = kb.search(chunks, {"d": "f.txt"}, [1.0, 0.0, 0.0], k=5)
     assert [h.text for h in hits] == ["new"]

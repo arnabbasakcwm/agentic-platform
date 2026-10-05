@@ -541,12 +541,12 @@ def _knowledge_store():
     from agentic_platform.stores import KnowledgeChunk, KnowledgeDocument
 
     store = InMemoryKnowledgeStore()
-    store.add_document(KnowledgeDocument(id="d1", project_id="p", tenant_id="u", filename="policy.pdf",
+    store.add_document(KnowledgeDocument(id="d1", project_ids=["p"], tenant_id="u", filename="policy.pdf",
                                          kind=".pdf", size_bytes=1, status="ready", chunk_count=2))
-    store.replace_chunks("p", "d1", [
-        KnowledgeChunk(id="c1", project_id="p", document_id="d1", ordinal=0, text="Hotel cap INR 9,000.",
+    store.replace_chunks("u", "d1", [
+        KnowledgeChunk(id="c1", tenant_id="u", document_id="d1", ordinal=0, text="Hotel cap INR 9,000.",
                        source="page 2", embedding=[0.0, 1.0]),
-        KnowledgeChunk(id="c2", project_id="p", document_id="d1", ordinal=1, text="Flights: economy.",
+        KnowledgeChunk(id="c2", tenant_id="u", document_id="d1", ordinal=1, text="Flights: economy.",
                        source="page 1", embedding=[1.0, 0.0]),
     ])
     return store, EmbeddingConfig(provider="openai", model="text-embedding-3-small")
@@ -557,7 +557,7 @@ def test_runtime_searches_its_knowledge_snapshot(tmp_path, monkeypatch):
     from agentic_platform.graph_builder import Embedder
 
     store, embedding = _knowledge_store()
-    meta, vectors = kb.build_snapshot(store, "p", embedding)
+    meta, vectors = kb.build_snapshot(store, "u", "p", embedding)
     (tmp_path / kb.SNAPSHOT_FILE).write_bytes(meta)
     (tmp_path / kb.SNAPSHOT_VECTORS_FILE).write_bytes(vectors)
 
@@ -613,7 +613,7 @@ def test_deploy_bakes_in_the_knowledge_base_its_agents_search(api, monkeypatch):
         path.write_bytes(b"zip")
 
     monkeypatch.setattr(app_module, "_package_builder", packager)
-    monkeypatch.setattr(app_module, "_knowledge_context", lambda project: None)
+    monkeypatch.setattr(app_module, "_knowledge_context", lambda project, embedding=None: None)
     h = api.login("kb@example.com")
     pid = _compiled_project(api, h)
     plan = _plan(tools=["knowledge_search"])
@@ -624,12 +624,13 @@ def test_deploy_bakes_in_the_knowledge_base_its_agents_search(api, monkeypatch):
     r = api.post(f"/projects/{pid}/deploy", headers=h)
     assert r.status_code == 409 and r.json()["error_type"] == "KnowledgeUnavailable"
 
-    for doc in store.list_documents("p"):
-        app_module._knowledge.add_document(doc.model_copy(update={"project_id": pid}))
-        app_module._knowledge.replace_chunks(pid, doc.id, [
-            c.model_copy(update={"project_id": pid}) for c in store.chunks_for_project("p", [doc.id])
+    user_id = api.get("/auth/me", headers=h).json()["id"]
+    for doc in store.list_documents("u"):
+        app_module._knowledge.add_document(doc.model_copy(update={"tenant_id": user_id, "project_ids": [pid]}))
+        app_module._knowledge.replace_chunks(user_id, doc.id, [
+            c.model_copy(update={"tenant_id": user_id}) for c in store.chunks_for_documents("u", [doc.id])
         ])
-    app_module._store.set_knowledge_embedding(pid, embedding)
+    app_module._knowledge.set_embedding(user_id, embedding)
     r = api.post(f"/projects/{pid}/deploy", headers=h)
     assert r.status_code == 202
     assert api.get(f"/projects/{pid}/deployment", headers=h).json()["deployment"]["status"] == "ready"

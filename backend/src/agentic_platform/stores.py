@@ -117,8 +117,6 @@ class ProjectRecord(BaseModel):
     side_effect_tools_enabled: list[str] = Field(default_factory=list)
     conversation: list[ChatMessage] = Field(default_factory=list)
     deployment: Deployment | None = None
-    # Set when the first document is uploaded; changing it re-embeds every passage.
-    knowledge_embedding: EmbeddingConfig | None = None
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
 
@@ -134,12 +132,14 @@ KNOWLEDGE_STALE_AFTER = timedelta(minutes=30)
 
 
 class KnowledgeDocument(BaseModel):
-    """One uploaded file in a project's knowledge base. The file itself isn't kept —
-    only the passages extracted from it (KnowledgeChunk)."""
+    """One uploaded file in a user's knowledge library. The file itself isn't kept — only
+    the passages extracted from it (KnowledgeChunk). It is indexed once and can be attached
+    to any number of the user's projects; a project's agents search only the files
+    attached to it."""
 
     id: str
-    project_id: str
     tenant_id: str
+    project_ids: list[str] = Field(default_factory=list)
     filename: str
     kind: str  # file extension, e.g. ".pdf"
     size_bytes: int
@@ -185,9 +185,6 @@ class ProjectStore(Protocol):
         project is gone."""
         ...
 
-    def set_knowledge_embedding(self, project_id: str, config: EmbeddingConfig | None) -> bool:
-        """Record the embedding model the project's knowledge base uses."""
-        ...
 
     def delete(self, project_id: str) -> bool:
         """Remove the project. False if it didn't exist."""
@@ -281,12 +278,6 @@ class InMemoryProjectStore:
         record.deployment = deployment.model_copy() if deployment else None
         return True
 
-    def set_knowledge_embedding(self, project_id: str, config: EmbeddingConfig | None) -> bool:
-        record = self._records.get(project_id)
-        if record is None:
-            return False
-        record.knowledge_embedding = config.model_copy() if config else None
-        return True
 
     def delete(self, project_id: str) -> bool:
         return self._records.pop(project_id, None) is not None
@@ -440,13 +431,6 @@ class MongoProjectStore:
             )
         return result.matched_count == 1
 
-    def set_knowledge_embedding(self, project_id: str, config: EmbeddingConfig | None) -> bool:
-        value = config.model_dump() if config else None
-        with _mongo_errors():
-            result = self._projects.update_one(
-                {"_id": project_id}, {"$set": {"knowledge_embedding": value}}
-            )
-        return result.matched_count == 1
 
     def delete(self, project_id: str) -> bool:
         with _mongo_errors():
@@ -496,207 +480,294 @@ class MongoUserStore:
 
 # ---------------------------------------------------------------------------- knowledge
 class KnowledgeStore(Protocol):
-    """A project's documents and their passages. Every method is scoped by project id."""
+    """Each user's knowledge library: documents, their passages, which projects each
+    document is attached to, and the library's embedding model. Every method is scoped by
+    tenant id, so one user can never read or change another's library."""
 
     def add_document(self, doc: KnowledgeDocument) -> None: ...
 
-    def get_document(self, project_id: str, document_id: str) -> KnowledgeDocument | None: ...
+    def get_document(self, tenant_id: str, document_id: str) -> KnowledgeDocument | None: ...
 
-    def list_documents(self, project_id: str) -> list[KnowledgeDocument]:
-        """Oldest first."""
+    def list_documents(self, tenant_id: str, project_id: str | None = None) -> list[KnowledgeDocument]:
+        """The library newest first, or only the documents attached to `project_id`."""
         ...
 
-    def list_documents_for_tenant(self, tenant_id: str) -> list[KnowledgeDocument]:
-        """Every document of every project the tenant owns, newest first."""
+    def update_document(self, tenant_id: str, document_id: str, **changes: Any) -> bool: ...
+
+    def attach(self, tenant_id: str, document_id: str, project_id: str) -> bool:
+        """Attach a document to a project (no-op if already attached). False if no such document."""
         ...
 
-    def update_document(self, project_id: str, document_id: str, **changes: Any) -> bool: ...
+    def detach(self, tenant_id: str, document_id: str, project_id: str) -> bool:
+        """Detach a document from a project. False if it wasn't attached."""
+        ...
 
-    def replace_chunks(self, project_id: str, document_id: str, chunks: list[KnowledgeChunk]) -> None:
+    def detach_project(self, tenant_id: str, project_id: str) -> int:
+        """Detach every document from a project (when it is deleted); returns how many."""
+        ...
+
+    def replace_chunks(self, tenant_id: str, document_id: str, chunks: list[KnowledgeChunk]) -> None:
         """Set a document's passages, replacing any it had."""
         ...
 
-    def delete_document(self, project_id: str, document_id: str) -> bool:
-        """Remove a document and its passages. False if it didn't exist."""
+    def delete_document(self, tenant_id: str, document_id: str) -> bool:
+        """Remove a document and its passages from the library. False if it didn't exist."""
         ...
 
-    def delete_project(self, project_id: str) -> int:
-        """Remove every document and passage of a project; returns how many documents."""
+    def chunks_for_documents(self, tenant_id: str, document_ids: list[str]) -> list[KnowledgeChunk]:
+        """Passages of these documents, in document order."""
         ...
 
-    def chunks_for_project(self, project_id: str, document_ids: list[str] | None = None) -> list[KnowledgeChunk]:
-        """Passages of the project (optionally only of these documents), in order."""
-        ...
-
-    def set_embeddings(self, project_id: str, embeddings: dict[str, list[float]]) -> None:
+    def set_embeddings(self, tenant_id: str, embeddings: dict[str, list[float]]) -> None:
         """Replace the embeddings of these passages (by passage id)."""
         ...
+
+    def get_embedding(self, tenant_id: str) -> EmbeddingConfig | None:
+        """The library's embedding model, or None before the first upload."""
+        ...
+
+    def set_embedding(self, tenant_id: str, config: EmbeddingConfig) -> None: ...
 
 
 class InMemoryKnowledgeStore:
     def __init__(self) -> None:
         self._docs: dict[str, KnowledgeDocument] = {}
         self._chunks: dict[str, KnowledgeChunk] = {}
+        self._embeddings: dict[str, EmbeddingConfig] = {}
+
+    def _own(self, tenant_id: str, document_id: str) -> KnowledgeDocument | None:
+        doc = self._docs.get(document_id)
+        return doc if doc is not None and doc.tenant_id == tenant_id else None
 
     def add_document(self, doc: KnowledgeDocument) -> None:
-        self._docs[doc.id] = doc.model_copy()
+        self._docs[doc.id] = doc.model_copy(deep=True)
 
-    def get_document(self, project_id: str, document_id: str) -> KnowledgeDocument | None:
-        doc = self._docs.get(document_id)
-        return doc.model_copy() if doc and doc.project_id == project_id else None
+    def get_document(self, tenant_id: str, document_id: str) -> KnowledgeDocument | None:
+        doc = self._own(tenant_id, document_id)
+        return doc.model_copy(deep=True) if doc else None
 
-    def list_documents(self, project_id: str) -> list[KnowledgeDocument]:
-        docs = [d for d in self._docs.values() if d.project_id == project_id]
-        return [d.model_copy() for d in sorted(docs, key=lambda d: d.created_at)]
+    def list_documents(self, tenant_id: str, project_id: str | None = None) -> list[KnowledgeDocument]:
+        docs = [
+            d for d in self._docs.values()
+            if d.tenant_id == tenant_id and (project_id is None or project_id in d.project_ids)
+        ]
+        return [d.model_copy(deep=True) for d in sorted(docs, key=lambda d: d.created_at, reverse=True)]
 
-    def list_documents_for_tenant(self, tenant_id: str) -> list[KnowledgeDocument]:
-        docs = [d for d in self._docs.values() if d.tenant_id == tenant_id]
-        return [d.model_copy() for d in sorted(docs, key=lambda d: d.created_at, reverse=True)]
-
-    def update_document(self, project_id: str, document_id: str, **changes: Any) -> bool:
-        doc = self._docs.get(document_id)
-        if doc is None or doc.project_id != project_id:
+    def update_document(self, tenant_id: str, document_id: str, **changes: Any) -> bool:
+        doc = self._own(tenant_id, document_id)
+        if doc is None:
             return False
         self._docs[document_id] = doc.model_copy(update={**changes, "updated_at": _now()})
         return True
 
-    def replace_chunks(self, project_id: str, document_id: str, chunks: list[KnowledgeChunk]) -> None:
-        for cid in [c.id for c in self._chunks.values() if c.document_id == document_id]:
+    def attach(self, tenant_id: str, document_id: str, project_id: str) -> bool:
+        doc = self._own(tenant_id, document_id)
+        if doc is None:
+            return False
+        if project_id not in doc.project_ids:
+            doc.project_ids = [*doc.project_ids, project_id]
+        return True
+
+    def detach(self, tenant_id: str, document_id: str, project_id: str) -> bool:
+        doc = self._own(tenant_id, document_id)
+        if doc is None or project_id not in doc.project_ids:
+            return False
+        doc.project_ids = [p for p in doc.project_ids if p != project_id]
+        return True
+
+    def detach_project(self, tenant_id: str, project_id: str) -> int:
+        count = 0
+        for doc in self._docs.values():
+            if doc.tenant_id == tenant_id and project_id in doc.project_ids:
+                doc.project_ids = [p for p in doc.project_ids if p != project_id]
+                count += 1
+        return count
+
+    def replace_chunks(self, tenant_id: str, document_id: str, chunks: list[KnowledgeChunk]) -> None:
+        for cid in [c.id for c in self._chunks.values() if c.tenant_id == tenant_id and c.document_id == document_id]:
             del self._chunks[cid]
         for c in chunks:
             self._chunks[c.id] = c.model_copy()
 
-    def delete_document(self, project_id: str, document_id: str) -> bool:
-        doc = self._docs.get(document_id)
-        if doc is None or doc.project_id != project_id:
+    def delete_document(self, tenant_id: str, document_id: str) -> bool:
+        if self._own(tenant_id, document_id) is None:
             return False
         del self._docs[document_id]
-        self.replace_chunks(project_id, document_id, [])
+        self.replace_chunks(tenant_id, document_id, [])
         return True
 
-    def delete_project(self, project_id: str) -> int:
-        doc_ids = [d.id for d in self._docs.values() if d.project_id == project_id]
-        for doc_id in doc_ids:
-            del self._docs[doc_id]
-        for chunk_id in [c.id for c in self._chunks.values() if c.project_id == project_id]:
-            del self._chunks[chunk_id]
-        return len(doc_ids)
-
-    def chunks_for_project(self, project_id: str, document_ids: list[str] | None = None) -> list[KnowledgeChunk]:
-        chunks = [
-            c for c in self._chunks.values()
-            if c.project_id == project_id and (document_ids is None or c.document_id in document_ids)
-        ]
+    def chunks_for_documents(self, tenant_id: str, document_ids: list[str]) -> list[KnowledgeChunk]:
+        wanted = set(document_ids)
+        chunks = [c for c in self._chunks.values() if c.tenant_id == tenant_id and c.document_id in wanted]
         return [c.model_copy() for c in sorted(chunks, key=lambda c: (c.document_id, c.ordinal))]
 
-    def set_embeddings(self, project_id: str, embeddings: dict[str, list[float]]) -> None:
+    def set_embeddings(self, tenant_id: str, embeddings: dict[str, list[float]]) -> None:
         for cid, vector in embeddings.items():
             chunk = self._chunks.get(cid)
-            if chunk is not None and chunk.project_id == project_id:
+            if chunk is not None and chunk.tenant_id == tenant_id:
                 self._chunks[cid] = chunk.model_copy(update={"embedding": list(vector)})
+
+    def get_embedding(self, tenant_id: str) -> EmbeddingConfig | None:
+        config = self._embeddings.get(tenant_id)
+        return config.model_copy() if config else None
+
+    def set_embedding(self, tenant_id: str, config: EmbeddingConfig) -> None:
+        self._embeddings[tenant_id] = config.model_copy()
 
 
 class MongoKnowledgeStore:
-    """`knowledge_documents` (one per file) and `knowledge_chunks` (one per passage),
-    each with the id as `_id` and indexed by project."""
+    """`knowledge_documents` (one per file), `knowledge_chunks` (one per passage) and
+    `knowledge_settings` (one per user: the library's embedding model), each keyed by
+    tenant."""
 
     def __init__(self, db: "Database"):
+        self._db = db
         self._docs = db["knowledge_documents"]
         self._chunks = db["knowledge_chunks"]
-        self._index_ready = False
+        self._settings = db["knowledge_settings"]
+        self._ready = False
 
-    def _ensure_indexes(self) -> None:
-        if not self._index_ready:
-            self._docs.create_index([("project_id", 1), ("created_at", 1)])
-            self._docs.create_index([("tenant_id", 1), ("created_at", -1)])
-            self._chunks.create_index([("project_id", 1), ("document_id", 1), ("ordinal", 1)])
-            self._index_ready = True
+    def _ensure_ready(self) -> None:
+        if self._ready:
+            return
+        self._migrate_project_scoped()
+        self._docs.create_index([("tenant_id", 1), ("created_at", -1)])
+        self._docs.create_index([("tenant_id", 1), ("project_ids", 1)])
+        self._chunks.create_index([("tenant_id", 1), ("document_id", 1), ("ordinal", 1)])
+        self._ready = True
+
+    def _migrate_project_scoped(self) -> None:
+        """One-time upgrade of knowledge stored before libraries existed, when each file
+        belonged to one project: the file joins its owner's library attached to that
+        project, its passages are keyed by owner, and the owner's library takes the
+        embedding model the project used. Idempotent; a no-op once nothing is left."""
+        for doc in self._docs.find({"project_id": {"$exists": True}}):
+            project_id, tenant_id = doc["project_id"], doc["tenant_id"]
+            self._docs.update_one(
+                {"_id": doc["_id"]},
+                {"$set": {"project_ids": [project_id]}, "$unset": {"project_id": ""}},
+            )
+            self._chunks.update_many(
+                {"document_id": doc["_id"]},
+                {"$set": {"tenant_id": tenant_id}, "$unset": {"project_id": ""}},
+            )
+            if self._settings.find_one({"_id": tenant_id}) is None:
+                project = self._db["projects"].find_one({"_id": project_id}, {"knowledge_embedding": 1})
+                embedding = (project or {}).get("knowledge_embedding")
+                if embedding:
+                    self._settings.update_one(
+                        {"_id": tenant_id}, {"$setOnInsert": {"embedding": embedding}}, upsert=True
+                    )
 
     @staticmethod
-    def _doc_out(doc: dict[str, Any]) -> KnowledgeDocument:
+    def _out(model, doc: dict[str, Any]):
         doc = dict(doc)
         doc["id"] = doc.pop("_id")
-        return KnowledgeDocument.model_validate(doc)
+        return model.model_validate(doc)
 
     @staticmethod
-    def _chunk_out(doc: dict[str, Any]) -> KnowledgeChunk:
-        doc = dict(doc)
-        doc["id"] = doc.pop("_id")
-        return KnowledgeChunk.model_validate(doc)
+    def _in(model: BaseModel) -> dict[str, Any]:
+        body = model.model_dump()
+        body["_id"] = body.pop("id")
+        return body
 
     def add_document(self, doc: KnowledgeDocument) -> None:
-        body = doc.model_dump()
-        body["_id"] = body.pop("id")
         with _mongo_errors():
-            self._ensure_indexes()
-            self._docs.insert_one(body)
+            self._ensure_ready()
+            self._docs.insert_one(self._in(doc))
 
-    def get_document(self, project_id: str, document_id: str) -> KnowledgeDocument | None:
+    def get_document(self, tenant_id: str, document_id: str) -> KnowledgeDocument | None:
         with _mongo_errors():
-            doc = self._docs.find_one({"_id": document_id, "project_id": project_id})
-        return self._doc_out(doc) if doc else None
+            self._ensure_ready()
+            doc = self._docs.find_one({"_id": document_id, "tenant_id": tenant_id})
+        return self._out(KnowledgeDocument, doc) if doc else None
 
-    def list_documents(self, project_id: str) -> list[KnowledgeDocument]:
+    def list_documents(self, tenant_id: str, project_id: str | None = None) -> list[KnowledgeDocument]:
+        query: dict[str, Any] = {"tenant_id": tenant_id}
+        if project_id is not None:
+            query["project_ids"] = project_id
         with _mongo_errors():
-            docs = list(self._docs.find({"project_id": project_id}).sort("created_at", 1))
-        return [self._doc_out(d) for d in docs]
+            self._ensure_ready()
+            docs = list(self._docs.find(query).sort("created_at", -1))
+        return [self._out(KnowledgeDocument, d) for d in docs]
 
-    def list_documents_for_tenant(self, tenant_id: str) -> list[KnowledgeDocument]:
-        with _mongo_errors():
-            self._ensure_indexes()
-            docs = list(self._docs.find({"tenant_id": tenant_id}).sort("created_at", -1))
-        return [self._doc_out(d) for d in docs]
-
-    def update_document(self, project_id: str, document_id: str, **changes: Any) -> bool:
+    def update_document(self, tenant_id: str, document_id: str, **changes: Any) -> bool:
         with _mongo_errors():
             result = self._docs.update_one(
-                {"_id": document_id, "project_id": project_id},
+                {"_id": document_id, "tenant_id": tenant_id},
                 {"$set": {**changes, "updated_at": _now()}},
             )
         return result.matched_count == 1
 
-    def replace_chunks(self, project_id: str, document_id: str, chunks: list[KnowledgeChunk]) -> None:
-        bodies = []
-        for c in chunks:
-            body = c.model_dump()
-            body["_id"] = body.pop("id")
-            bodies.append(body)
+    def attach(self, tenant_id: str, document_id: str, project_id: str) -> bool:
         with _mongo_errors():
-            self._ensure_indexes()
-            self._chunks.delete_many({"project_id": project_id, "document_id": document_id})
-            if bodies:
-                self._chunks.insert_many(bodies, ordered=False)
+            result = self._docs.update_one(
+                {"_id": document_id, "tenant_id": tenant_id}, {"$addToSet": {"project_ids": project_id}}
+            )
+        return result.matched_count == 1
 
-    def delete_document(self, project_id: str, document_id: str) -> bool:
+    def detach(self, tenant_id: str, document_id: str, project_id: str) -> bool:
         with _mongo_errors():
-            result = self._docs.delete_one({"_id": document_id, "project_id": project_id})
-            self._chunks.delete_many({"project_id": project_id, "document_id": document_id})
+            result = self._docs.update_one(
+                {"_id": document_id, "tenant_id": tenant_id, "project_ids": project_id},
+                {"$pull": {"project_ids": project_id}},
+            )
+        return result.matched_count == 1
+
+    def detach_project(self, tenant_id: str, project_id: str) -> int:
+        with _mongo_errors():
+            result = self._docs.update_many(
+                {"tenant_id": tenant_id, "project_ids": project_id}, {"$pull": {"project_ids": project_id}}
+            )
+        return result.modified_count
+
+    def replace_chunks(self, tenant_id: str, document_id: str, chunks: list[KnowledgeChunk]) -> None:
+        with _mongo_errors():
+            self._ensure_ready()
+            self._chunks.delete_many({"tenant_id": tenant_id, "document_id": document_id})
+            if chunks:
+                self._chunks.insert_many([self._in(c) for c in chunks], ordered=False)
+
+    def delete_document(self, tenant_id: str, document_id: str) -> bool:
+        with _mongo_errors():
+            result = self._docs.delete_one({"_id": document_id, "tenant_id": tenant_id})
+            if result.deleted_count:
+                self._chunks.delete_many({"tenant_id": tenant_id, "document_id": document_id})
         return result.deleted_count == 1
 
-    def delete_project(self, project_id: str) -> int:
+    def chunks_for_documents(self, tenant_id: str, document_ids: list[str]) -> list[KnowledgeChunk]:
+        if not document_ids:
+            return []
         with _mongo_errors():
-            result = self._docs.delete_many({"project_id": project_id})
-            self._chunks.delete_many({"project_id": project_id})
-        return result.deleted_count
+            self._ensure_ready()
+            docs = list(
+                self._chunks.find({"tenant_id": tenant_id, "document_id": {"$in": document_ids}})
+                .sort([("document_id", 1), ("ordinal", 1)])
+            )
+        return [self._out(KnowledgeChunk, d) for d in docs]
 
-    def chunks_for_project(self, project_id: str, document_ids: list[str] | None = None) -> list[KnowledgeChunk]:
-        query: dict[str, Any] = {"project_id": project_id}
-        if document_ids is not None:
-            query["document_id"] = {"$in": document_ids}
-        with _mongo_errors():
-            docs = list(self._chunks.find(query).sort([("document_id", 1), ("ordinal", 1)]))
-        return [self._chunk_out(d) for d in docs]
-
-    def set_embeddings(self, project_id: str, embeddings: dict[str, list[float]]) -> None:
+    def set_embeddings(self, tenant_id: str, embeddings: dict[str, list[float]]) -> None:
         from pymongo import UpdateOne
 
         ops = [
-            UpdateOne({"_id": cid, "project_id": project_id}, {"$set": {"embedding": vector}})
+            UpdateOne({"_id": cid, "tenant_id": tenant_id}, {"$set": {"embedding": vector}})
             for cid, vector in embeddings.items()
         ]
         if ops:
             with _mongo_errors():
                 self._chunks.bulk_write(ops, ordered=False)
+
+    def get_embedding(self, tenant_id: str) -> EmbeddingConfig | None:
+        with _mongo_errors():
+            self._ensure_ready()
+            doc = self._settings.find_one({"_id": tenant_id})
+        return EmbeddingConfig.model_validate(doc["embedding"]) if doc and doc.get("embedding") else None
+
+    def set_embedding(self, tenant_id: str, config: EmbeddingConfig) -> None:
+        with _mongo_errors():
+            self._settings.update_one(
+                {"_id": tenant_id}, {"$set": {"embedding": config.model_dump()}}, upsert=True
+            )
 
 
 def make_stores() -> tuple[ProjectStore, UserStore, KnowledgeStore]:

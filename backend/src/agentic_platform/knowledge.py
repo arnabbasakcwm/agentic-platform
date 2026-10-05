@@ -2,8 +2,9 @@
 
 Pipeline: extract text from a file (PDF, Word, text/Markdown, CSV) → split it into
 overlapping passages that remember where they came from (page, rows, section) → embed
-them with the project's embedding model → store them. Agents reach the passages only
-through the `knowledge_search` tool, scoped to their own project.
+them with the library's embedding model → store them. Files live in each user's library,
+indexed once, and are attached to any number of projects. Agents reach the passages only
+through the `knowledge_search` tool, which searches the files attached to their project.
 
 Original files are not kept: only the extracted passages are stored, which is all that
 re-embedding needs. Parsing runs on the platform, never in a deployed runtime.
@@ -39,8 +40,10 @@ logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------- limits
 MAX_FILE_BYTES = 20 * 1024 * 1024
-MAX_FILES_PER_PROJECT = 50
-MAX_CHUNKS_PER_PROJECT = 20_000
+# Per user's library: one search loads at most this many passages, so a numpy scan stays
+# in milliseconds (see the decision log).
+MAX_FILES_PER_LIBRARY = 100
+MAX_CHUNKS_PER_LIBRARY = 20_000
 # Caps on what one file may expand to, so a small malicious file can't exhaust memory.
 MAX_PDF_PAGES = 2_000
 MAX_TEXT_CHARS = 5_000_000
@@ -81,7 +84,7 @@ class KnowledgeChunk(BaseModel):
     don't ship the database layer."""
 
     id: str
-    project_id: str
+    tenant_id: str
     document_id: str
     ordinal: int
     text: str
@@ -360,7 +363,7 @@ def _embed_all(embedder: Embedder, texts: list[str], on_batch: Callable[[], None
 
 def index_document(
     store: KnowledgeStore,
-    project_id: str,
+    tenant_id: str,
     document_id: str,
     data: bytes,
     embedder: Embedder,
@@ -368,12 +371,12 @@ def index_document(
 ) -> None:
     """The background job for one upload: extract → chunk → embed → store. The outcome is
     written to the document's status; this never raises."""
-    doc = store.get_document(project_id, document_id)
+    doc = store.get_document(tenant_id, document_id)
     if doc is None:
         return
 
     def touch() -> None:
-        store.update_document(project_id, document_id, status="processing")
+        store.update_document(tenant_id, document_id, status="processing")
 
     try:
         touch()
@@ -381,18 +384,18 @@ def index_document(
         if len(passages) > chunk_budget:
             raise KnowledgeError(
                 f"this file has {len(passages)} passages, more than the {max(chunk_budget, 0)} "
-                f"left in this project's knowledge base (limit {MAX_CHUNKS_PER_PROJECT})"
+                f"left in your knowledge library (limit {MAX_CHUNKS_PER_LIBRARY})"
             )
         vectors = _embed_all(embedder, [p.text for p in passages], touch)
-        if store.get_document(project_id, document_id) is None:
+        if store.get_document(tenant_id, document_id) is None:
             return  # deleted while it was being indexed
         store.replace_chunks(
-            project_id,
+            tenant_id,
             document_id,
             [
                 KnowledgeChunk(
                     id=uuid.uuid4().hex,
-                    project_id=project_id,
+                    tenant_id=tenant_id,
                     document_id=document_id,
                     ordinal=i,
                     text=p.text,
@@ -402,33 +405,33 @@ def index_document(
                 for i, (p, v) in enumerate(zip(passages, vectors))
             ],
         )
-        store.update_document(project_id, document_id, status="ready", error=None, chunk_count=len(passages))
+        store.update_document(tenant_id, document_id, status="ready", error=None, chunk_count=len(passages))
     except Exception as e:  # noqa: BLE001 — a background job must record, not raise
         if not isinstance(e, KnowledgeError):
-            logger.exception("indexing document %s of project %s failed", document_id, project_id)
-        store.replace_chunks(project_id, document_id, [])
-        store.update_document(project_id, document_id, status="failed", error=_describe(e), chunk_count=0)
+            logger.exception("indexing document %s failed", document_id)
+        store.replace_chunks(tenant_id, document_id, [])
+        store.update_document(tenant_id, document_id, status="failed", error=_describe(e), chunk_count=0)
 
 
-def reembed_project(store: KnowledgeStore, project_id: str, embedder: Embedder) -> None:
-    """The background job after the embedding model changes: re-embed every stored passage
-    (the text is kept, so files needn't be uploaded again). Never raises."""
-    for doc in store.list_documents(project_id):
+def reembed_library(store: KnowledgeStore, tenant_id: str, embedder: Embedder) -> None:
+    """The background job after the library's embedding model changes: re-embed every
+    stored passage (the text is kept, so files needn't be uploaded again). Never raises."""
+    for doc in store.list_documents(tenant_id):
         if doc.status != "ready" and doc.status != "processing":
             continue
         try:
-            store.update_document(project_id, doc.id, status="processing")
-            chunks = store.chunks_for_project(project_id, [doc.id])
+            store.update_document(tenant_id, doc.id, status="processing")
+            chunks = store.chunks_for_documents(tenant_id, [doc.id])
             vectors = _embed_all(
                 embedder,
                 [c.text for c in chunks],
-                lambda doc_id=doc.id: store.update_document(project_id, doc_id, status="processing"),
+                lambda doc_id=doc.id: store.update_document(tenant_id, doc_id, status="processing"),
             )
-            store.set_embeddings(project_id, {c.id: v for c, v in zip(chunks, vectors)})
-            store.update_document(project_id, doc.id, status="ready", error=None)
+            store.set_embeddings(tenant_id, {c.id: v for c, v in zip(chunks, vectors)})
+            store.update_document(tenant_id, doc.id, status="ready", error=None)
         except Exception as e:  # noqa: BLE001
-            logger.exception("re-embedding document %s of project %s failed", doc.id, project_id)
-            store.update_document(project_id, doc.id, status="failed", error=_describe(e))
+            logger.exception("re-embedding document %s failed", doc.id)
+            store.update_document(tenant_id, doc.id, status="failed", error=_describe(e))
 
 
 # ---------------------------------------------------------------------------- search
@@ -479,12 +482,20 @@ class KnowledgeContext:
         return search(chunks, filenames, self.embed_query(query), k)
 
 
-def store_context(store: KnowledgeStore, project_id: str, embedder: Embedder) -> KnowledgeContext:
-    """A context reading the project's ready documents from the store."""
+def _ready_documents(store: KnowledgeStore, tenant_id: str, project_id: str | None) -> dict[str, str]:
+    return {d.id: d.filename for d in store.list_documents(tenant_id, project_id) if d.status == "ready"}
+
+
+def store_context(
+    store: KnowledgeStore, tenant_id: str, project_id: str | None, embedder: Embedder
+) -> KnowledgeContext:
+    """A context reading ready documents from the store: those attached to `project_id`,
+    or (None) the whole library — read at search time, so attachments made after
+    compiling count."""
 
     def load() -> tuple[list[KnowledgeChunk], dict[str, str]]:
-        names = {d.id: d.filename for d in store.list_documents(project_id) if d.status == "ready"}
-        return (store.chunks_for_project(project_id, list(names)) if names else []), names
+        names = _ready_documents(store, tenant_id, project_id)
+        return store.chunks_for_documents(tenant_id, list(names)), names
 
     return KnowledgeContext(embedder.embed_query, load)
 
@@ -497,12 +508,12 @@ SNAPSHOT_VECTORS_FILE = "knowledge_vectors.npy"
 
 
 def build_snapshot(
-    store: KnowledgeStore, project_id: str, embedding: EmbeddingConfig
+    store: KnowledgeStore, tenant_id: str, project_id: str, embedding: EmbeddingConfig
 ) -> tuple[bytes, bytes] | None:
-    """(knowledge.json, knowledge_vectors.npy) for the project's ready documents, or None
-    if there are no passages."""
-    filenames = {d.id: d.filename for d in store.list_documents(project_id) if d.status == "ready"}
-    chunks = store.chunks_for_project(project_id, list(filenames)) if filenames else []
+    """(knowledge.json, knowledge_vectors.npy) for the ready documents attached to the
+    project, or None if there are no passages."""
+    filenames = _ready_documents(store, tenant_id, project_id)
+    chunks = store.chunks_for_documents(tenant_id, list(filenames))
     if not chunks:
         return None
     meta = {

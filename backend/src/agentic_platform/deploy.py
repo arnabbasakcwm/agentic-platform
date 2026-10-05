@@ -254,10 +254,12 @@ def run_deployment(
     cloud: Cloud,
     packager: Packager = build_package,
     knowledge_snapshot: Callable[[], tuple[bytes, bytes] | None] | None = None,
+    knowledge_embedding: EmbeddingConfig | None = None,
 ) -> None:
     """The background job: package, upload, provision, wait. Progress and the outcome are
     written to the project's deployment record; this never raises. `knowledge_snapshot`
-    supplies the knowledge base to bake in when an agent searches it."""
+    supplies the knowledge base to bake in when an agent searches it, embedded with
+    `knowledge_embedding` (the owner's library model)."""
     from .stores import Deployment  # local import: stores imports nothing from here
 
     def update(**changes: Any) -> Deployment | None:
@@ -275,7 +277,7 @@ def run_deployment(
         return
     current: Deployment = project.deployment
     try:
-        environment = runtime_environment(project.plan, project.knowledge_embedding)
+        environment = runtime_environment(project.plan, knowledge_embedding)
         snapshot = knowledge_snapshot() if knowledge_snapshot is not None else None
         with tempfile.TemporaryDirectory(prefix="agentic-deploy-") as tmp:
             package = Path(tmp) / "package.zip"
