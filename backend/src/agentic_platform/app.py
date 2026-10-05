@@ -24,7 +24,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, EmailStr, Field, ValidationError
 
 from . import knowledge as kb
-from .agent_schema import AgentPlan, EmbeddingConfig
+from .agent_schema import AgentPlan, EmbeddingConfig, RunBounds
 from .auth import create_access_token, decode_access_token, hash_password, verify_password
 from .agentcore import make_cloud
 from .config import (
@@ -1005,7 +1005,10 @@ def invoke_deployment(
     if req.agent_id is not None:
         payload["agent_id"] = req.agent_id
         payload["upstream_outputs"] = req.upstream_outputs
-    result = cloud.invoke(deployment.runtime_arn, payload)
+    # The live runtime may serve an older plan version than the project's current one;
+    # wait for whichever of the two allows the longer run.
+    timeout_s = max(project.plan.bounds.timeout_s, RunBounds().timeout_s)
+    result = cloud.invoke(deployment.runtime_arn, payload, timeout_s)
     return {
         "project_id": project_id,
         "plan_version": deployment.live_plan_version,

@@ -290,7 +290,7 @@ def _invoke_response(body: dict, status=200):
 
 def test_invoke_sends_the_task_and_returns_the_runtime_json():
     cloud = _cloud()
-    with Stubber(cloud.data) as stub:
+    with Stubber(cloud._invoke_client(360)) as stub:  # the default run limit + grace
         stub.add_response(
             "invoke_agent_runtime",
             _invoke_response({"outputs": {"b": {"content": "hi"}}, "errors": [], "halted": False}),
@@ -308,7 +308,7 @@ def test_invoke_sends_the_task_and_returns_the_runtime_json():
 
 def test_invoke_surfaces_the_runtimes_typed_error():
     cloud = _cloud()
-    with Stubber(cloud.data) as stub:
+    with Stubber(cloud._invoke_client(360)) as stub:  # the default run limit + grace
         stub.add_response(
             "invoke_agent_runtime",
             _invoke_response({"error_type": "RunTimeout", "message": "too slow", "details": None}, 504),
@@ -359,7 +359,8 @@ class FakeCloud:
     def delete_code(self, prefix):
         self._step("delete_code")
 
-    def invoke(self, runtime_arn, payload):
+    def invoke(self, runtime_arn, payload, timeout_s=None):
+        self.invoke_timeout = timeout_s
         self.invocations.append(payload)
         return {"outputs": {"b": {"content": "from AgentCore"}}, "errors": [], "halted": False}
 
@@ -637,3 +638,44 @@ def test_deploy_bakes_in_the_knowledge_base_its_agents_search(api, monkeypatch):
     meta = json.loads(packaged["knowledge"][0])
     assert meta["documents"] == {"d1": "policy.pdf"} and len(meta["passages"]) == 2
     assert api.cloud.environment["OPENAI_API_KEY"] == "openai-secret"
+
+
+# ------------------------------------------------------------------ invoke timeouts
+def test_invoke_waits_for_the_runs_own_limit_and_never_retries():
+    from agentic_platform.agentcore import MAX_INVOKE_WAIT_S, invoke_read_timeout
+
+    assert invoke_read_timeout(300) == 360  # the default run limit plus a grace period
+    assert invoke_read_timeout(None) == 360
+    assert invoke_read_timeout(5000) == MAX_INVOKE_WAIT_S  # AgentCore's 15-minute ceiling
+
+    cloud = AgentCoreCloud("ap-south-1", session=boto3.Session(
+        aws_access_key_id="x", aws_secret_access_key="y", region_name="ap-south-1"))
+    config = cloud._invoke_client(360).meta.config
+    assert config.read_timeout == 360
+    assert config.retries["total_max_attempts"] == 1  # a slow run is never started twice
+    assert cloud._invoke_client(360) is cloud._invoke_client(360)
+
+
+def test_a_slow_deployed_run_is_a_clear_504_not_a_raw_aws_error():
+    from botocore.exceptions import ReadTimeoutError
+
+    cloud = AgentCoreCloud("ap-south-1", session=boto3.Session(
+        aws_access_key_id="x", aws_secret_access_key="y", region_name="ap-south-1"))
+
+    class Slow:
+        def invoke_agent_runtime(self, **kw):
+            raise ReadTimeoutError(endpoint_url="https://bedrock-agentcore.ap-south-1.amazonaws.com")
+
+    cloud._invoke_clients[360] = Slow()
+    with pytest.raises(DeployedRunError) as caught:
+        cloud.invoke("arn:runtime", {"input": {}}, timeout_s=300)
+    assert caught.value.status == 504 and caught.value.error_type == "RunTimeout"
+    assert "360 seconds" in str(caught.value)
+
+
+def test_platform_invoke_passes_the_plans_time_limit(api):
+    h = api.login("slow@example.com")
+    pid = _compiled_project(api, h)
+    api.post(f"/projects/{pid}/deploy", headers=h)
+    api.post(f"/projects/{pid}/deployment/invoke", json={"input": {"q": "x"}}, headers=h)
+    assert api.cloud.invoke_timeout == 300

@@ -14,7 +14,8 @@ import uuid
 from typing import Any
 
 import boto3
-from botocore.exceptions import ClientError
+from botocore.config import Config
+from botocore.exceptions import ClientError, ReadTimeoutError
 
 from .errors import DeployedRunError, DeployError
 
@@ -53,6 +54,7 @@ class AgentCoreCloud:
         self.sts = session.client("sts", region_name=region)
         self.control = session.client("bedrock-agentcore-control", region_name=region)
         self.data = session.client("bedrock-agentcore", region_name=region)
+        self._invoke_clients: dict[int, Any] = {}
 
     # ------------------------------------------------------------------ identity
     def account_id(self) -> str:
@@ -264,18 +266,50 @@ class AgentCoreCloud:
             if _code(e) != "ResourceNotFoundException":
                 raise
 
-    def invoke(self, runtime_arn: str, payload: dict[str, Any]) -> dict[str, Any]:
-        """Call a deployed runtime's /invocations and return its JSON body."""
-        response = self.data.invoke_agent_runtime(
+    def _invoke_client(self, read_timeout_s: int) -> Any:
+        """A data-plane client that waits `read_timeout_s` for a run to answer and never
+        retries: botocore's default (60 s, then retry) would give up on a slow but healthy
+        run and start the same run again — each retry a full, billed multi-agent run."""
+        client = self._invoke_clients.get(read_timeout_s)
+        if client is None:
+            client = self._session.client(
+                "bedrock-agentcore",
+                region_name=self.region,
+                config=Config(
+                    connect_timeout=10,
+                    read_timeout=read_timeout_s,
+                    retries={"total_max_attempts": 1},
+                ),
+            )
+            self._invoke_clients[read_timeout_s] = client
+        return client
+
+    def invoke(
+        self, runtime_arn: str, payload: dict[str, Any], timeout_s: float | None = None
+    ) -> dict[str, Any]:
+        """Call a deployed runtime's /invocations and return its JSON body.
+
+        `timeout_s` is the run's own time limit: the runtime enforces it and answers with a
+        RunTimeout error, so the platform waits a little longer than that for the answer."""
+        read_timeout = invoke_read_timeout(timeout_s)
+        try:
+            response = self._invoke_client(read_timeout).invoke_agent_runtime(
             agentRuntimeArn=runtime_arn,
             # Each call is independent; AgentCore requires a 33+ character session id.
-            runtimeSessionId=uuid.uuid4().hex + uuid.uuid4().hex,
-            payload=json.dumps(payload).encode("utf-8"),
-            contentType="application/json",
-            accept="application/json",
-            qualifier="DEFAULT",
-        )
-        raw = response["response"].read()
+                runtimeSessionId=uuid.uuid4().hex + uuid.uuid4().hex,
+                payload=json.dumps(payload).encode("utf-8"),
+                contentType="application/json",
+                accept="application/json",
+                qualifier="DEFAULT",
+            )
+            raw = response["response"].read()
+        except ReadTimeoutError:
+            raise DeployedRunError(
+                504,
+                "RunTimeout",
+                f"the deployed flow didn't answer within {read_timeout} seconds; raise the "
+                "plan's time limit (bounds.timeout_s) and redeploy if runs need longer",
+            ) from None
         try:
             body = json.loads(raw)
         except ValueError as e:
@@ -288,6 +322,21 @@ class AgentCoreCloud:
                 body.get("message", "the deployed runtime reported an error"),
             )
         return body
+
+
+# A synchronous AgentCore invocation can't wait longer than 15 minutes.
+MAX_INVOKE_WAIT_S = 900
+# Time on top of the run's own limit: the runtime's reply, start-up of a cold runtime.
+INVOKE_GRACE_S = 60
+
+
+def invoke_read_timeout(run_timeout_s: float | None) -> int:
+    """How long to wait for a deployed run: its own limit plus a grace period, capped at
+    AgentCore's maximum. Without a limit, the platform's default run limit."""
+    from .agent_schema import RunBounds
+
+    limit = run_timeout_s if run_timeout_s and run_timeout_s > 0 else RunBounds().timeout_s
+    return int(min(limit + INVOKE_GRACE_S, MAX_INVOKE_WAIT_S))
 
 
 def make_cloud(region: str, role_arn: str | None, bucket: str | None) -> AgentCoreCloud | None:
