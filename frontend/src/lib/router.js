@@ -19,7 +19,9 @@ export function parseRoute(hash) {
   if (first === "projects" && id) {
     return { page: "project", id, step: PROJECT_STEPS.includes(step) ? step : "plan" };
   }
-  return { page: "projects" };
+  if (first === "projects") return { page: "projects" };
+  // No (or an unknown) route: the New project page is the console's landing page.
+  return { page: "new" };
 }
 
 export function useRoute() {

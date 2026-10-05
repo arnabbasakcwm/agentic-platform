@@ -129,7 +129,7 @@ export const api = {
     request("/auth/login", { method: "POST", body: { email, password } }),
   me: () => request("/auth/me"),
 
-  createProject: ({ brief, agentCount, availableTools, availableLlms }) =>
+  createProject: ({ brief, agentCount, availableTools, availableLlms, documentIds }) =>
     request("/projects", {
       method: "POST",
       body: {
@@ -138,8 +138,12 @@ export const api = {
         ...(agentCount ? { agent_count: agentCount } : {}),
         ...(availableTools ? { available_tools: availableTools } : {}),
         ...(availableLlms ? { available_llms: availableLlms } : {}),
+        // Library files to attach; the planner is told about them.
+        ...(documentIds?.length ? { document_ids: documentIds } : {}),
       },
     }),
+  // Change agents' model and tools: [{ id, provider, model, tools }]. Makes a new plan version.
+  updateAgents: (id, agents) => request(`/projects/${id}/agents`, { method: "PUT", body: { agents } }),
 
   listProjects: () => request("/projects"),
   getProject: (id) => request(`/projects/${id}`),

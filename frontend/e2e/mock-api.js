@@ -230,6 +230,9 @@ function usageBody(days, projectId) {
   };
 }
 
+// The last project-creation request, for tests to inspect.
+const created = { last: null };
+
 // Deploys: off ("AWS not set up") unless a test turns them on with POST /__deploy_available.
 const deploys = { available: false, current: null, count: 0 };
 
@@ -248,6 +251,7 @@ function reset() {
   knowledge.embedding = null;
   knowledge.documents = [];
   Object.assign(deploys, { available: false, current: null, count: 0 });
+  created.last = null;
 }
 
 // ---- knowledge library: files belong to the user and are attached to any number of
@@ -389,8 +393,68 @@ const server = http.createServer(async (req, res) => {
     reset();
     return send(res, 200, { reset: true });
   }
-  if (path === "/tools") return send(res, 200, { tools: [{ name: "calculator", side_effect: false, description: "Arithmetic" }], default: ["calculator"] });
-  if (path === "/providers") return send(res, 200, { providers: [{ provider: "google_genai", model: "gemini-3.1-pro-preview", default: true }] });
+  if (path === "/tools") {
+    return send(res, 200, {
+      tools: [
+        { name: "knowledge_search", side_effect: false, description: "Search the project's knowledge files" },
+        { name: "lookup", side_effect: false, description: "Small built-in reference table" },
+        { name: "calculator", side_effect: false, description: "Arithmetic" },
+        { name: "web_search", side_effect: true, description: "Live web search (Tavily)" },
+        { name: "wikipedia", side_effect: true, description: "Wikipedia summaries" },
+      ],
+      default: ["lookup", "calculator"],
+    });
+  }
+  if (path === "/providers") {
+    return send(res, 200, {
+      providers: [
+        { provider: "google_genai", model: "gemini-3.1-pro-preview", default: true, available: true },
+        { provider: "openai", model: "gpt-4o-mini", default: false, available: true },
+        { provider: "anthropic", model: "claude-sonnet-4-6", default: false, available: false },
+      ],
+    });
+  }
+  if (path === "/auth/login" && req.method === "POST") {
+    const body = await readBody(req);
+    if (body.password !== "a-long-password") {
+      return send(res, 401, { error_type: "Unauthenticated", message: "invalid email or password", details: null });
+    }
+    return send(res, 200, {
+      access_token: "e2e-token", token_type: "bearer", expires_in: 3600,
+      user: { id: "u1", email: body.email, created_at: "2026-10-01T00:00:00Z" },
+    });
+  }
+  if (path === "/projects" && req.method === "POST") {
+    const body = await readBody(req);
+    created.last = body;
+    const id = "e2e0new0project";
+    for (const docId of body.document_ids ?? []) {
+      const d = knowledge.documents.find((x) => x.id === docId);
+      if (d) d.project_ids = [...new Set([...d.project_ids, id])];
+    }
+    await sleep(300);
+    return send(res, 201, { project_id: id, plan: { ...plan, agents: plan.agents.slice(0, 2) }, side_effect_tools_enabled: [] });
+  }
+  if (path === "/__last_create") return send(res, 200, created.last ?? {});
+  const agentsPut = path.match(/^\/projects\/([^/]+)\/agents$/);
+  if (agentsPut && req.method === "PUT") {
+    const body = await readBody(req);
+    for (const change of body.agents ?? []) {
+      const agent = plan.agents.find((a) => a.id === change.id);
+      if (!agent) return send(res, 422, { error_type: "KnowledgeRejected", message: `no agent '${change.id}'`, details: null });
+      agent.llm = { ...agent.llm, provider: change.provider, model: change.model };
+      agent.tools = change.tools;
+      for (const t of change.tools) {
+        if (["web_search", "wikipedia"].includes(t) && !project.side_effect_tools_enabled.includes(t)) {
+          project.side_effect_tools_enabled = [...project.side_effect_tools_enabled, t].sort();
+        }
+      }
+    }
+    project.plan_version += 1;
+    project.compiled = false;
+    knowledgeBody();
+    return send(res, 200, project);
+  }
   if (path === "/auth/me") return send(res, 200, { id: "u1", email: "e2e@example.com", created_at: "2026-10-01T00:00:00Z" });
   if (path === "/projects") {
     if (project.deleted) return send(res, 200, { projects: [] });

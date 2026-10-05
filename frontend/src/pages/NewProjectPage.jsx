@@ -1,8 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Icon } from "../components/icons.jsx";
-import { LinkButton, Pill, Switch } from "../components/ui.jsx";
+import { ErrorCallout, LinkButton, Pill, StatusBadge, Switch } from "../components/ui.jsx";
 import { api } from "../lib/api.js";
+import { batches, checkFiles, documentBadge, formatBytes } from "../lib/knowledge.js";
 import { paths } from "../lib/router.js";
+import { useAction } from "../lib/useAction.js";
 
 const MIN_AGENTS = 1;
 const MAX_AGENTS = 10;
@@ -41,6 +43,110 @@ function describeSettings(settings, tools, providers) {
   parts.push(model ? model.model : "Default model");
   parts.push(`${settings.tools.length} of ${tools.tools?.length ?? 0} tools`);
   return parts.join(" · ");
+}
+
+const filesLabel = (n) => `${n} file${n === 1 ? "" : "s"}`;
+
+// ------------------------------------------------------------------ knowledge tray
+/**
+ * Pick knowledge files for the next project: upload new ones (they go into the library)
+ * or tick existing library files. They're attached when the project is created, and the
+ * planner is told about them so it can give agents knowledge_search.
+ */
+function FilesTray({ selected, onChange, disabled }) {
+  const [library, setLibrary] = useState(null);
+  const [problems, setProblems] = useState([]);
+  const load = useAction();
+  const upload = useAction();
+  const inputRef = useRef(null);
+  const { run: runLoad } = load;
+
+  useEffect(() => {
+    runLoad(() => api.knowledgeOverview()).then((body) => body && setLibrary(body));
+  }, [runLoad]);
+
+  const ids = new Set(selected.map((d) => d.id));
+
+  function toggle(doc) {
+    onChange(ids.has(doc.id) ? selected.filter((d) => d.id !== doc.id) : [...selected, doc]);
+  }
+
+  async function addFiles(files) {
+    const { accepted, problems: refused } = checkFiles(files, library.limits, library.documents.map((d) => d.filename));
+    setProblems(refused);
+    if (!accepted.length) return;
+    const added = await upload.run(async () => {
+      const docs = [];
+      for (const batch of batches(accepted, library.limits.max_files_per_upload)) {
+        docs.push(...(await api.uploadToLibrary(batch)).documents);
+      }
+      return docs;
+    });
+    if (added) {
+      onChange([...selected, ...added]);
+      setLibrary((lib) => ({ ...lib, documents: [...added, ...lib.documents] }));
+    }
+  }
+
+  return (
+    <div className="tray" id="composer-files">
+      <div className="tray__row tray__row--top">
+        <span className="tray__label">Knowledge</span>
+        <div className="tray__control">
+          <div className="row">
+            <button
+              type="button"
+              className="btn btn--sm"
+              onClick={() => inputRef.current?.click()}
+              disabled={disabled || !library || upload.busy}
+            >
+              {upload.busy ? <span className="spin" /> : <Icon name="upload" size={13} />}
+              Upload files
+            </button>
+            <input
+              ref={inputRef}
+              type="file"
+              multiple
+              accept={library?.limits.file_types.join(",")}
+              className="sr-only"
+              tabIndex={-1}
+              aria-label="Upload knowledge files"
+              onChange={(e) => {
+                if (e.target.files.length) addFiles([...e.target.files]);
+                e.target.value = "";
+              }}
+            />
+            <span className="tray__hint">PDF, Word, text, Markdown or CSV. New files also go into your library.</span>
+          </div>
+          {problems.length > 0 && <span className="tray__hint tray__hint--warn">{problems.join(" ")}</span>}
+          <ErrorCallout error={load.error || upload.error} />
+          {library && library.documents.length > 0 && (
+            <fieldset className="filepick">
+              <legend className="tray__hint">Or choose from your library</legend>
+              {library.documents.map((doc) => {
+                const { badge, label } = documentBadge(doc.status);
+                return (
+                  <label key={doc.id} className="filepick__item">
+                    <input type="checkbox" checked={ids.has(doc.id)} onChange={() => toggle(doc)} disabled={disabled} />
+                    <Icon name="file" size={14} />
+                    <span className="filepick__name" title={doc.filename}>
+                      {doc.filename}
+                    </span>
+                    <span className="muted filepick__size">{formatBytes(doc.size_bytes)}</span>
+                    <StatusBadge status={badge} label={label} />
+                  </label>
+                );
+              })}
+            </fieldset>
+          )}
+          <span className="tray__hint">
+            Agents search these files with the knowledge_search tool; file text is sent to the embedding provider
+            to index it.
+          </span>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // ------------------------------------------------------------------ settings tray
@@ -200,6 +306,16 @@ function Message({ message, onRetry, busy }) {
       <div className="msg msg--user">
         <div className="msg__bubble">
           <p className="prose">{message.brief}</p>
+          {message.files?.length > 0 && (
+            <ul className="msg__files" aria-label="Knowledge files">
+              {message.files.map((f) => (
+                <li key={f.id}>
+                  <Icon name="file" size={12} />
+                  {f.filename}
+                </li>
+              ))}
+            </ul>
+          )}
           <span className="msg__meta">{message.settingsLabel}</span>
         </div>
       </div>
@@ -242,6 +358,9 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
   const [draft, setDraft] = useState("");
   const [messages, setMessages] = useState([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [filesOpen, setFilesOpen] = useState(false);
+  // Knowledge files for the next project (library documents).
+  const [files, setFiles] = useState([]);
   // agentCount null = the planner decides. tools null = follow the platform default.
   const [settings, setSettings] = useState({ agentCount: null, model: "", tools: null });
   const textareaRef = useRef(null);
@@ -275,6 +394,7 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
         agentCount: request.agentCount,
         availableTools: request.tools,
         availableLlms: chosen ? [{ provider: chosen.provider, model: chosen.model }] : null,
+        documentIds: request.files.map((f) => f.id),
       });
       setMessages((all) =>
         all.map((m) => (m.id === replyId ? { ...m, status: "done", project } : m)),
@@ -292,7 +412,7 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
     const brief = draft.trim();
     if (!brief || busy || disabled) return;
     // Settings are captured per message, so changing them later never rewrites history.
-    const request = { brief, ...effectiveSettings };
+    const request = { brief, ...effectiveSettings, files };
     const replyId = ++nextMessageId;
     setMessages((all) => [
       ...all,
@@ -300,12 +420,16 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
         id: ++nextMessageId,
         role: "user",
         brief,
+        files,
         settingsLabel: describeSettings(request, tools, providers),
       },
       { id: replyId, role: "assistant", status: "pending", request },
     ]);
     setDraft("");
     setSettingsOpen(false);
+    setFilesOpen(false);
+    // The files belong to this project; the next one starts without any.
+    setFiles([]);
     plan(request, replyId);
   }
 
@@ -369,6 +493,7 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
 
       <form className="composer" onSubmit={send}>
         <div className="composer__inner">
+          {filesOpen && <FilesTray selected={files} onChange={setFiles} disabled={busy} />}
           {settingsOpen && (
             <SettingsTray
               settings={effectiveSettings}
@@ -379,6 +504,24 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
             />
           )}
           <div className="composer__box">
+            {files.length > 0 && (
+              <ul className="composer__files" aria-label="Knowledge files for this project">
+                {files.map((f) => (
+                  <li key={f.id} className="filechip">
+                    <Icon name="file" size={12} />
+                    <span className="filechip__name">{f.filename}</span>
+                    <button
+                      type="button"
+                      className="filechip__remove"
+                      onClick={() => setFiles((all) => all.filter((x) => x.id !== f.id))}
+                      aria-label={`Remove ${f.filename}`}
+                    >
+                      <Icon name="close" size={11} />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
             <textarea
               ref={textareaRef}
               rows={1}
@@ -394,6 +537,17 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
               disabled={disabled}
             />
             <div className="composer__bar">
+              <button
+                type="button"
+                className={`composer__options ${filesOpen ? "composer__options--open" : ""}`}
+                onClick={() => setFilesOpen((open) => !open)}
+                aria-expanded={filesOpen}
+                aria-controls="composer-files"
+                title="Add knowledge files for the agents to search"
+              >
+                <Icon name="file" size={14} />
+                {files.length ? filesLabel(files.length) : "Add files"}
+              </button>
               <button
                 type="button"
                 className={`composer__options ${settingsOpen ? "composer__options--open" : ""}`}

@@ -52,7 +52,7 @@ function runHint(project, run) {
 // One project, one step of its workflow per page. Mounted with key={id}, so switching
 // projects starts from a clean slate; switching steps keeps the loaded project and the
 // latest run, which keeps streaming while another step is open.
-export function ProjectWorkspace({ id, step, onChanged }) {
+export function ProjectWorkspace({ id, step, onChanged, tools, providers }) {
   const [project, setProject] = useState(null);
   const { run, draftInput, setDraftInput, start } = useProjectRun(project);
   const [assistantOpen, setAssistantOpen] = useState(readAssistantOpen);
@@ -203,7 +203,10 @@ export function ProjectWorkspace({ id, step, onChanged }) {
           </div>
         </div>
 
-        {step === "brief" && <BriefStep key={stepKey} project={project} />}
+        {step === "brief" && (
+          // Not keyed by plan version: its model/tools editor saves new versions itself.
+          <BriefStep project={project} tools={tools} providers={providers} onSaved={projectChanged} />
+        )}
         {step === "knowledge" && (
           // Not keyed by plan version: it holds no plan draft, and a revision made from it
           // (giving agents access) shouldn't wipe the assistant's reply it shows.

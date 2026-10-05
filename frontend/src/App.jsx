@@ -131,6 +131,8 @@ function Console() {
     session.set(result.access_token);
     setAuthNotice(null);
     setUser(result.user);
+    // Signing in lands on a new project: describing a task is the first thing to do.
+    navigate(paths.newProject);
   }
 
   function signOut() {
@@ -140,7 +142,7 @@ function Console() {
     setProjectsError(null);
     setKnowledgeCount(null);
     setAuthNotice(null);
-    navigate(paths.projects);
+    navigate(paths.newProject);
   }
 
   function toggleSidebar() {
@@ -226,6 +228,8 @@ function Console() {
           {route.page === "project" && (
             <ProjectWorkspace
               key={route.id}
+              tools={tools}
+              providers={providers}
               id={route.id}
               step={route.step}
               onChanged={refreshProjects}
