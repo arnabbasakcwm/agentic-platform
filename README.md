@@ -166,6 +166,15 @@ browser. Set `VITE_API_BASE` to point the console at a different API.
    one embedding model, chosen here; changing it re-indexes every file. File text and
    agents' search queries go to that embedding provider; the files themselves aren't
    stored, only the text passages taken from them.
+7. **Usage** (sidebar) — which models your projects used, how many tokens, and the
+   estimated cost, over 7, 30 or 90 days and per project:
+   - totals and a cost-per-day chart;
+   - breakdowns by model, activity (agent runs, planning, plan assistant, indexing,
+     knowledge searches) and project;
+   - recent runs, each expandable to every agent's model and tokens.
+   Finished runs on the Run page and the deployed *Try it* also show their tokens and
+   cost. Costs are estimates from list prices in `backend/pricing.json` (each with its
+   source and date); add a model there to price it. Embedding tokens are estimated.
 
 Try it end to end with curl:
 
@@ -263,6 +272,8 @@ signed-in user's projects. Interactive docs: http://127.0.0.1:8000/docs.
 | `DELETE /knowledge/documents/{doc_id}` | Delete a file from the library (and every project) |
 | `PUT /knowledge/embedding` | Change the library's embedding model (re-embeds every passage) |
 | `POST /knowledge/search` | Search the whole library |
+| `GET /usage?days=30&project_id=` | Models, tokens and estimated cost: totals, per day, per model, per project, per activity, recent runs |
+| `GET /usage/pricing` | The price table in use, and models you've used that have no price |
 | `GET /projects/{id}/knowledge` | The files attached to a project, and the library files that could be |
 | `POST /projects/{id}/knowledge/documents` | Upload files to the library and attach them to the project |
 | `POST /projects/{id}/knowledge/documents/{doc_id}` | Attach a library file to the project |

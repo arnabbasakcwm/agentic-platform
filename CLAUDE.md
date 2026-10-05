@@ -137,6 +137,7 @@ backend/
     errors.py               # Typed platform errors
     stores.py               # ProjectStore/UserStore/KnowledgeStore interfaces + in-memory and MongoDB implementations
     knowledge.py            # Knowledge libraries: extract/chunk documents, index, search, deploy snapshot
+    usage.py                # Usage accounting: token collector, LangChain callback, pricing, dashboard totals
     auth.py                 # Password hashing (Argon2id) + JWT access tokens
     runtime_app.py          # The /ping + /invocations app a deployed project runs on AgentCore
     deploy.py               # Packaging (arm64 zip) + background deploy/remove jobs
@@ -359,6 +360,32 @@ whenever a change departs from or extends the contract above — don't silently 
   and deleting a project never delete files — only deleting from the library does. Limits
   are per library (100 files, 20,000 passages). Existing project-scoped data is migrated
   in place on first use, idempotently.
+
+### 2026-10-05 — Every model call is counted; cost is an estimate from a price table
+- **Why:** there was no way to see which models a project used, how many tokens it
+  consumed, or what it cost.
+- **Rule:**
+  - **Counting chat models:** every chat-model call passes a `usage.UsageCallback`
+    explicitly (`config={"callbacks": …}`). That covers agents' tool turns, structured
+    answers, rewrites and retries, supervisor routing, and the planner and assistant
+    including retries. Tokens are the provider-reported `usage_metadata`; Gemini's
+    thinking tokens count as output.
+  - **Counting embeddings:** these don't report tokens, so indexing and
+    `knowledge_search` queries are estimated at ~4 characters per token and flagged
+    `estimated`.
+  - **Reporting:** a run's collector travels in LangGraph config like `emit`. Runs return
+    `usage` locally and from AgentCore runtimes (the same contract).
+  - **Storing:** `app.py` stores `UsageRecord`s through `UsageStore` (`usage_events`).
+    Recording is **best effort**: it never fails the work it measures, and usage up to a
+    timeout or a client disconnect is still recorded.
+  - **Cost:** comes only from `backend/pricing.json`. Every price there carries its
+    official source URL and the date it was checked; a model without a confirmed price
+    stays unpriced (tokens shown, "price not set"), never guessed. Each record keeps the
+    price it was costed with, so editing the table doesn't rewrite history.
+  - **Totals:** computed in Python over the requested range (plain CRUD, per the MongoDB
+    decision).
+  - **Not counted:** deployed runtimes invoked directly through AWS (not via this
+    platform), and tool API costs such as Tavily.
 
 ## Working style — verify-and-retry, always
 

@@ -684,6 +684,30 @@ library."
 
 ---
 
+## 11a. Usage accounting (`usage.py`)
+
+```
+model call ──► UsageCallback (passed in each invoke's config, labelled agent + configured model)
+                 └─► UsageCollector (one per run / planner call / indexing job; thread-safe)
+embedding  ──► on_embedded / knowledge_search hook ──► same collector (estimated tokens)
+                 │
+run result / SSE run_completed / runtime /invocations ──► "usage": per agent and model
+                 ▼
+app._record_usage ──► UsageRecord(kind, model, tokens, cost, price snapshot) ──► UsageStore
+                 ▼
+GET /usage ──► usage.dashboard(): totals · by day · by model · by project · by kind · recent runs
+```
+
+- **Kinds:** `run`, `deployed_run`, `planner`, `assistant`, `embedding_index`,
+  `embedding_query`.
+- **Long prompts:** a collector keeps a separate long-context bucket (prompts over 200k
+  tokens) so models with a higher long-prompt rate (Gemini) are costed correctly.
+- **Prices:** `backend/pricing.json` maps `provider/model` to prices per 1M tokens, with
+  an optional `long_context` rate. Each entry has a source URL and a checked date;
+  unconfirmed models stay unpriced.
+- **Deployed runs:** the runtime returns its usage in `/invocations`, so runs invoked
+  through the platform are counted. Calls made straight to `InvokeAgentRuntime` aren't.
+
 ## 12. Cross-cutting invariants (hold at every stage)
 
 1. **Config, not code.** The LLM emits only `AgentPlan`; a fixed compiler interprets it —
@@ -710,6 +734,8 @@ library."
 
 **Built and verified today** (offline suite passing, plus a real-API smoke script
 covering all three orchestration patterns and the real `web_search` tool):
+- Usage accounting and the Usage dashboard (§11a): verified live with Gemini, where
+  costs matched the price table by hand
 - Data contracts and graph-integrity validation (`agent_schema.py`)
 - Meta-planner with retry-on-validation-error (`meta_planner_prompt.py`)
 - Compiler for all three orchestration patterns, with per-agent error recovery
