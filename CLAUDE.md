@@ -270,6 +270,15 @@ whenever a change departs from or extends the contract above — don't silently 
   can see them — move to Secrets Manager / AgentCore Identity before multi-tenant use, as
   the Deployment section requires.
 
+### 2026-10-05 — Knowledge has a workspace page as well as a project step
+- **Why:** with several projects there was no single place to see which files were
+  uploaded, which were still indexing or had failed, or to tidy them up.
+- **Rule:** the sidebar's Workspace section has Projects and Knowledge. The Knowledge page
+  (`GET /knowledge`) is a cross-project *view* — files still belong to exactly one project,
+  uploads name the project, and agent access, test search and the embedding model stay on
+  the project's Knowledge step. Both pages share `components/KnowledgeUpload.jsx`; the
+  overview never lists files of projects the user doesn't own.
+
 ### 2026-10-01 — Known deviation: deploys run in-process
 - **Why:** no job queue yet, and a deploy takes minutes.
 - **Rule:** the deploy runs as a FastAPI background task and records each step on the

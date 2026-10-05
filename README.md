@@ -156,6 +156,10 @@ browser. Set `VITE_API_BASE` to point the console at a different API.
    app. Needs AWS set up — see [Deploying to AWS](#deploying-to-aws-agentcore).
 5. **Projects** — every project you've created, newest first; the sidebar also lists the
    most recent ones.
+6. **Knowledge** (sidebar) — every knowledge-base file across your projects in one table:
+   totals, live indexing status, filters by name, project and status, upload to any
+   project, and delete. Each file links to its project's Knowledge step, which is where
+   test search and *Give agents access* live.
 
 Try it end to end with curl:
 
@@ -246,6 +250,7 @@ signed-in user's projects. Interactive docs: http://127.0.0.1:8000/docs.
 | `POST /projects/{id}/run` | Run the whole team on an input |
 | `POST /projects/{id}/run/stream` | Same, streaming each agent's progress as Server-Sent Events |
 | `POST /projects/{id}/agents/{agent_id}/invoke` | Run one agent on its own |
+| `GET /knowledge` | Every knowledge-base file across your projects, with a summary per project |
 | `GET /projects/{id}/knowledge` | Knowledge base: files with indexing status, embedding model, limits |
 | `POST /projects/{id}/knowledge/documents` | Upload files (multipart field `files`); indexed in the background |
 | `DELETE /projects/{id}/knowledge/documents/{doc_id}` | Remove a file and its passages |

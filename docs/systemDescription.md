@@ -486,7 +486,8 @@ business logic, and every rule it appears to enforce is really enforced server-s
 |---|---|
 | API calls + typed error normalisation | `frontend/src/lib/api.js` — every failure becomes an `ApiError` carrying the backend's `{error_type, message, details}` |
 | App shell: sign-in gate, collapsible sidebar, breadcrumb bar, page switch | `frontend/src/App.jsx`, `components/Sidebar.jsx`, `components/TopBar.jsx` |
-| Routing (hash-based, no router dependency) | `frontend/src/lib/router.js` — `#/projects`, `#/new`, `#/projects/<id>/<step>` |
+| Routing (hash-based, no router dependency) | `frontend/src/lib/router.js` — `#/projects`, `#/new`, `#/knowledge`, `#/projects/<id>/<step>` |
+| Knowledge workspace: every knowledge-base file across the user's projects — totals, filters, upload to a chosen project, delete, links to each project's Knowledge step | `frontend/src/pages/KnowledgePage.jsx` (`GET /knowledge`); upload area and delete control shared with the project step via `components/KnowledgeUpload.jsx` |
 | Project list: every project the signed-in user owns | `frontend/src/pages/ProjectsPage.jsx` (`GET /projects`); the sidebar also lists the five most recent |
 | New project as a conversation: each message is a brief and gets a planned team (or the error) as the reply; team size, model and tools sit in an optional settings tray, defaulting to "planner chooses", the default model and the default tools | `frontend/src/pages/NewProjectPage.jsx` |
 | One project, one workflow step per page | `frontend/src/pages/ProjectWorkspace.jsx` + `pages/project/` — `BriefStep` (read-only brief and settings), `PlanStep` (agent cards, raw JSON editing), `CompileStep` (execution-flow view, compile), `RunStep` (full-graph and single-agent runs, results) |
