@@ -11,7 +11,9 @@ type, so clients never see a raw stack trace.
 from __future__ import annotations
 
 import json
+import logging
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from botocore.exceptions import BotoCoreError, ClientError
@@ -24,6 +26,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, EmailStr, Field, ValidationError
 
 from . import knowledge as kb
+from . import usage as usage_mod
 from .agent_schema import AgentPlan, EmbeddingConfig, RunBounds
 from .auth import create_access_token, decode_access_token, hash_password, verify_password
 from .agentcore import make_cloud
@@ -70,7 +73,16 @@ from .graph_builder import (
     run_single_agent,
 )
 from .meta_planner_prompt import plan_project, revise_plan
-from .stores import ChatMessage, Deployment, KnowledgeDocument, ProjectRecord, UserRecord, make_stores
+from .stores import (
+    ChatMessage,
+    Deployment,
+    KnowledgeDocument,
+    ProjectRecord,
+    UsageRecord,
+    UserRecord,
+    make_stores,
+)
+from .usage import UsageCollector
 from .tools import (
     KNOWLEDGE_TOOLS,
     SIDE_EFFECT_TOOLS,
@@ -97,7 +109,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-_store, _users, _knowledge = make_stores()
+_store, _users, _knowledge, _usage = make_stores()
+logger = logging.getLogger(__name__)
 
 
 def _make_cloud():
@@ -329,11 +342,81 @@ def _index_upload(tenant_id: str, document_id: str, data: bytes, config: Embeddi
     except Exception as e:  # noqa: BLE001 — recorded on the document, never raised
         _knowledge.update_document(tenant_id, document_id, status="failed", error=kb._describe(e))
         return
-    kb.index_document(_knowledge, tenant_id, document_id, data, embedder, kb.MAX_CHUNKS_PER_LIBRARY - used)
+    collector = UsageCollector()
+    doc = _knowledge.get_document(tenant_id, document_id)
+    try:
+        kb.index_document(
+            _knowledge, tenant_id, document_id, data, embedder, kb.MAX_CHUNKS_PER_LIBRARY - used,
+            on_embedded=_embedding_counter(collector, config, "embedding_index"),
+        )
+    finally:
+        project_id = doc.project_ids[0] if doc and doc.project_ids else None
+        _record_usage(tenant_id, project_id, collector.entries(), run_id=uuid.uuid4().hex)
 
 
 def _reembed(tenant_id: str, config: EmbeddingConfig) -> None:
-    kb.reembed_library(_knowledge, tenant_id, get_embeddings(config))
+    collector = UsageCollector()
+    try:
+        kb.reembed_library(
+            _knowledge, tenant_id, get_embeddings(config),
+            on_embedded=_embedding_counter(collector, config, "embedding_index"),
+        )
+    finally:
+        _record_usage(tenant_id, None, collector.entries(), run_id=uuid.uuid4().hex)
+
+
+# --------------------------------------------------------------------------- usage
+def _record_usage(
+    tenant_id: str,
+    project_id: str | None,
+    entries: list[dict[str, Any]],
+    *,
+    run_id: str | None = None,
+    deployed: bool = False,
+) -> None:
+    """Store what a unit of work used, with its estimated cost. Best effort: accounting
+    must never fail the work it measures, so a storage error is logged and dropped."""
+    try:
+        table = usage_mod.prices()
+        records = []
+        for e in entries:
+            if not (e.get("calls") or e.get("input_tokens") or e.get("output_tokens")):
+                continue
+            kind = "deployed_run" if deployed and e["kind"] == "run" else e["kind"]
+            records.append(
+                UsageRecord(
+                    id=uuid.uuid4().hex,
+                    tenant_id=tenant_id,
+                    project_id=project_id,
+                    kind=kind,
+                    run_id=run_id,
+                    agent_id=e.get("agent_id"),
+                    provider=e["provider"],
+                    model=e["model"],
+                    calls=int(e.get("calls", 0)),
+                    input_tokens=int(e.get("input_tokens", 0)),
+                    output_tokens=int(e.get("output_tokens", 0)),
+                    estimated=bool(e.get("estimated")),
+                    cost=usage_mod.cost(e, table),
+                    currency=table.get("currency", "USD"),
+                    price=usage_mod.price_for(e["provider"], e["model"], table),
+                )
+            )
+        _usage.add_many(records)
+    except Exception:  # noqa: BLE001 — accounting is best effort
+        logger.exception("recording usage for project %s failed", project_id)
+
+
+def _embedding_counter(collector: UsageCollector, config: EmbeddingConfig, kind: str):
+    """An `on_embedded` hook counting text sent to the embedding model (estimated)."""
+
+    def count(texts: list[str]) -> None:
+        collector.add(
+            kind=kind, provider=config.provider, model=config.model, estimated=True,
+            input_tokens=usage_mod.estimate_tokens(texts), calls=1,
+        )
+
+    return count
 
 
 # --------------------------------------------------------------------------- routes
@@ -408,13 +491,20 @@ def create_project(
     # A new project has no documents yet, so nothing for knowledge_search to search.
     available_tools = [t for t in available_tools if t not in KNOWLEDGE_TOOLS]
     side_effect_tools_enabled = sorted(set(available_tools) & SIDE_EFFECT_TOOLS)
-    plan = plan_project(
-        user_brief=req.brief,
-        requested_agent_count=req.agent_count,
-        available_tools=available_tools,
-        available_llms=available_llms,
-    )
-    project_id = uuid.uuid4().hex
+    collector = UsageCollector()
+    project_id: str | None = None
+    try:
+        plan = plan_project(
+            user_brief=req.brief,
+            requested_agent_count=req.agent_count,
+            available_tools=available_tools,
+            available_llms=available_llms,
+            usage=collector,
+        )
+        project_id = uuid.uuid4().hex
+    finally:
+        # Planning costs tokens even when it fails; then there's no project to charge.
+        _record_usage(user.id, project_id, collector.entries(), run_id=uuid.uuid4().hex)
     _store.create(
         ProjectRecord(
             id=project_id,
@@ -509,14 +599,19 @@ def revise_project(
         if current not in allowed_llms:
             allowed_llms.append(current)
 
-    revision = revise_plan(
-        brief=project.brief,
-        plan=project.plan,
-        request=req.message,
-        history=[(m.role, m.content) for m in project.conversation],
-        available_tools=allowed_tools,
-        available_llms=allowed_llms,
-    )
+    collector = UsageCollector()
+    try:
+        revision = revise_plan(
+            brief=project.brief,
+            plan=project.plan,
+            request=req.message,
+            history=[(m.role, m.content) for m in project.conversation],
+            available_tools=allowed_tools,
+            available_llms=allowed_llms,
+            usage=collector,
+        )
+    finally:
+        _record_usage(user.id, project_id, collector.entries(), run_id=uuid.uuid4().hex)
     changed = revision.brief != project.brief or revision.plan != project.plan
     reply = ChatMessage(
         role="assistant",
@@ -552,15 +647,20 @@ def run_project(
     project = _get_project(project_id, user)
     if not project.is_compiled:
         raise NotCompiledError(project_id)
+    collector = UsageCollector()
     try:
-        result = run_graph(_compiled_graph(project), req.input, project.plan.bounds)
+        result = run_graph(_compiled_graph(project), req.input, project.plan.bounds, collector)
     except TimeoutError:
         raise RunTimeoutError(project.plan.bounds.timeout_s) from None
+    finally:
+        # Whatever was used up to a timeout is still spent.
+        _record_usage(user.id, project_id, collector.entries(), run_id=uuid.uuid4().hex)
     return {
         "project_id": project_id,
         "outputs": result["outputs"],
         "errors": result["errors"],
         "halted": result["halted"],
+        "usage": usage_mod.summarize(collector.entries()),
     }
 
 
@@ -581,8 +681,15 @@ def run_project_stream(
     graph = _compiled_graph(project)
 
     def stream():
-        for event, data in run_graph_events(graph, req.input, project.plan.bounds):
-            yield f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
+        collector = UsageCollector()
+        try:
+            for event, data in run_graph_events(graph, req.input, project.plan.bounds, collector):
+                if event in ("run_completed", "run_failed"):
+                    data = {**data, "usage": usage_mod.summarize(collector.entries())}
+                yield f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
+        finally:
+            # Also runs when the client disconnects mid-run: tokens used so far count.
+            _record_usage(user.id, project_id, collector.entries(), run_id=uuid.uuid4().hex)
 
     return StreamingResponse(
         stream(),
@@ -599,9 +706,11 @@ def invoke_agent(
     user: UserRecord = Depends(current_user),
 ) -> dict[str, Any]:
     project = _get_project(project_id, user)
+    collector = UsageCollector()
     try:
         result = run_single_agent(
-            project.plan, agent_id, req.input, req.upstream_outputs, _knowledge_context(project)
+            project.plan, agent_id, req.input, req.upstream_outputs, _knowledge_context(project),
+            usage=collector,
         )
     except KeyError:
         return JSONResponse(
@@ -612,7 +721,14 @@ def invoke_agent(
                 "details": None,
             },
         )
-    return {"project_id": project_id, "agent_id": agent_id, "result": result}
+    finally:
+        _record_usage(user.id, project_id, collector.entries(), run_id=uuid.uuid4().hex)
+    return {
+        "project_id": project_id,
+        "agent_id": agent_id,
+        "result": result,
+        "usage": usage_mod.summarize(collector.entries()),
+    }
 
 
 # --------------------------------------------------------------------------- knowledge
@@ -902,10 +1018,14 @@ def _search_body(tenant_id: str, project_id: str | None, req: KnowledgeSearchReq
     if embedding is None:
         return {"results": []}
     context = kb.store_context(_knowledge, tenant_id, project_id, get_embeddings(embedding))
+    hits = context.search(req.query, req.k)
+    collector = UsageCollector()
+    _embedding_counter(collector, embedding, "embedding_query")([req.query])
+    _record_usage(tenant_id, project_id, collector.entries(), run_id=uuid.uuid4().hex)
     return {
         "results": [
             {"filename": h.filename, "source": h.source, "text": h.text, "score": h.score}
-            for h in context.search(req.query, req.k)
+            for h in hits
         ]
     }
 
@@ -924,6 +1044,43 @@ def search_knowledge(
     does."""
     _get_project(project_id, user)
     return _search_body(user.id, project_id, req)
+
+
+# --------------------------------------------------------------------------- usage dashboard
+@app.get("/usage")
+def usage_dashboard(
+    days: int = 30, project_id: str | None = None, user: UserRecord = Depends(current_user)
+) -> dict[str, Any]:
+    """Models, tokens and estimated cost of everything the signed-in user ran: agent
+    runs (local and deployed), planner and assistant calls, and embeddings — totals, per
+    day, per model, per project, per kind of work, and the most recent runs."""
+    days = min(max(days, 1), 366)
+    today = datetime.now(timezone.utc).date()
+    start = today - timedelta(days=days - 1)
+    since = datetime(start.year, start.month, start.day, tzinfo=timezone.utc)
+    records = [r.model_dump() for r in _usage.list(user.id, since, project_id)]
+    names = {p.id: p.brief for p in _store.list_for_tenant(user.id)}
+    table = usage_mod.prices()
+    return usage_mod.dashboard(
+        records, start=start, days=days, project_names=names, currency=table.get("currency", "USD")
+    )
+
+
+@app.get("/usage/pricing")
+def usage_pricing(user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """The price table used for cost estimates, and the models in your usage (last 90
+    days) that have no price yet."""
+    table = usage_mod.prices()
+    since = datetime.now(timezone.utc) - timedelta(days=90)
+    seen = {(r.provider, r.model) for r in _usage.list(user.id, since)}
+    return {
+        "currency": table.get("currency", "USD"),
+        "file": "backend/pricing.json",
+        "models": table.get("models", {}),
+        "unpriced": sorted(
+            f"{p}/{m}" for p, m in seen if usage_mod.price_for(p, m, table) is None
+        ),
+    }
 
 
 # --------------------------------------------------------------------------- deploy
@@ -1009,12 +1166,16 @@ def invoke_deployment(
     # wait for whichever of the two allows the longer run.
     timeout_s = max(project.plan.bounds.timeout_s, RunBounds().timeout_s)
     result = cloud.invoke(deployment.runtime_arn, payload, timeout_s)
+    # The runtime reports its own usage; runtimes deployed before usage reporting don't.
+    entries = [e for e in result.get("usage") or [] if isinstance(e, dict) and "model" in e]
+    _record_usage(user.id, project_id, entries, run_id=uuid.uuid4().hex, deployed=True)
     return {
         "project_id": project_id,
         "plan_version": deployment.live_plan_version,
         "outputs": result.get("outputs", {}),
         "errors": result.get("errors", []),
         "halted": bool(result.get("halted", False)),
+        "usage": usage_mod.summarize(entries),
     }
 
 

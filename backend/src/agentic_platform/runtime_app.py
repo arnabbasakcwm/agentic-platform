@@ -47,7 +47,9 @@ def _snapshot_context(directory: Path | None) -> KnowledgeContext | None:
     if snapshot is None:
         return None
     embedding, filenames, passages, matrix = snapshot
-    return SnapshotContext(get_embeddings(embedding).embed_query, filenames, passages, matrix)
+    context = SnapshotContext(get_embeddings(embedding).embed_query, filenames, passages, matrix)
+    context.embedding = (embedding.provider, embedding.model)
+    return context
 
 
 def create_app(plan_data: dict[str, Any], knowledge_dir: Path | None = None) -> FastAPI:
@@ -78,12 +80,19 @@ def create_app(plan_data: dict[str, Any], knowledge_dir: Path | None = None) -> 
                 "outputs": result.get("outputs", {}),
                 "errors": result.get("errors", []),
                 "halted": bool(result.get("halted", False)),
+                "usage": result.get("usage", []),
             }
         try:
             result = run_graph(graph, req.input, plan.bounds)
         except TimeoutError as e:
             return _error(504, "RunTimeout", str(e))
-        return {"outputs": result["outputs"], "errors": result["errors"], "halted": result["halted"]}
+        return {
+            "outputs": result["outputs"],
+            "errors": result["errors"],
+            "halted": result["halted"],
+            # Tokens per agent and model, so the platform can account for deployed runs.
+            "usage": result.get("usage", []),
+        }
 
     @app.exception_handler(RequestValidationError)
     def _bad_request(_req: Request, exc: RequestValidationError):

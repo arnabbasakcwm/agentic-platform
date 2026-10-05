@@ -20,7 +20,7 @@ class _Structured:
     def __init__(self, outcomes):
         self._outcomes = list(outcomes)
 
-    def invoke(self, messages):
+    def invoke(self, messages, config=None):
         outcome = self._outcomes.pop(0) if len(self._outcomes) > 1 else self._outcomes[0]
         if isinstance(outcome, Exception):
             raise outcome
@@ -187,7 +187,7 @@ class _FakeToolCallLLM:
     def bind_tools(self, tools):
         return self
 
-    def invoke(self, messages):
+    def invoke(self, messages, config=None):
         self._calls += 1
         if self._calls == 1:
             return _FakeAIMessage(
@@ -253,7 +253,7 @@ def test_agent_searches_the_projects_documents_and_gets_cited_passages(monkeypat
     class RecordingLLM(_FakeToolCallLLM):
         seen = []
 
-        def invoke(self, messages):
+        def invoke(self, messages, config=None):
             RecordingLLM.seen = list(messages)
             if self._calls == 0:
                 self._calls += 1

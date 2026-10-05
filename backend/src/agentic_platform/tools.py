@@ -22,6 +22,7 @@ import xml.etree.ElementTree as ET
 from typing import TYPE_CHECKING, Callable
 
 import requests
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, tool
 
 from .errors import KnowledgeUnavailableError, MissingToolKeyError, UnknownToolError
@@ -370,15 +371,26 @@ def _build_knowledge_search(knowledge: KnowledgeContext | None = None) -> BaseTo
     if knowledge is None:
         raise KnowledgeUnavailableError()
     from .knowledge import format_hits
+    from .usage import estimate_tokens
 
     @tool
-    def knowledge_search(query: str) -> str:
+    def knowledge_search(query: str, config: RunnableConfig) -> str:
         """Search the documents the user uploaded to this project (PDF, Word, text,
         Markdown, CSV) and return the most relevant passages, each cited as
         [file name — page/section/rows]. Ask a specific question or name the facts you need;
         search again with different words if the first results don't answer it. Cite the
         file and location for any fact you use from these passages."""
-        return format_hits(query, knowledge.search(query))
+        hits = knowledge.search(query)
+        # The query was embedded: count it (estimated) against the run, if one is counting.
+        usage = ((config or {}).get("configurable") or {}).get("usage")
+        if usage is not None and knowledge.embedding:
+            provider, model = knowledge.embedding
+            usage.add(
+                kind="embedding_query", provider=provider, model=model, estimated=True,
+                input_tokens=estimate_tokens(query),
+                agent_id=((config or {}).get("configurable") or {}).get("agent_id"),
+            )
+        return format_hits(query, hits)
 
     return knowledge_search
 

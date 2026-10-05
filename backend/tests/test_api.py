@@ -3,7 +3,7 @@ import json
 import agentic_platform.app as app_module
 from agentic_platform.agent_schema import AgentPlan, AgentSpec, LLMConfig
 from agentic_platform.errors import StoreUnavailableError
-from agentic_platform.stores import InMemoryProjectStore, InMemoryKnowledgeStore, InMemoryUserStore
+from agentic_platform.stores import InMemoryProjectStore, InMemoryKnowledgeStore, InMemoryUsageStore, InMemoryUserStore
 from fastapi.testclient import TestClient
 
 
@@ -28,6 +28,7 @@ def _client(monkeypatch):
     monkeypatch.setattr(app_module, "_store", InMemoryProjectStore())
     monkeypatch.setattr(app_module, "_users", InMemoryUserStore())
     monkeypatch.setattr(app_module, "_knowledge", InMemoryKnowledgeStore())
+    monkeypatch.setattr(app_module, "_usage", InMemoryUsageStore())
     app_module._COMPILED.clear()
     client = TestClient(app_module.app)
     # Project routes need a signed-in user; auth itself is covered in test_auth.py.
@@ -108,7 +109,7 @@ def test_compiled_project_runs_in_a_process_that_never_compiled_it(monkeypatch):
     app_module._COMPILED.clear()
     seen = {}
 
-    def fake_run(graph, task_input, bounds):
+    def fake_run(graph, task_input, bounds, usage=None):
         seen["graph"] = graph
         return {"outputs": {"a": {"content": "ok", "data": {}}}, "errors": [], "halted": False}
 
@@ -355,7 +356,7 @@ def test_run_timeout_is_a_typed_504_not_a_bare_500(monkeypatch):
     pid = c.post("/projects", json={"brief": "x"}).json()["project_id"]
     c.post(f"/projects/{pid}/compile")
 
-    def too_slow(graph, task_input, bounds):
+    def too_slow(graph, task_input, bounds, usage=None):
         raise TimeoutError("the run exceeded its 300s time limit")
 
     monkeypatch.setattr(app_module, "run_graph", too_slow)
@@ -380,7 +381,7 @@ def test_run_stream_sends_progress_then_the_same_result_as_run(monkeypatch):
     pid = c.post("/projects", json={"brief": "x"}).json()["project_id"]
     c.post(f"/projects/{pid}/compile")
 
-    def fake_events(graph, task_input, bounds):
+    def fake_events(graph, task_input, bounds, usage=None):
         yield "run_started", {"at": 1.0, "timeout_s": bounds.timeout_s}
         yield "node_started", {"node": "a", "at": 1.1}
         yield "node_completed", {"node": "a", "at": 2.0, "duration_ms": 900, "attempts": 1,

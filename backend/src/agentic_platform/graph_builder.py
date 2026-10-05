@@ -38,6 +38,7 @@ from .errors import (
     UnsupportedProviderError,
 )
 from .tools import get_tools
+from .usage import UsageCallback, UsageCollector
 
 if TYPE_CHECKING:
     from .knowledge import KnowledgeContext
@@ -106,9 +107,17 @@ class Embedder:
     """Embeds knowledge-base passages and search queries with one model. Some models
     embed a passage and a question differently (task types), so the two are separate."""
 
-    def __init__(self, embed_documents: Callable[[list[str]], list[list[float]]], embed_query: Callable[[str], list[float]]):
+    def __init__(
+        self,
+        embed_documents: Callable[[list[str]], list[list[float]]],
+        embed_query: Callable[[str], list[float]],
+        provider: str | None = None,
+        model: str | None = None,
+    ):
         self.embed_documents = embed_documents
         self.embed_query = embed_query
+        self.provider = provider
+        self.model = model
 
 
 def embedding_available(provider: str) -> bool:
@@ -132,6 +141,8 @@ def get_embeddings(config: EmbeddingConfig) -> Embedder:
             lambda text: model.embed_query(
                 text, task_type="RETRIEVAL_QUERY", output_dimensionality=EMBEDDING_DIMENSIONS
             ),
+            provider,
+            config.model,
         )
     if provider == "openai":
         from langchain_openai import OpenAIEmbeddings
@@ -139,7 +150,7 @@ def get_embeddings(config: EmbeddingConfig) -> Embedder:
         model = OpenAIEmbeddings(
             model=config.model, dimensions=EMBEDDING_DIMENSIONS, api_key=_require_key(provider)
         )
-        return Embedder(model.embed_documents, model.embed_query)
+        return Embedder(model.embed_documents, model.embed_query, provider, config.model)
     raise UnsupportedProviderError(provider)
 
 
@@ -211,6 +222,7 @@ def _run_agent_once(
     base_messages: list[AnyMessage],
     bounds: RunBounds,
     knowledge: KnowledgeContext | None = None,
+    usage: UsageCollector | None = None,
 ) -> AgentOutput:
     """One full attempt for an agent node: bounded tool loop, then structured output.
 
@@ -219,19 +231,28 @@ def _run_agent_once(
     """
     messages = list(base_messages)
     tools = get_tools(spec.tools, knowledge)
+    # Every model call (tool turns, the structured answer, the rewrite) reports its
+    # provider-counted tokens to the run's collector, labelled with this agent.
+    call_config: RunnableConfig = (
+        {"callbacks": [UsageCallback(usage, kind="run", provider=spec.llm.provider,
+                                     model=spec.llm.model, agent_id=spec.id)]}
+        if usage is not None
+        else {}
+    )
+    tool_config: RunnableConfig = {"configurable": {"usage": usage, "agent_id": spec.id}}
 
     if tools:
         bound = llm.bind_tools(tools)
         tool_map = {t.name: t for t in tools}
         for _ in range(bounds.max_steps):
-            ai = bound.invoke(messages)
+            ai = bound.invoke(messages, config=call_config)
             messages.append(ai)
             tool_calls = getattr(ai, "tool_calls", None) or []
             if not tool_calls:
                 break
             for tc in tool_calls:
                 tool = tool_map[tc["name"]]  # names validated at compile time
-                result = tool.invoke(tc["args"])  # may raise -> caught by retry loop
+                result = tool.invoke(tc["args"], config=tool_config)  # may raise -> retry loop
                 messages.append(
                     ToolMessage(content=str(result), tool_call_id=tc["id"])
                 )
@@ -246,7 +267,7 @@ def _run_agent_once(
             )
         )
     )
-    output = structured.invoke(messages)
+    output = structured.invoke(messages, config=call_config)
     if _looks_flattened(output.content):
         # Models sometimes ignore the instruction and return the whole answer on one
         # line, which renders as a single paragraph. Say exactly what's wrong and ask
@@ -262,7 +283,7 @@ def _run_agent_once(
                 )
             )
         )
-        retry = structured.invoke(messages)
+        retry = structured.invoke(messages, config=call_config)
         if not _looks_flattened(retry.content):
             output = retry
     return output
@@ -283,6 +304,12 @@ def _looks_flattened(content: str) -> bool:
 Emit = Callable[..., None]
 
 
+def _usage(config: RunnableConfig | None) -> UsageCollector | None:
+    """The run's usage collector, passed like `emit` through LangGraph's config."""
+    usage = ((config or {}).get("configurable") or {}).get("usage")
+    return usage if isinstance(usage, UsageCollector) else None
+
+
 def _emitter(config: RunnableConfig | None) -> Emit:
     """The run's event callback, if the caller asked for events (see run_graph_events);
     otherwise a no-op. Passed per run through LangGraph's config, so one compiled graph
@@ -299,6 +326,7 @@ def _make_node(
 ):
     def node(state: GraphState, config: Optional[RunnableConfig] = None) -> dict[str, Any]:
         emit = _emitter(config)
+        usage = _usage(config)
         started = time.monotonic()
 
         def elapsed_ms() -> int:
@@ -342,10 +370,11 @@ def _make_node(
                     )
                 )
             try:
-                output = _run_agent_once(llm, spec, attempt_messages, bounds, knowledge)
+                output = _run_agent_once(llm, spec, attempt_messages, bounds, knowledge, usage)
                 dumped = output.model_dump()
                 emit("node_completed", node=spec.id, duration_ms=elapsed_ms(),
-                     attempts=attempt, output=dumped)
+                     attempts=attempt, output=dumped,
+                     usage=usage.entries(spec.id) if usage else [])
                 return {"outputs": {spec.id: dumped}}
             except Exception as e:  # noqa: BLE001 — deliberate: recover from any node failure
                 last_error = f"{type(e).__name__}: {e}"
@@ -361,7 +390,8 @@ def _make_node(
             attempts=bounds.max_retries,
         )
         emit("node_failed", node=spec.id, duration_ms=elapsed_ms(),
-             attempts=bounds.max_retries, error=str(failure))
+             attempts=bounds.max_retries, error=str(failure),
+             usage=usage.entries(spec.id) if usage else [])
         return {"errors": [failure.to_dict()], "halted": True}
 
     return node
@@ -484,6 +514,7 @@ def _make_supervisor(sup_spec: AgentSpec, worker_ids: list[str], cap: int):
 
     def node(state: GraphState, config: Optional[RunnableConfig] = None) -> dict[str, Any]:
         emit = _emitter(config)
+        usage = _usage(config)
         started = time.monotonic()
         steps = state.get("supervisor_steps", 0) + 1
         emit("node_started", node=sup_spec.id)
@@ -504,7 +535,13 @@ def _make_supervisor(sup_spec: AgentSpec, worker_ids: list[str], cap: int):
             HumanMessage(content=_build_context(state, sup_spec, include_all_outputs=True)),
         ]
         try:
-            decision = llm.with_structured_output(_SupervisorDecision).invoke(messages)
+            call_config: RunnableConfig = (
+                {"callbacks": [UsageCallback(usage, kind="run", provider=sup_spec.llm.provider,
+                                             model=sup_spec.llm.model, agent_id=sup_spec.id)]}
+                if usage is not None
+                else {}
+            )
+            decision = llm.with_structured_output(_SupervisorDecision).invoke(messages, config=call_config)
             nxt = decision.next_agent.strip()
             if nxt not in worker_ids and nxt != "FINISH":
                 nxt = "FINISH"  # invalid routing target -> finish safely rather than loop
@@ -566,6 +603,7 @@ def run_single_agent(
     task_input: dict[str, Any],
     upstream_outputs: dict[str, Any] | None = None,
     knowledge: KnowledgeContext | None = None,
+    usage: UsageCollector | None = None,
 ) -> dict[str, Any]:
     """Run one agent node in isolation (the per-agent endpoint path).
 
@@ -578,26 +616,34 @@ def run_single_agent(
     node = _make_node(spec, plan.bounds, knowledge=knowledge)
     state = initial_state(task_input)
     state["outputs"] = dict(upstream_outputs or {})
-    return node(state)
+    usage = usage if usage is not None else UsageCollector()
+    result = node(state, {"configurable": {"usage": usage}})
+    return {**result, "usage": usage.entries()}
 
 
-def run_graph(graph, task_input: dict[str, Any], bounds: RunBounds) -> dict[str, Any]:
+def run_graph(
+    graph, task_input: dict[str, Any], bounds: RunBounds, usage: UsageCollector | None = None
+) -> dict[str, Any]:
     """Invoke a compiled graph with a wall-clock timeout bound (principle: every run is
     bounded, not left to model good behavior).
 
     On timeout the caller gets TimeoutError as soon as the limit passes. The run's worker
     thread can't be killed, so it finishes in the background and its result is dropped.
+
+    The result includes `usage`: tokens per agent and model. Pass a collector to keep
+    reading it after a timeout (it holds whatever was used up to then).
     """
     import concurrent.futures
 
+    usage = usage if usage is not None else UsageCollector()
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     future = pool.submit(
         graph.invoke,
         initial_state(task_input),
-        {"recursion_limit": 50},
+        {"recursion_limit": 50, "configurable": {"usage": usage}},
     )
     try:
-        return future.result(timeout=bounds.timeout_s)
+        return {**future.result(timeout=bounds.timeout_s), "usage": usage.entries()}
     except concurrent.futures.TimeoutError as e:
         raise TimeoutError(f"the run exceeded its {bounds.timeout_s:g}s time limit") from e
     finally:
@@ -607,7 +653,7 @@ def run_graph(graph, task_input: dict[str, Any], bounds: RunBounds) -> dict[str,
 
 
 def run_graph_events(
-    graph, task_input: dict[str, Any], bounds: RunBounds
+    graph, task_input: dict[str, Any], bounds: RunBounds, usage: UsageCollector | None = None
 ) -> Iterator[tuple[str, dict[str, Any]]]:
     """Run a compiled graph and yield (event, data) pairs as it happens:
 
@@ -620,6 +666,7 @@ def run_graph_events(
     """
     events: queue.Queue = queue.Queue()
     started = time.time()
+    usage = usage if usage is not None else UsageCollector()
 
     def emit(event: str, **data: Any) -> None:
         events.put((event, {**data, "at": time.time()}))
@@ -628,7 +675,7 @@ def run_graph_events(
         try:
             result = graph.invoke(
                 initial_state(task_input),
-                {"recursion_limit": 50, "configurable": {"emit": emit}},
+                {"recursion_limit": 50, "configurable": {"emit": emit, "usage": usage}},
             )
             events.put(("__done__", result))
         except Exception as e:  # noqa: BLE001 — reported to the caller as run_failed
@@ -646,6 +693,7 @@ def run_graph_events(
                 "error_type": "RunTimeout",
                 "message": f"the run exceeded its {bounds.timeout_s:g}s time limit",
                 "limit_s": bounds.timeout_s,
+                "usage": usage.entries(),
             }
             return
         try:
@@ -657,6 +705,7 @@ def run_graph_events(
                 "at": time.time(),
                 "duration_ms": int((time.time() - started) * 1000),
                 "outputs": data["outputs"],
+                "usage": usage.entries(),
                 "errors": data["errors"],
                 "halted": data["halted"],
             }

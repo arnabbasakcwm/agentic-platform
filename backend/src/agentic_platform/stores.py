@@ -770,9 +770,99 @@ class MongoKnowledgeStore:
             )
 
 
-def make_stores() -> tuple[ProjectStore, UserStore, KnowledgeStore]:
+# ---------------------------------------------------------------------------- usage
+UsageKind = Literal["run", "deployed_run", "planner", "assistant", "embedding_index", "embedding_query"]
+
+
+class UsageRecord(BaseModel):
+    """Tokens one model used for one piece of work, with the cost estimated when it was
+    recorded (the price is kept, so later edits to the price table don't rewrite history)."""
+
+    id: str
+    tenant_id: str
+    project_id: str | None = None
+    at: datetime = Field(default_factory=_now)
+    kind: UsageKind
+    run_id: str | None = None  # groups the records of one run / planner call / indexing job
+    agent_id: str | None = None
+    provider: str
+    model: str
+    calls: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    estimated: bool = False  # tokens estimated, not reported by the provider (embeddings)
+    cost: float | None = None  # None: the model has no price in pricing.json
+    currency: str = "USD"
+    price: dict[str, Any] | None = None
+
+
+class UsageStore(Protocol):
+    """Usage history, per tenant. Append-only."""
+
+    def add_many(self, records: list[UsageRecord]) -> None: ...
+
+    def list(self, tenant_id: str, since: datetime, project_id: str | None = None) -> list[UsageRecord]:
+        """The tenant's records since `since`, oldest first."""
+        ...
+
+
+class InMemoryUsageStore:
+    def __init__(self) -> None:
+        self._records: list[UsageRecord] = []
+
+    def add_many(self, records: list[UsageRecord]) -> None:
+        self._records.extend(r.model_copy() for r in records)
+
+    def list(self, tenant_id: str, since: datetime, project_id: str | None = None) -> list[UsageRecord]:
+        found = [
+            r for r in self._records
+            if r.tenant_id == tenant_id and r.at >= since and (project_id is None or r.project_id == project_id)
+        ]
+        return [r.model_copy() for r in sorted(found, key=lambda r: r.at)]
+
+
+class MongoUsageStore:
+    """`usage_events`, one document per record, indexed by tenant and time. Totals are
+    computed in Python over the requested range (plain CRUD, portable to DocumentDB)."""
+
+    def __init__(self, db: "Database"):
+        self._events = db["usage_events"]
+        self._index_ready = False
+
+    def _ensure_index(self) -> None:
+        if not self._index_ready:
+            self._events.create_index([("tenant_id", 1), ("at", 1)])
+            self._index_ready = True
+
+    def add_many(self, records: list[UsageRecord]) -> None:
+        if not records:
+            return
+        docs = []
+        for r in records:
+            body = r.model_dump()
+            body["_id"] = body.pop("id")
+            docs.append(body)
+        with _mongo_errors():
+            self._ensure_index()
+            self._events.insert_many(docs, ordered=False)
+
+    def list(self, tenant_id: str, since: datetime, project_id: str | None = None) -> list[UsageRecord]:
+        query: dict[str, Any] = {"tenant_id": tenant_id, "at": {"$gte": since}}
+        if project_id is not None:
+            query["project_id"] = project_id
+        with _mongo_errors():
+            self._ensure_index()
+            docs = list(self._events.find(query).sort("at", 1))
+        out = []
+        for d in docs:
+            d["id"] = d.pop("_id")
+            out.append(UsageRecord.model_validate(d))
+        return out
+
+
+def make_stores() -> tuple[ProjectStore, UserStore, KnowledgeStore, UsageStore]:
     """MongoDB when MONGODB_URI is configured, otherwise the in-memory fallback."""
     if MONGODB_URI:
         db = mongo_database(MONGODB_URI, MONGODB_DB)
-        return MongoProjectStore(db), MongoUserStore(db), MongoKnowledgeStore(db)
-    return InMemoryProjectStore(), InMemoryUserStore(), InMemoryKnowledgeStore()
+        return MongoProjectStore(db), MongoUserStore(db), MongoKnowledgeStore(db), MongoUsageStore(db)
+    return InMemoryProjectStore(), InMemoryUserStore(), InMemoryKnowledgeStore(), InMemoryUsageStore()

@@ -340,7 +340,12 @@ def _describe(error: Exception) -> str:
     return f"{type(error).__name__}: {text}"[:500]
 
 
-def _embed_all(embedder: Embedder, texts: list[str], on_batch: Callable[[], None] = lambda: None) -> list[list[float]]:
+def _embed_all(
+    embedder: Embedder,
+    texts: list[str],
+    on_batch: Callable[[], None] = lambda: None,
+    on_embedded: Callable[[list[str]], None] | None = None,
+) -> list[list[float]]:
     """Embed in batches, retrying a failed batch (rate limits, timeouts) with backoff."""
     vectors: list[list[float]] = []
     for start in range(0, len(texts), EMBED_BATCH):
@@ -357,6 +362,8 @@ def _embed_all(embedder: Embedder, texts: list[str], on_batch: Callable[[], None
         if len(result) != len(batch):
             raise KnowledgeError("the embedding model returned the wrong number of vectors")
         vectors.extend([float(x) for x in v] for v in result)
+        if on_embedded is not None:
+            on_embedded(batch)  # counted per successful batch: failed attempts aren't billed
         on_batch()  # keeps the document's updated_at fresh, so it isn't reported as stalled
     return vectors
 
@@ -368,9 +375,11 @@ def index_document(
     data: bytes,
     embedder: Embedder,
     chunk_budget: int,
+    on_embedded: Callable[[list[str]], None] | None = None,
 ) -> None:
     """The background job for one upload: extract → chunk → embed → store. The outcome is
-    written to the document's status; this never raises."""
+    written to the document's status; this never raises. `on_embedded` is told about each
+    batch of text sent to the embedding model (for usage accounting)."""
     doc = store.get_document(tenant_id, document_id)
     if doc is None:
         return
@@ -386,7 +395,7 @@ def index_document(
                 f"this file has {len(passages)} passages, more than the {max(chunk_budget, 0)} "
                 f"left in your knowledge library (limit {MAX_CHUNKS_PER_LIBRARY})"
             )
-        vectors = _embed_all(embedder, [p.text for p in passages], touch)
+        vectors = _embed_all(embedder, [p.text for p in passages], touch, on_embedded)
         if store.get_document(tenant_id, document_id) is None:
             return  # deleted while it was being indexed
         store.replace_chunks(
@@ -413,7 +422,12 @@ def index_document(
         store.update_document(tenant_id, document_id, status="failed", error=_describe(e), chunk_count=0)
 
 
-def reembed_library(store: KnowledgeStore, tenant_id: str, embedder: Embedder) -> None:
+def reembed_library(
+    store: KnowledgeStore,
+    tenant_id: str,
+    embedder: Embedder,
+    on_embedded: Callable[[list[str]], None] | None = None,
+) -> None:
     """The background job after the library's embedding model changes: re-embed every
     stored passage (the text is kept, so files needn't be uploaded again). Never raises."""
     for doc in store.list_documents(tenant_id):
@@ -426,6 +440,7 @@ def reembed_library(store: KnowledgeStore, tenant_id: str, embedder: Embedder) -
                 embedder,
                 [c.text for c in chunks],
                 lambda doc_id=doc.id: store.update_document(tenant_id, doc_id, status="processing"),
+                on_embedded,
             )
             store.set_embeddings(tenant_id, {c.id: v for c, v in zip(chunks, vectors)})
             store.update_document(tenant_id, doc.id, status="ready", error=None)
@@ -474,6 +489,8 @@ class KnowledgeContext:
 
     embed_query: Callable[[str], list[float]]
     load: Callable[[], tuple[list[KnowledgeChunk], dict[str, str]]]  # passages, doc id → filename
+    # (provider, model) of the embedding model, for counting query usage.
+    embedding: tuple[str, str] | None = None
 
     def search(self, query: str, k: int = 5) -> list[Hit]:
         chunks, filenames = self.load()
@@ -497,7 +514,8 @@ def store_context(
         names = _ready_documents(store, tenant_id, project_id)
         return store.chunks_for_documents(tenant_id, list(names)), names
 
-    return KnowledgeContext(embedder.embed_query, load)
+    label = (embedder.provider, embedder.model) if getattr(embedder, "provider", None) else None
+    return KnowledgeContext(embedder.embed_query, load, label)
 
 
 # ---------------------------------------------------------------------------- deployed snapshot

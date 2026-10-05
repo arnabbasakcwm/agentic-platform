@@ -4,7 +4,7 @@ import agentic_platform.app as app_module
 from agentic_platform import knowledge as kb
 from agentic_platform.agent_schema import AgentOutput, AgentPlan, AgentSpec, LLMConfig, PlanRevision
 from agentic_platform.graph_builder import Embedder
-from agentic_platform.stores import InMemoryKnowledgeStore, InMemoryProjectStore, InMemoryUserStore
+from agentic_platform.stores import InMemoryKnowledgeStore, InMemoryProjectStore, InMemoryUsageStore, InMemoryUserStore
 from fastapi.testclient import TestClient
 
 
@@ -31,6 +31,7 @@ def _client(monkeypatch):
     monkeypatch.setattr(app_module, "_store", InMemoryProjectStore())
     monkeypatch.setattr(app_module, "_users", InMemoryUserStore())
     monkeypatch.setattr(app_module, "_knowledge", InMemoryKnowledgeStore())
+    monkeypatch.setattr(app_module, "_usage", InMemoryUsageStore())
     app_module._COMPILED.clear()
     client = TestClient(app_module.app)
     session = client.post(
@@ -199,7 +200,7 @@ def test_a_run_searches_the_projects_documents(monkeypatch):
         def bind_tools(self, tools):
             return self
 
-        def invoke(self, messages):
+        def invoke(self, messages, config=None):
             seen.append(messages[-1])
             if len(seen) == 1:
                 return Message([{"name": "knowledge_search", "args": {"query": "hotel cap"}, "id": "c1"}])
@@ -207,7 +208,7 @@ def test_a_run_searches_the_projects_documents(monkeypatch):
 
         def with_structured_output(self, schema):
             class S:
-                def invoke(self, messages):
+                def invoke(self, messages, config=None):
                     return AgentOutput(content="The cap is INR 9,000 [policy.md].")
 
             return S()

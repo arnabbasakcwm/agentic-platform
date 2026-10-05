@@ -29,7 +29,7 @@ from agentic_platform.errors import (
     MissingToolKeyError,
     UnknownToolError,
 )
-from agentic_platform.stores import Deployment, InMemoryProjectStore, InMemoryKnowledgeStore, InMemoryUserStore, ProjectRecord
+from agentic_platform.stores import Deployment, InMemoryProjectStore, InMemoryKnowledgeStore, InMemoryUsageStore, InMemoryUserStore, ProjectRecord
 
 GEMINI = LLMConfig(provider="google_genai", model="gemini-3.1-pro-preview")
 
@@ -56,7 +56,7 @@ def keys(monkeypatch):
 def test_runtime_ping_and_invocations_match_the_local_run_contract(monkeypatch):
     seen = {}
 
-    def fake_run(graph, task_input, bounds):
+    def fake_run(graph, task_input, bounds, usage=None):
         seen["input"] = task_input
         return {"outputs": {"b": {"content": "done", "data": {}}}, "errors": [], "halted": False}
 
@@ -69,7 +69,7 @@ def test_runtime_ping_and_invocations_match_the_local_run_contract(monkeypatch):
 
     r = client.post("/invocations", json={"input": {"q": "x"}})
     assert r.status_code == 200
-    assert r.json() == {"outputs": {"b": {"content": "done", "data": {}}}, "errors": [], "halted": False}
+    assert r.json() == {"outputs": {"b": {"content": "done", "data": {}}}, "errors": [], "halted": False, "usage": []}
     assert seen["input"] == {"q": "x"}
 
 
@@ -421,6 +421,7 @@ def api(monkeypatch, keys):
     monkeypatch.setattr(app_module, "_store", InMemoryProjectStore())
     monkeypatch.setattr(app_module, "_users", InMemoryUserStore())
     monkeypatch.setattr(app_module, "_knowledge", InMemoryKnowledgeStore())
+    monkeypatch.setattr(app_module, "_usage", InMemoryUsageStore())
     monkeypatch.setattr(app_module, "_package_builder", _fake_packager)
     cloud = FakeCloud()
     monkeypatch.setattr(app_module, "_make_cloud", lambda: cloud)

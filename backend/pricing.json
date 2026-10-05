@@ -1,0 +1,40 @@
+{
+  "currency": "USD",
+  "note": "List prices per 1M tokens, used for cost estimates on the Usage page. Keys are provider/model exactly as in a plan. Add a model here to price it; models without an entry show tokens but no cost. Update prices from the source URLs when providers change them; past usage keeps the price it was recorded with.",
+  "models": {
+    "google_genai/gemini-3.1-pro-preview": {
+      "input_per_1m": 2.0,
+      "output_per_1m": 12.0,
+      "long_context": {"above_prompt_tokens": 200000, "input_per_1m": 4.0, "output_per_1m": 18.0},
+      "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+      "checked_on": "2026-10-05",
+      "notes": "Paid tier, standard. Higher rate for prompts over 200k tokens."
+    },
+    "openai/gpt-4o-mini": {
+      "input_per_1m": 0.15,
+      "output_per_1m": 0.6,
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "checked_on": "2026-10-05",
+      "notes": "Standard tier."
+    },
+    "openai/text-embedding-3-small": {
+      "input_per_1m": 0.02,
+      "output_per_1m": 0,
+      "source_url": "https://developers.openai.com/api/docs/pricing",
+      "checked_on": "2026-10-05",
+      "notes": "Embedding model: input tokens only."
+    },
+    "anthropic/claude-sonnet-4-6": {
+      "input_per_1m": 3.0,
+      "output_per_1m": 15.0,
+      "source_url": "https://claude.com/pricing",
+      "checked_on": "2026-10-05",
+      "notes": "Base input rate (no prompt caching)."
+    }
+  },
+  "unpriced": {
+    "google_genai/gemini-embedding-001": "Not listed on the Gemini API pricing page on 2026-10-05 (it lists Gemini Embedding 2 instead); add its price here once confirmed.",
+    "groq/llama-3.3-70b-versatile": "Groq's pricing page did not show token prices on 2026-10-05.",
+    "moonshot/kimi-k3": "Not checked; add from Moonshot's pricing page before relying on cost."
+  }
+}

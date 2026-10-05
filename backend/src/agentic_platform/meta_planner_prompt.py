@@ -21,6 +21,7 @@ from .agent_schema import AgentPlan, LLMConfig, PlanRevision, RunBounds
 from .config import DEFAULT_MODELS, DEFAULT_PROVIDER, MAX_AGENTS
 from .errors import PlannerError
 from .graph_builder import get_llm
+from .usage import UsageCallback, UsageCollector
 from .tools import TOOL_SUMMARIES, default_tool_names
 
 _PLANNER_RETRY_CEILING = 3
@@ -195,13 +196,21 @@ def _invoke_with_retries(
     build_message: Callable[[str | None], str],
     check: Callable[[T], None],
     planner_llm: LLMConfig | None,
+    usage: UsageCollector | None = None,
+    kind: str = "planner",
 ) -> T:
     """One structured-output call, re-validated server-side, retried with the actual
-    error fed back until it passes or the ceiling is hit (then PlannerError)."""
+    error fed back until it passes or the ceiling is hit (then PlannerError). Every
+    attempt's tokens go to `usage` when given (retries cost tokens too)."""
     planner_llm = planner_llm or LLMConfig(
         provider=DEFAULT_PROVIDER, model=DEFAULT_MODELS[DEFAULT_PROVIDER]
     )
     structured = get_llm(planner_llm).with_structured_output(schema)
+    call_config = (
+        {"callbacks": [UsageCallback(usage, kind=kind, provider=planner_llm.provider, model=planner_llm.model)]}
+        if usage is not None
+        else {}
+    )
 
     correction: str | None = None
     last_error: str | None = None
@@ -213,7 +222,7 @@ def _invoke_with_retries(
         try:
             # Parsing into the schema runs its validators (graph integrity); `check` adds
             # the semantic constraints the schema can't express (allow-lists, limits).
-            result: T = structured.invoke(messages)
+            result: T = structured.invoke(messages, config=call_config)
             check(result)
             return result
         except (ValidationError, ValueError) as e:
@@ -246,6 +255,7 @@ def plan_project(
     available_tools: list[str] | None = None,
     available_llms: list[dict[str, Any]] | None = None,
     planner_llm: LLMConfig | None = None,
+    usage: UsageCollector | None = None,
 ) -> AgentPlan:
     """Turn a natural-language brief into a validated AgentPlan.
 
@@ -261,6 +271,8 @@ def plan_project(
         ),
         lambda plan: _semantic_check(plan, requested_agent_count, tools, llms),
         planner_llm,
+        usage,
+        "planner",
     )
     # Run limits are set by the platform, never by the model (principle 6): whatever
     # `bounds` the model filled in is replaced with the platform defaults.
@@ -275,6 +287,7 @@ def revise_plan(
     available_tools: list[str] | None = None,
     available_llms: list[dict[str, Any]] | None = None,
     planner_llm: LLMConfig | None = None,
+    usage: UsageCollector | None = None,
 ) -> PlanRevision:
     """Apply a natural-language change request to an existing brief and plan.
 
@@ -292,6 +305,8 @@ def revise_plan(
         ),
         lambda revision: _semantic_check(revision.plan, None, tools, llms),
         planner_llm,
+        usage,
+        "assistant",
     )
     # A revision never changes run limits; they stay whatever the project had.
     revised_plan = revision.plan.model_copy(update={"bounds": plan.bounds})

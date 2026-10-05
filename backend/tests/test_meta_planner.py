@@ -27,7 +27,7 @@ class _FakeStructured:
         self._outcomes = list(outcomes)
         self.calls = 0
 
-    def invoke(self, messages):
+    def invoke(self, messages, config=None):
         self.calls += 1
         outcome = self._outcomes.pop(0)
         if isinstance(outcome, Exception):
@@ -100,7 +100,7 @@ class _Recorder(_FakeStructured):
         super().__init__(outcomes)
         self.messages = []
 
-    def invoke(self, messages):
+    def invoke(self, messages, config=None):
         self.messages.append(messages)
         return super().invoke(messages)
 
