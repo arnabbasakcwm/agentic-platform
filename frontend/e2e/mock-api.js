@@ -139,10 +139,90 @@ async function streamRun(req, res, input) {
   emit("run_completed", {
     duration_ms: Math.round((Date.now() / 1000 - t0) * 1000),
     outputs: out,
+    usage: RUN_USAGE,
     errors: [],
     halted: false,
   });
   res.end();
+}
+
+// ---- usage: a fixed, realistic month of usage for the Usage page.
+const RUN_USAGE = {
+  currency: "USD",
+  entries: [],
+  input_tokens: 41200,
+  output_tokens: 9650,
+  cost: 0.198,
+  unpriced_models: [],
+};
+
+function usageBody(days, projectId) {
+  const today = new Date();
+  const byDay = [];
+  for (let i = days - 1; i >= 0; i -= 1) {
+    const d = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() - i));
+    // A deterministic pattern: quiet days, a few busy ones.
+    const n = (d.getUTCDate() * 7) % 11;
+    const cost = n < 4 ? 0 : Number((n * 0.031).toFixed(4));
+    byDay.push({
+      date: d.toISOString().slice(0, 10),
+      cost,
+      calls: n,
+      input_tokens: n * 9000,
+      output_tokens: n * 2100,
+      unpriced_tokens: n === 9 ? 1200 : 0,
+    });
+  }
+  const sum = (key) => byDay.reduce((t, d) => t + d[key], 0);
+  const totalCost = Number(sum("cost").toFixed(4));
+  const agents = [
+    { agent_id: "flight_searcher", kind: "run", provider: "google_genai", model: "gemini-3.1-pro-preview", calls: 4, input_tokens: 28100, output_tokens: 6200, cost: 0.1306, estimated: false },
+    { agent_id: "flight_searcher", kind: "embedding_query", provider: "google_genai", model: "gemini-embedding-001", calls: 2, input_tokens: 14, output_tokens: 0, cost: null, estimated: true },
+    { agent_id: "travel_advisor", kind: "run", provider: "google_genai", model: "gemini-3.1-pro-preview", calls: 1, input_tokens: 13100, output_tokens: 3450, cost: 0.0676, estimated: false },
+  ];
+  const run = (id, hoursAgo, deployed) => ({
+    run_id: id,
+    project_id: PROJECT_ID,
+    project: project.brief,
+    deployed,
+    at: new Date(Date.now() - hoursAgo * 3600 * 1000).toISOString(),
+    calls: 7,
+    input_tokens: 41214,
+    output_tokens: 9650,
+    cost: 0.1982,
+    unpriced_tokens: 14,
+    agents,
+  });
+  const projects = [
+    { project_id: PROJECT_ID, name: project.brief, exists: true, runs: 2, calls: sum("calls") - 3, input_tokens: sum("input_tokens") - 20000, output_tokens: sum("output_tokens") - 4000, cost: Number((totalCost - 0.06).toFixed(4)), unpriced_tokens: 1200 },
+    { project_id: "gone", name: "Deleted project", exists: false, runs: 0, calls: 3, input_tokens: 20000, output_tokens: 4000, cost: 0.06, unpriced_tokens: 0 },
+  ];
+  return {
+    currency: "USD",
+    days,
+    totals: {
+      calls: sum("calls"),
+      input_tokens: sum("input_tokens"),
+      output_tokens: sum("output_tokens"),
+      cost: totalCost,
+      unpriced_tokens: sum("unpriced_tokens"),
+      runs: 2,
+      estimated_tokens: 14,
+    },
+    by_day: byDay,
+    by_model: [
+      { provider: "google_genai", model: "gemini-3.1-pro-preview", priced: true, estimated: false, calls: sum("calls") - 2, input_tokens: sum("input_tokens") - 14, output_tokens: sum("output_tokens"), cost: totalCost, unpriced_tokens: 0 },
+      { provider: "google_genai", model: "gemini-embedding-001", priced: false, estimated: true, calls: 2, input_tokens: 14, output_tokens: 0, cost: 0, unpriced_tokens: 14 },
+    ],
+    by_project: projectId ? projects.filter((x) => x.project_id === projectId) : projects,
+    by_kind: [
+      { kind: "run", calls: sum("calls") - 6, input_tokens: sum("input_tokens") - 9000, output_tokens: sum("output_tokens") - 2000, cost: Number((totalCost - 0.05).toFixed(4)), unpriced_tokens: 0 },
+      { kind: "planner", calls: 2, input_tokens: 6000, output_tokens: 1500, cost: 0.03, unpriced_tokens: 0 },
+      { kind: "assistant", calls: 2, input_tokens: 3000, output_tokens: 500, cost: 0.02, unpriced_tokens: 0 },
+      { kind: "embedding_query", calls: 2, input_tokens: 14, output_tokens: 0, cost: 0, unpriced_tokens: 14 },
+    ],
+    recent_runs: [run("run-local", 2, false), run("run-deployed", 26, true)],
+  };
 }
 
 // The knowledge spec changes the project (uploads, a revision); it resets it afterwards
@@ -323,6 +403,18 @@ const server = http.createServer(async (req, res) => {
   }
   // Library
   if (path === "/knowledge" && req.method === "GET") return send(res, 200, libraryBody());
+  if (path === "/usage" && req.method === "GET") {
+    const params = new URL(req.url, "http://x").searchParams;
+    return send(res, 200, usageBody(Number(params.get("days") ?? 30), params.get("project_id")));
+  }
+  if (path === "/usage/pricing") {
+    return send(res, 200, {
+      currency: "USD",
+      file: "backend/pricing.json",
+      models: { "google_genai/gemini-3.1-pro-preview": { input_per_1m: 2, output_per_1m: 12 } },
+      unpriced: ["google_genai/gemini-embedding-001"],
+    });
+  }
   if (path === "/knowledge/documents" && req.method === "POST") return upload(req, res);
   const libDoc = path.match(/^\/knowledge\/documents\/([^/]+)$/);
   if (libDoc && req.method === "DELETE") {

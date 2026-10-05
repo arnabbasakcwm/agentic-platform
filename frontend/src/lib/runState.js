@@ -19,6 +19,7 @@ export function idleRun(plan) {
     decisions: [], // supervisor routing decisions
     error: null,
     halted: false,
+    usage: null, // models, tokens and estimated cost, once the run ends
   };
 }
 
@@ -131,7 +132,13 @@ export function applyEvent(state, { event, data }) {
     case "run_completed": {
       // The final result is authoritative: take its outputs, and settle anything that
       // never ran (a halted chain) as skipped.
-      let next = { ...state, status: "completed", endedAt: data.at, halted: Boolean(data.halted) };
+      let next = {
+        ...state,
+        status: "completed",
+        endedAt: data.at,
+        halted: Boolean(data.halted),
+        usage: data.usage ?? null,
+      };
       for (const [id, output] of Object.entries(data.outputs ?? {})) {
         next = updateNode(next, id, { output, status: "completed" });
         if (!next.order.includes(id)) next = { ...next, order: [...next.order, id] };
@@ -152,6 +159,7 @@ export function applyEvent(state, { event, data }) {
         ...state,
         status: "failed",
         endedAt: data.at,
+        usage: data.usage ?? null,
         error: { errorType: data.error_type, message: data.message, details: data.limit_s ? { limit_s: data.limit_s } : null },
       };
       // A run cut off mid-way: whatever was running didn't finish, and the rest never ran.

@@ -151,6 +151,10 @@ export const api = {
   invokeDeployment: (id, input) =>
     request(`/projects/${id}/deployment/invoke`, { method: "POST", body: { input } }),
   removeDeployment: (id) => request(`/projects/${id}/deployment`, { method: "DELETE" }),
+  // ---- usage: models, tokens and estimated cost.
+  usage: (days = 30, projectId) =>
+    request(`/usage?days=${days}${projectId ? `&project_id=${encodeURIComponent(projectId)}` : ""}`),
+  usagePricing: () => request("/usage/pricing"),
   // ---- knowledge library: files belong to the user, attached to any number of projects.
   knowledgeOverview: () => request("/knowledge"),
   uploadToLibrary: (files) => request("/knowledge/documents", { method: "POST", form: filesForm(files) }),

@@ -3711,3 +3711,214 @@ code {
 .kattach__option:hover {
   background: var(--surface-sunken);
 }
+
+
+/* ================================================================ usage page */
+.ufilters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.ufilters select {
+  width: auto;
+  min-width: 200px;
+}
+
+.kstat__hint {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.costchart__frame {
+  position: relative;
+}
+
+.costchart__svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: var(--radius-sm);
+}
+
+.costchart__svg:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+
+.costchart__grid {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.costchart__axis {
+  stroke: var(--border-strong);
+  stroke-width: 1;
+}
+
+.costchart__tick {
+  fill: var(--text-muted);
+  font-size: 11px;
+  font-family: var(--font);
+}
+
+.costchart__bar {
+  fill: var(--accent);
+}
+
+.costchart__bar--active {
+  opacity: 0.75;
+}
+
+.costchart__hit {
+  fill: transparent;
+  cursor: default;
+}
+
+.costchart__tip {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-hover);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.costchart__tip strong {
+  color: var(--text);
+  font-size: var(--text-sm);
+}
+
+.costchart__table {
+  margin-top: 8px;
+  max-height: 280px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.linkbtn {
+  margin-top: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.urun-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.urun + .urun {
+  border-top: 1px solid var(--border);
+}
+
+.urun__head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 16px;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.urun__head:hover {
+  background: var(--surface-sunken);
+}
+
+.urun__chevron {
+  display: inline-grid;
+  place-items: center;
+  width: 14px;
+  color: var(--text-muted);
+  transition: transform 0.15s;
+}
+
+.urun__chevron--open {
+  transform: rotate(90deg);
+}
+
+.urun__main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.urun__project {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.urun__when {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.urun__tokens,
+.urun__cost {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.urun__cost {
+  min-width: 90px;
+  text-align: right;
+  color: var(--text);
+}
+
+.urun__detail {
+  padding: 0 16px 12px 40px;
+  overflow-x: auto;
+}
+
+.unotes {
+  margin-top: 16px;
+  font-size: var(--text-xs);
+  max-width: 900px;
+}
+
+.usageline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 16px;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.usageline a {
+  margin-left: auto;
+  color: var(--accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .urun__chevron {
+    transition: none;
+  }
+}

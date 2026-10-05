@@ -17,6 +17,7 @@ import { fullDate } from "../../lib/format.js";
 import { paths } from "../../lib/router.js";
 import { useAction } from "../../lib/useAction.js";
 import { ResultOutputs } from "../../components/ResultOutputs.jsx";
+import { UsageLine } from "../../components/UsageLine.jsx";
 
 const POLL_MS = 3000;
 const PROGRESS = [
@@ -234,6 +235,7 @@ function TryIt({ project }) {
         {run.error && <ErrorCallout error={run.error} />}
         {result && (
           <div style={{ marginTop: 12 }}>
+            <UsageLine usage={result.usage} />
             <ResultOutputs plan={project.plan} result={result} />
           </div>
         )}

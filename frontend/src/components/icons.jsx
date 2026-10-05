@@ -82,6 +82,7 @@ const PATHS = {
   upload: <path d="M12 16V4M7 9l5-5 5 5M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" />,
   trash: <path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3" />,
   book: <path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2zM4 21V5M8 7h7" />,
+  chart: <path d="M4 20h16M7 16v-5M12 16V6M17 16v-8" />,
 };
 
 export function Icon({ name, size = 16 }) {

@@ -3,6 +3,7 @@ import { AgentOutputCard } from "../../components/AgentOutputCard.jsx";
 import { Icon } from "../../components/icons.jsx";
 import { DiagramLegend } from "../../components/DiagramLegend.jsx";
 import { RunTimeline } from "../../components/RunTimeline.jsx";
+import { UsageLine } from "../../components/UsageLine.jsx";
 import {
   ActionBar,
   Button,
@@ -239,6 +240,7 @@ function ResultsPanel({ project, run, clock, cardRefs, highlighted, draftInput, 
           {inputChanged && <span className="ranwith__note">Input changed since this run</span>}
         </div>
       )}
+      <UsageLine usage={run.usage} />
       <div className="panel__body run-results__body">
         {run.status === "failed" && run.error && (
           <div className="stack" style={{ marginBottom: 16 }}>

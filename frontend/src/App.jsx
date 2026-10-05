@@ -12,6 +12,7 @@ import { KnowledgePage } from "./pages/KnowledgePage.jsx";
 import { NewProjectPage } from "./pages/NewProjectPage.jsx";
 import { ProjectWorkspace } from "./pages/ProjectWorkspace.jsx";
 import { ProjectsPage } from "./pages/ProjectsPage.jsx";
+import { UsagePage } from "./pages/UsagePage.jsx";
 
 const COLLAPSED_KEY = "agentic-platform.sidebar-collapsed";
 const STEP_LABELS = {
@@ -37,6 +38,7 @@ function crumbsFor(route, projects) {
   const root = { label: "Projects", href: paths.projects };
   if (route.page === "new") return [root, { label: "New project" }];
   if (route.page === "knowledge") return [{ label: "Knowledge" }];
+  if (route.page === "usage") return [{ label: "Usage" }];
   if (route.page === "project") {
     const known = projects?.find((p) => p.project_id === route.id);
     return [
@@ -212,6 +214,7 @@ function Console() {
             />
           )}
           {route.page === "knowledge" && <KnowledgePage onCountChanged={setKnowledgeCount} />}
+          {route.page === "usage" && <UsagePage projects={projects} />}
           {route.page === "new" && (
             <NewProjectPage
               tools={tools}

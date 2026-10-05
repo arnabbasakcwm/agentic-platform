@@ -74,6 +74,7 @@ export function Sidebar({ route, projects, knowledgeCount, user, collapsed, onTo
           active={route.page === "knowledge"}
           trail={knowledgeCount > 0 ? <span className="navitem__count">{knowledgeCount}</span> : null}
         />
+        <NavItem href={paths.usage} icon="chart" label="Usage" active={route.page === "usage"} />
 
         {recent.length > 0 && (
           <div className="sidebar__recent">
