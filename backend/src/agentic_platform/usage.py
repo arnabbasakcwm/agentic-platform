@@ -249,15 +249,18 @@ def dashboard(
                               "exists": r["project_id"] in project_names, "runs": 0}
         )
         add(project, r)
-        add(by_kind.setdefault(r["kind"], {**bucket(), "kind": r["kind"]}), r)
+        # Deployed runs invoked straight through AWS get their own row.
+        kind = "deployed_run_direct" if r["kind"] == "deployed_run" and r.get("via") == "direct" else r["kind"]
+        add(by_kind.setdefault(kind, {**bucket(), "kind": kind}), r)
 
         run_id = r.get("run_id")
         if run_id and (r["kind"] in RUN_KINDS or run_id in runs):
             run = runs.setdefault(run_id, {
                 "run_id": run_id, "project_id": r["project_id"], "project": project_label(r["project_id"]),
-                "deployed": False, "at": r["at"], **bucket(), "agents": [],
+                "deployed": False, "via": None, "at": r["at"], **bucket(), "agents": [],
             })
             run["deployed"] = run["deployed"] or r["kind"] == "deployed_run"
+            run["via"] = run["via"] or r.get("via")
             run["at"] = min(run["at"], r["at"])
             add(run, r)
             run["agents"].append({k: r[k] for k in (

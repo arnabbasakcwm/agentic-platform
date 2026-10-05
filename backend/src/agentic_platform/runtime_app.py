@@ -13,7 +13,9 @@ arrive as environment variables.
 
 from __future__ import annotations
 
+import json
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +28,29 @@ from .agent_schema import AgentPlan
 from .errors import PlatformError
 from .graph_builder import compile_graph, get_embeddings, run_graph, run_single_agent
 from .knowledge import KnowledgeContext, SnapshotContext, load_snapshot
+from .usage import UsageCollector
+
+# Every invocation prints one line like this (stdout → CloudWatch, via AgentCore), so the
+# platform can count runs that were invoked straight through AWS, not through it. It holds
+# only ids, labels and token counts — never task input, output, document text or keys.
+USAGE_LOG_TYPE = "agentic_usage"
+USAGE_LOG_VERSION = 1
+
+
+def log_usage(run_id: str, via: str, usage: UsageCollector) -> None:
+    print(
+        json.dumps(
+            {
+                "type": USAGE_LOG_TYPE,
+                "v": USAGE_LOG_VERSION,
+                "run_id": run_id,
+                "via": via,
+                "at": round(time.time(), 3),
+                "usage": usage.entries(),
+            }
+        ),
+        flush=True,
+    )
 
 
 class InvocationRequest(BaseModel):
@@ -33,6 +58,9 @@ class InvocationRequest(BaseModel):
     # Run just this agent instead of the whole graph, like the local per-agent endpoint.
     agent_id: str | None = None
     upstream_outputs: dict[str, Any] = Field(default_factory=dict)
+    # Set by the platform when it makes the call, so its own record and the usage log line
+    # share an id; a direct AWS caller leaves it out and the runtime makes one.
+    run_id: str | None = Field(default=None, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
 
 
 def _error(status: int, error_type: str, message: str) -> JSONResponse:
@@ -69,10 +97,19 @@ def create_app(plan_data: dict[str, Any], knowledge_dir: Path | None = None) -> 
 
     @app.post("/invocations")
     def invocations(req: InvocationRequest):
+        run_id = req.run_id or uuid.uuid4().hex
+        usage = UsageCollector()
+        try:
+            return _invoke(req, run_id, usage)
+        finally:
+            # Every path — success, timeout, error — logs what it used.
+            log_usage(run_id, "platform" if req.run_id else "direct", usage)
+
+    def _invoke(req: InvocationRequest, run_id: str, usage: UsageCollector):
         if req.agent_id is not None:
             try:
                 result = run_single_agent(
-                    plan, req.agent_id, req.input, req.upstream_outputs, knowledge
+                    plan, req.agent_id, req.input, req.upstream_outputs, knowledge, usage=usage
                 )
             except KeyError:
                 return _error(404, "AgentNotFound", f"agent '{req.agent_id}' is not in this plan")
@@ -80,10 +117,11 @@ def create_app(plan_data: dict[str, Any], knowledge_dir: Path | None = None) -> 
                 "outputs": result.get("outputs", {}),
                 "errors": result.get("errors", []),
                 "halted": bool(result.get("halted", False)),
-                "usage": result.get("usage", []),
+                "usage": usage.entries(),
+                "run_id": run_id,
             }
         try:
-            result = run_graph(graph, req.input, plan.bounds)
+            result = run_graph(graph, req.input, plan.bounds, usage)
         except TimeoutError as e:
             return _error(504, "RunTimeout", str(e))
         return {
@@ -91,7 +129,8 @@ def create_app(plan_data: dict[str, Any], knowledge_dir: Path | None = None) -> 
             "errors": result["errors"],
             "halted": result["halted"],
             # Tokens per agent and model, so the platform can account for deployed runs.
-            "usage": result.get("usage", []),
+            "usage": usage.entries(),
+            "run_id": run_id,
         }
 
     @app.exception_handler(RequestValidationError)

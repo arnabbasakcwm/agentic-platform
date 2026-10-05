@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -83,6 +85,7 @@ from .stores import (
     make_stores,
 )
 from .usage import UsageCollector
+from .usage_sync import make_records, sync_deployed_usage
 from .tools import (
     KNOWLEDGE_TOOLS,
     SIDE_EFFECT_TOOLS,
@@ -373,38 +376,59 @@ def _record_usage(
     *,
     run_id: str | None = None,
     deployed: bool = False,
+    via: str | None = None,
 ) -> None:
     """Store what a unit of work used, with its estimated cost. Best effort: accounting
     must never fail the work it measures, so a storage error is logged and dropped."""
     try:
-        table = usage_mod.prices()
-        records = []
-        for e in entries:
-            if not (e.get("calls") or e.get("input_tokens") or e.get("output_tokens")):
-                continue
-            kind = "deployed_run" if deployed and e["kind"] == "run" else e["kind"]
-            records.append(
-                UsageRecord(
-                    id=uuid.uuid4().hex,
-                    tenant_id=tenant_id,
-                    project_id=project_id,
-                    kind=kind,
-                    run_id=run_id,
-                    agent_id=e.get("agent_id"),
-                    provider=e["provider"],
-                    model=e["model"],
-                    calls=int(e.get("calls", 0)),
-                    input_tokens=int(e.get("input_tokens", 0)),
-                    output_tokens=int(e.get("output_tokens", 0)),
-                    estimated=bool(e.get("estimated")),
-                    cost=usage_mod.cost(e, table),
-                    currency=table.get("currency", "USD"),
-                    price=usage_mod.price_for(e["provider"], e["model"], table),
-                )
-            )
-        _usage.add_many(records)
+        _usage.add_many(
+            make_records(tenant_id, project_id, entries, run_id=run_id, deployed=deployed, via=via)
+        )
     except Exception:  # noqa: BLE001 — accounting is best effort
         logger.exception("recording usage for project %s failed", project_id)
+
+
+# Direct-AWS usage sync: on demand (no job queue yet), at most once per project per
+# SYNC_EVERY_S in this process; the stored cursor keeps every process correct.
+SYNC_EVERY_S = 120
+_LAST_SYNC: dict[str, float] = {}
+_SYNC_STATUS: dict[str, dict[str, Any]] = {}
+_SYNC_LOCK = threading.Lock()
+
+
+def _sync_projects(projects: list[ProjectRecord], cloud: Any, force: bool = False) -> list[dict[str, Any]]:
+    results = []
+    for project in projects:
+        with _SYNC_LOCK:
+            if not force and time.monotonic() - _LAST_SYNC.get(project.id, -1e9) < SYNC_EVERY_S:
+                continue
+            _LAST_SYNC[project.id] = time.monotonic()
+        result = sync_deployed_usage(project, cloud, _usage, _store).as_dict()
+        _SYNC_STATUS[project.id] = {**result, "at": datetime.now(timezone.utc)}
+        results.append(result)
+    return results
+
+
+def _deployed_projects(user: UserRecord, project_id: str | None = None) -> list[ProjectRecord]:
+    return [
+        p for p in _store.list_for_tenant(user.id)
+        if p.deployment is not None and p.deployment.runtime_id and (project_id is None or p.id == project_id)
+    ]
+
+
+def _deployments_usage_status(projects: list[ProjectRecord]) -> list[dict[str, Any]]:
+    """Per deployment: does it report usage, how far it's synced, how the last sync went."""
+    out = []
+    for p in projects:
+        last = _SYNC_STATUS.get(p.id)
+        out.append({
+            "project_id": p.id,
+            "name": p.brief,
+            "reports_usage": p.deployment.reports_usage,
+            "synced_until": p.deployment.usage_synced_until,
+            "last_sync": last,
+        })
+    return out
 
 
 def _embedding_counter(collector: UsageCollector, config: EmbeddingConfig, kind: str):
@@ -1049,11 +1073,22 @@ def search_knowledge(
 # --------------------------------------------------------------------------- usage dashboard
 @app.get("/usage")
 def usage_dashboard(
-    days: int = 30, project_id: str | None = None, user: UserRecord = Depends(current_user)
+    background: BackgroundTasks,
+    days: int = 30,
+    project_id: str | None = None,
+    user: UserRecord = Depends(current_user),
 ) -> dict[str, Any]:
     """Models, tokens and estimated cost of everything the signed-in user ran: agent
-    runs (local and deployed), planner and assistant calls, and embeddings — totals, per
-    day, per model, per project, per kind of work, and the most recent runs."""
+    runs (local, deployed, and deployed runs invoked straight through AWS), planner and
+    assistant calls, and embeddings — totals, per day, per model, per project, per kind
+    of work, and the most recent runs.
+
+    Also starts a background sync of deployed runtimes' usage logs (at most every two
+    minutes per project); `deployments` says how far each has been read."""
+    deployed = _deployed_projects(user, project_id)
+    cloud = _make_cloud() if deployed else None
+    if cloud is not None:
+        background.add_task(_sync_projects, deployed, cloud)
     days = min(max(days, 1), 366)
     today = datetime.now(timezone.utc).date()
     start = today - timedelta(days=days - 1)
@@ -1061,9 +1096,26 @@ def usage_dashboard(
     records = [r.model_dump() for r in _usage.list(user.id, since, project_id)]
     names = {p.id: p.brief for p in _store.list_for_tenant(user.id)}
     table = usage_mod.prices()
-    return usage_mod.dashboard(
+    body = usage_mod.dashboard(
         records, start=start, days=days, project_names=names, currency=table.get("currency", "USD")
     )
+    body["deployments"] = _deployments_usage_status(deployed)
+    body["sync_available"] = cloud is not None or not deployed
+    return body
+
+
+@app.post("/usage/sync")
+def sync_usage(project_id: str | None = None, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """Read deployed runtimes' usage logs now, so runs invoked straight through AWS
+    (not through this platform) are counted. Per deployment: synced / skipped / failed."""
+    deployed = _deployed_projects(user, project_id)
+    if not deployed:
+        return {"results": [], "deployments": []}
+    cloud = _make_cloud()
+    if cloud is None:
+        raise DeployNotConfiguredError()
+    results = _sync_projects(deployed, cloud, force=True)
+    return {"results": results, "deployments": _deployments_usage_status(_deployed_projects(user, project_id))}
 
 
 @app.get("/usage/pricing")
@@ -1140,6 +1192,8 @@ def deploy_project(
         runtime_arn=previous.runtime_arn if previous else None,
         live_plan_version=previous.live_plan_version if previous else None,
         deployed_at=previous.deployed_at if previous else None,
+        reports_usage=previous.reports_usage if previous else False,
+        usage_synced_until=previous.usage_synced_until if previous else None,
     )
     _store.set_deployment(project_id, deployment)
     background.add_task(run_deployment, project_id, _store, cloud, _package_builder, snapshot, embedding)
@@ -1158,7 +1212,8 @@ def invoke_deployment(
     cloud = _make_cloud()
     if cloud is None:
         raise DeployNotConfiguredError()
-    payload: dict[str, Any] = {"input": req.input}
+    run_id = uuid.uuid4().hex
+    payload: dict[str, Any] = {"input": req.input, "run_id": run_id}
     if req.agent_id is not None:
         payload["agent_id"] = req.agent_id
         payload["upstream_outputs"] = req.upstream_outputs
@@ -1168,7 +1223,7 @@ def invoke_deployment(
     result = cloud.invoke(deployment.runtime_arn, payload, timeout_s)
     # The runtime reports its own usage; runtimes deployed before usage reporting don't.
     entries = [e for e in result.get("usage") or [] if isinstance(e, dict) and "model" in e]
-    _record_usage(user.id, project_id, entries, run_id=uuid.uuid4().hex, deployed=True)
+    _record_usage(user.id, project_id, entries, run_id=run_id, deployed=True, via="platform")
     return {
         "project_id": project_id,
         "plan_version": deployment.live_plan_version,

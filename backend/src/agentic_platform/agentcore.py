@@ -54,6 +54,7 @@ class AgentCoreCloud:
         self.sts = session.client("sts", region_name=region)
         self.control = session.client("bedrock-agentcore-control", region_name=region)
         self.data = session.client("bedrock-agentcore", region_name=region)
+        self.logs = session.client("logs", region_name=region)
         self._invoke_clients: dict[int, Any] = {}
 
     # ------------------------------------------------------------------ identity
@@ -266,6 +267,37 @@ class AgentCoreCloud:
             if _code(e) != "ResourceNotFoundException":
                 raise
 
+    def usage_log_events(self, runtime_id: str, since_ms: int, until_ms: int) -> list[dict[str, Any]]:
+        """The usage lines a runtime printed between two times (Unix ms), oldest first.
+
+        Read from the runtime's CloudWatch log group. Lines that aren't well-formed usage
+        lines are skipped, never raised; a log group that doesn't exist yet (the runtime
+        hasn't been invoked) means no lines."""
+        group = f"/aws/bedrock-agentcore/runtimes/{runtime_id}-DEFAULT"
+        lines: list[dict[str, Any]] = []
+        kwargs: dict[str, Any] = {
+            "logGroupName": group,
+            "startTime": int(since_ms),
+            "endTime": int(until_ms),
+            "filterPattern": '"agentic_usage"',
+        }
+        while True:
+            try:
+                page = self.logs.filter_log_events(**kwargs)
+            except ClientError as e:
+                if _code(e) == "ResourceNotFoundException":
+                    return []
+                raise
+            for event in page.get("events", []):
+                line = parse_usage_line(event.get("message", ""))
+                if line is not None:
+                    lines.append(line)
+            token = page.get("nextToken")
+            if not token:
+                break
+            kwargs["nextToken"] = token
+        return sorted(lines, key=lambda line: line["at"])
+
     def _invoke_client(self, read_timeout_s: int) -> Any:
         """A data-plane client that waits `read_timeout_s` for a run to answer and never
         retries: botocore's default (60 s, then retry) would give up on a slow but healthy
@@ -322,6 +354,41 @@ class AgentCoreCloud:
                 body.get("message", "the deployed runtime reported an error"),
             )
         return body
+
+
+_USAGE_FIELDS = {"kind": str, "provider": str, "model": str}
+
+
+def parse_usage_line(message: str) -> dict[str, Any] | None:
+    """A runtime's usage log line (see runtime_app.log_usage), or None if the message
+    isn't one. Validated field by field: log contents are not trusted."""
+    start = message.find("{")
+    if start == -1 or '"agentic_usage"' not in message:
+        return None
+    try:
+        line = json.loads(message[start:])
+    except ValueError:
+        return None
+    if not isinstance(line, dict) or line.get("type") != "agentic_usage" or line.get("v") != 1:
+        return None
+    run_id, via, at, usage = line.get("run_id"), line.get("via"), line.get("at"), line.get("usage")
+    if not isinstance(run_id, str) or not run_id or len(run_id) > 64 or via not in ("platform", "direct"):
+        return None
+    if not isinstance(at, (int, float)) or not isinstance(usage, list):
+        return None
+    entries = []
+    for e in usage:
+        if not isinstance(e, dict) or not all(isinstance(e.get(k), t) for k, t in _USAGE_FIELDS.items()):
+            return None
+        counts = {k: e.get(k, 0) for k in ("calls", "input_tokens", "output_tokens", "long_input_tokens", "long_output_tokens")}
+        if not all(isinstance(v, int) and 0 <= v < 10**12 for v in counts.values()):
+            return None
+        entries.append({
+            "kind": e["kind"], "provider": e["provider"], "model": e["model"],
+            "agent_id": e["agent_id"] if isinstance(e.get("agent_id"), str) else None,
+            "estimated": bool(e.get("estimated")), **counts,
+        })
+    return {"run_id": run_id, "via": via, "at": float(at), "usage": entries}
 
 
 # A synchronous AgentCore invocation can't wait longer than 15 minutes.

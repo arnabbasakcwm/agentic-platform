@@ -79,6 +79,10 @@ class Deployment(BaseModel):
     started_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
     deployed_at: datetime | None = None
+    # The runtime prints a usage line per invocation (runtimes deployed before that
+    # didn't), and how far the platform has read those lines from CloudWatch.
+    reports_usage: bool = False
+    usage_synced_until: datetime | None = None
 
     @property
     def in_progress(self) -> bool:
@@ -794,6 +798,8 @@ class UsageRecord(BaseModel):
     cost: float | None = None  # None: the model has no price in pricing.json
     currency: str = "USD"
     price: dict[str, Any] | None = None
+    # For deployed runs: invoked through this platform, or straight through AWS.
+    via: Literal["platform", "direct"] | None = None
 
 
 class UsageStore(Protocol):
@@ -803,6 +809,10 @@ class UsageStore(Protocol):
 
     def list(self, tenant_id: str, since: datetime, project_id: str | None = None) -> list[UsageRecord]:
         """The tenant's records since `since`, oldest first."""
+        ...
+
+    def existing_run_ids(self, tenant_id: str, run_ids: list[str]) -> set[str]:
+        """Which of these run ids already have records (so a sync never counts twice)."""
         ...
 
 
@@ -820,6 +830,10 @@ class InMemoryUsageStore:
         ]
         return [r.model_copy() for r in sorted(found, key=lambda r: r.at)]
 
+    def existing_run_ids(self, tenant_id: str, run_ids: list[str]) -> set[str]:
+        wanted = set(run_ids)
+        return {r.run_id for r in self._records if r.tenant_id == tenant_id and r.run_id in wanted}
+
 
 class MongoUsageStore:
     """`usage_events`, one document per record, indexed by tenant and time. Totals are
@@ -832,6 +846,7 @@ class MongoUsageStore:
     def _ensure_index(self) -> None:
         if not self._index_ready:
             self._events.create_index([("tenant_id", 1), ("at", 1)])
+            self._events.create_index([("tenant_id", 1), ("run_id", 1)])
             self._index_ready = True
 
     def add_many(self, records: list[UsageRecord]) -> None:
@@ -858,6 +873,14 @@ class MongoUsageStore:
             d["id"] = d.pop("_id")
             out.append(UsageRecord.model_validate(d))
         return out
+
+    def existing_run_ids(self, tenant_id: str, run_ids: list[str]) -> set[str]:
+        if not run_ids:
+            return set()
+        with _mongo_errors():
+            self._ensure_index()
+            found = self._events.distinct("run_id", {"tenant_id": tenant_id, "run_id": {"$in": list(run_ids)}})
+        return set(found)
 
 
 def make_stores() -> tuple[ProjectStore, UserStore, KnowledgeStore, UsageStore]:

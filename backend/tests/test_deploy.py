@@ -69,14 +69,16 @@ def test_runtime_ping_and_invocations_match_the_local_run_contract(monkeypatch):
 
     r = client.post("/invocations", json={"input": {"q": "x"}})
     assert r.status_code == 200
-    assert r.json() == {"outputs": {"b": {"content": "done", "data": {}}}, "errors": [], "halted": False, "usage": []}
+    body = r.json()
+    assert len(body.pop("run_id")) == 32  # made by the runtime: a direct caller sent none
+    assert body == {"outputs": {"b": {"content": "done", "data": {}}}, "errors": [], "halted": False, "usage": []}
     assert seen["input"] == {"q": "x"}
 
 
 def test_runtime_single_agent_and_unknown_agent(monkeypatch):
     monkeypatch.setattr(
         runtime_app, "run_single_agent",
-        lambda plan, agent_id, task_input, upstream, knowledge=None: {"outputs": {agent_id: {"content": "ok"}}},
+        lambda plan, agent_id, task_input, upstream, knowledge=None, usage=None: {"outputs": {agent_id: {"content": "ok"}}},
     )
     client = TestClient(runtime_app.create_app(_plan().model_dump()))
     r = client.post("/invocations", json={"input": {}, "agent_id": "a"})
@@ -96,6 +98,80 @@ def test_runtime_rejects_a_malformed_request():
     r = client.post("/invocations", json={"prompt": "hello"})
     assert r.status_code == 422
     assert r.json()["error_type"] == "ValidationError"
+
+
+# ------------------------------------------------------------------ runtime usage log line
+def _usage_lines(capsys):
+    lines = [json.loads(line) for line in capsys.readouterr().out.splitlines() if '"agentic_usage"' in line]
+    return lines
+
+
+def _fake_reporting_run(text="SECRET OUTPUT"):
+    def fake_run(graph, task_input, bounds, usage=None):
+        usage.add(kind="run", provider="google_genai", model="gemini-3.1-pro-preview", agent_id="a",
+                  input_tokens=1200, output_tokens=300)
+        return {"outputs": {"a": {"content": text, "data": {}}}, "errors": [], "halted": False}
+
+    return fake_run
+
+
+def test_every_invocation_logs_one_usage_line_without_content(monkeypatch, capsys):
+    monkeypatch.setattr(runtime_app, "run_graph", _fake_reporting_run())
+    client = TestClient(runtime_app.create_app(_plan().model_dump()))
+    capsys.readouterr()
+
+    direct = client.post("/invocations", json={"input": {"q": "SECRET INPUT"}}).json()
+    platform = client.post("/invocations", json={"input": {"q": "x"}, "run_id": "platform-run-1"}).json()
+    out = capsys.readouterr().out
+    lines = [json.loads(line) for line in out.splitlines() if '"agentic_usage"' in line]
+
+    assert len(lines) == 2
+    first, second = lines
+    assert first["type"] == "agentic_usage" and first["v"] == 1
+    assert (first["via"], first["run_id"]) == ("direct", direct["run_id"])
+    assert (second["via"], second["run_id"]) == ("platform", "platform-run-1")
+    assert platform["run_id"] == "platform-run-1"
+    entry = first["usage"][0]
+    assert (entry["agent_id"], entry["model"], entry["input_tokens"], entry["output_tokens"]) == (
+        "a", "gemini-3.1-pro-preview", 1200, 300)
+    assert direct["usage"] == first["usage"]  # the same numbers the caller gets back
+    assert "SECRET" not in out  # never the task input or the agents' output
+
+
+def test_a_timed_out_run_still_logs_what_it_used(monkeypatch, capsys):
+    def too_slow(graph, task_input, bounds, usage=None):
+        usage.add(kind="run", provider="google_genai", model="m", agent_id="a", input_tokens=50, output_tokens=5)
+        raise TimeoutError("the run exceeded its 300s time limit")
+
+    monkeypatch.setattr(runtime_app, "run_graph", too_slow)
+    client = TestClient(runtime_app.create_app(_plan().model_dump()))
+    capsys.readouterr()
+    r = client.post("/invocations", json={"input": {}})
+    assert r.status_code == 504
+    (line,) = _usage_lines(capsys)
+    assert line["usage"][0]["input_tokens"] == 50
+
+
+def test_single_agent_and_failed_invocations_log_a_line_too(monkeypatch, capsys):
+    def one_agent(plan, agent_id, task_input, upstream, knowledge=None, usage=None):
+        usage.add(kind="run", provider="google_genai", model="m", agent_id=agent_id, input_tokens=10, output_tokens=1)
+        return {"outputs": {agent_id: {"content": "ok"}}}
+
+    monkeypatch.setattr(runtime_app, "run_single_agent", one_agent)
+    client = TestClient(runtime_app.create_app(_plan().model_dump()), raise_server_exceptions=False)
+    capsys.readouterr()
+    r = client.post("/invocations", json={"input": {}, "agent_id": "a"})
+    assert r.json()["usage"][0]["agent_id"] == "a"
+
+    monkeypatch.setattr(runtime_app, "run_graph", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    assert client.post("/invocations", json={"input": {}}).status_code == 500
+    lines = _usage_lines(capsys)
+    assert len(lines) == 2 and lines[1]["usage"] == []
+
+
+def test_a_malformed_run_id_is_rejected():
+    client = TestClient(runtime_app.create_app(_plan().model_dump()))
+    assert client.post("/invocations", json={"input": {}, "run_id": "bad id with spaces"}).status_code == 422
 
 
 def test_runtime_refuses_to_start_with_an_invalid_plan():
@@ -460,7 +536,9 @@ def test_deploy_then_invoke_then_remove(api):
     r = api.post(f"/projects/{pid}/deployment/invoke", json={"input": {"q": "x"}}, headers=h)
     assert r.status_code == 200
     assert r.json()["outputs"]["b"]["content"] == "from AgentCore"
-    assert api.cloud.invocations == [{"input": {"q": "x"}}]
+    # The platform tags its own call, so the runtime's usage log line can be matched to it.
+    (sent,) = api.cloud.invocations
+    assert sent["input"] == {"q": "x"} and len(sent["run_id"]) == 32
 
     assert api.delete(f"/projects/{pid}/deployment", headers=h).json() == {"deployment": None}
     assert api.get(f"/projects/{pid}/deployment", headers=h).json()["deployment"] is None

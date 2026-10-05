@@ -309,6 +309,8 @@ def run_deployment(
             error=None,
             live_plan_version=current.plan_version,
             deployed_at=datetime.now(timezone.utc),
+            # This version of the runtime prints a usage line per invocation.
+            reports_usage=True,
         )
     except Exception as e:  # noqa: BLE001 — a background job must record, not raise
         logger.exception("deployment of project %s failed", project_id)
