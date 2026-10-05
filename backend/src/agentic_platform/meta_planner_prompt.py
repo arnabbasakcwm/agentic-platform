@@ -122,6 +122,7 @@ def _build_user_message(
     available_tools: list[str],
     available_llms: list[dict[str, Any]],
     correction: str | None,
+    knowledge_files: list[str] | None = None,
 ) -> str:
     count = (
         str(requested_agent_count)
@@ -131,10 +132,24 @@ def _build_user_message(
     parts = [
         f"TASK DESCRIPTION:\n{user_brief}",
         f"\nDESIRED AGENT COUNT: {count}",
+        *_knowledge_block(knowledge_files),
         *_options_block(available_tools, available_llms),
         *_correction_block(correction, "AgentPlan"),
     ]
     return "\n".join(parts)
+
+
+def _knowledge_block(knowledge_files: list[str] | None) -> list[str]:
+    """Names of the user's documents attached to the project. Only names: the planner
+    decides which agents need them, and those agents read them through knowledge_search."""
+    if not knowledge_files:
+        return []
+    names = ", ".join(repr(name) for name in knowledge_files[:50])
+    return [
+        f"\nKNOWLEDGE FILES attached to this project (searchable with the knowledge_search "
+        f"tool): {names}. Give knowledge_search to the agents that need facts from these "
+        "files, and tell them to cite the file and location they used."
+    ]
 
 
 def _build_revision_message(
@@ -256,6 +271,7 @@ def plan_project(
     available_llms: list[dict[str, Any]] | None = None,
     planner_llm: LLMConfig | None = None,
     usage: UsageCollector | None = None,
+    knowledge_files: list[str] | None = None,
 ) -> AgentPlan:
     """Turn a natural-language brief into a validated AgentPlan.
 
@@ -267,7 +283,7 @@ def plan_project(
         AgentPlan,
         _SYSTEM_PROMPT,
         lambda correction: _build_user_message(
-            user_brief, requested_agent_count, tools, llms, correction
+            user_brief, requested_agent_count, tools, llms, correction, knowledge_files
         ),
         lambda plan: _semantic_check(plan, requested_agent_count, tools, llms),
         planner_llm,

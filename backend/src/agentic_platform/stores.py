@@ -175,8 +175,11 @@ class ProjectStore(Protocol):
         """Every project the tenant owns, most recently updated first."""
         ...
 
-    def update_plan(self, project_id: str, plan: AgentPlan) -> ProjectRecord | None:
-        """Replace the plan and bump plan_version. None if the project doesn't exist."""
+    def update_plan(
+        self, project_id: str, plan: AgentPlan, side_effect_tools_enabled: list[str] | None = None
+    ) -> ProjectRecord | None:
+        """Replace the plan and bump plan_version — and, if given, the project's external-tool
+        opt-ins, in the same write. None if the project doesn't exist."""
         ...
 
     def mark_compiled(self, project_id: str, plan_version: int) -> bool:
@@ -237,10 +240,14 @@ class InMemoryProjectStore:
         owned.sort(key=lambda r: r.updated_at, reverse=True)
         return [r.model_copy(deep=True) for r in owned]
 
-    def update_plan(self, project_id: str, plan: AgentPlan) -> ProjectRecord | None:
+    def update_plan(
+        self, project_id: str, plan: AgentPlan, side_effect_tools_enabled: list[str] | None = None
+    ) -> ProjectRecord | None:
         record = self._records.get(project_id)
         if record is None:
             return None
+        if side_effect_tools_enabled is not None:
+            record.side_effect_tools_enabled = list(side_effect_tools_enabled)
         record.plan = plan.model_copy(deep=True)
         record.plan_version += 1
         record.updated_at = _now()
@@ -371,14 +378,19 @@ class MongoProjectStore:
             )
         return [self._from_doc(doc) for doc in docs]
 
-    def update_plan(self, project_id: str, plan: AgentPlan) -> ProjectRecord | None:
+    def update_plan(
+        self, project_id: str, plan: AgentPlan, side_effect_tools_enabled: list[str] | None = None
+    ) -> ProjectRecord | None:
         from pymongo import ReturnDocument
 
+        changes: dict[str, Any] = {"plan": plan.model_dump(), "updated_at": _now()}
+        if side_effect_tools_enabled is not None:
+            changes["side_effect_tools_enabled"] = list(side_effect_tools_enabled)
         with _mongo_errors():
             doc = self._projects.find_one_and_update(
                 {"_id": project_id},
                 {
-                    "$set": {"plan": plan.model_dump(), "updated_at": _now()},
+                    "$set": changes,
                     "$inc": {"plan_version": 1},
                 },
                 return_document=ReturnDocument.AFTER,

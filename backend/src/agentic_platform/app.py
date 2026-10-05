@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 import time
 import uuid
@@ -29,7 +30,7 @@ from pydantic import BaseModel, EmailStr, Field, ValidationError
 
 from . import knowledge as kb
 from . import usage as usage_mod
-from .agent_schema import AgentPlan, EmbeddingConfig, RunBounds
+from .agent_schema import AgentPlan, EmbeddingConfig, LLMConfig, RunBounds
 from .auth import create_access_token, decode_access_token, hash_password, verify_password
 from .agentcore import make_cloud
 from .config import (
@@ -39,6 +40,7 @@ from .config import (
     DEFAULT_MODELS,
     DEFAULT_PROVIDER,
     EMBEDDING_MODELS,
+    PROVIDER_ENV_VARS,
     JWT_EXPIRES_MINUTES,
     MAX_AGENTS,
 )
@@ -143,6 +145,20 @@ class CreateProjectRequest(BaseModel):
     agent_count: int | None = Field(default=None, gt=0, le=MAX_AGENTS)
     available_tools: list[str] | None = None
     available_llms: list[dict[str, str]] | None = None
+    # Files from the user's knowledge library to attach to the new project. The planner is
+    # told their names, so it can give the agents that need them knowledge_search.
+    document_ids: list[str] = Field(default_factory=list, max_length=50)
+
+
+class AgentSettings(BaseModel):
+    id: str
+    provider: str
+    model: str = Field(min_length=1, max_length=120)
+    tools: list[str] = Field(default_factory=list, max_length=20)
+
+
+class AgentSettingsRequest(BaseModel):
+    agents: list[AgentSettings] = Field(min_length=1, max_length=MAX_AGENTS)
 
 
 class RegisterRequest(BaseModel):
@@ -467,10 +483,17 @@ def list_tools() -> dict[str, Any]:
 
 @app.get("/providers")
 def list_providers() -> dict[str, Any]:
-    """Selectable provider/model pairs, with the platform default marked."""
+    """Selectable provider/model pairs, with the platform default marked, and whether
+    this server has the provider's API key (a model without one can't run)."""
     return {
         "providers": [
-            {"provider": provider, "model": model, "default": provider == DEFAULT_PROVIDER}
+            {
+                "provider": provider,
+                "model": model,
+                "default": provider == DEFAULT_PROVIDER,
+                "available": provider not in PROVIDER_ENV_VARS
+                or any(os.environ.get(v) for v in PROVIDER_ENV_VARS[provider]),
+            }
             for provider, model in DEFAULT_MODELS.items()
         ]
     }
@@ -512,8 +535,12 @@ def create_project(
     # Side-effecting tools (network egress, third-party APIs) are excluded by default;
     # a caller opts a project into one by naming it explicitly here.
     available_tools = req.available_tools if req.available_tools is not None else default_tool_names()
-    # A new project has no documents yet, so nothing for knowledge_search to search.
+    documents = [_get_document(doc_id, user) for doc_id in dict.fromkeys(req.document_ids)]
+    # knowledge_search only when files come with the project — otherwise there's nothing
+    # for it to search.
     available_tools = [t for t in available_tools if t not in KNOWLEDGE_TOOLS]
+    if documents:
+        available_tools = [*available_tools, *sorted(KNOWLEDGE_TOOLS)]
     side_effect_tools_enabled = sorted(set(available_tools) & SIDE_EFFECT_TOOLS)
     collector = UsageCollector()
     project_id: str | None = None
@@ -524,6 +551,7 @@ def create_project(
             available_tools=available_tools,
             available_llms=available_llms,
             usage=collector,
+            knowledge_files=[d.filename for d in documents],
         )
         project_id = uuid.uuid4().hex
     finally:
@@ -538,6 +566,8 @@ def create_project(
             side_effect_tools_enabled=side_effect_tools_enabled,
         )
     )
+    for doc in documents:
+        _knowledge.attach(user.id, doc.id, project_id)
     return {
         "project_id": project_id,
         "plan": plan.model_dump(),
@@ -587,6 +617,56 @@ def delete_project(project_id: str, user: UserRecord = Depends(current_user)) ->
     _COMPILED.pop(project_id, None)
     detached = _knowledge.detach_project(user.id, project_id)
     return {"deleted": project_id, "knowledge_documents_detached": detached}
+
+
+@app.put("/projects/{project_id}/agents")
+def update_agent_settings(
+    project_id: str, req: AgentSettingsRequest, user: UserRecord = Depends(current_user)
+) -> dict[str, Any]:
+    """Change agents' model and tools (the Brief page's editor). Agents not listed keep
+    theirs. Models come from the platform's list (or what the agent already uses); tools
+    from the registry, with knowledge_search only when files are attached. Turning on an
+    external tool here is this project's explicit opt-in to it. A change makes a new plan
+    version, which has to be compiled again."""
+    project = _get_project(project_id, user)
+    agents = {a.id: a for a in project.plan.agents}
+    allowed_models = {(p, m) for p, m in DEFAULT_MODELS.items()} | {
+        (a.llm.provider, a.llm.model) for a in project.plan.agents
+    }
+    has_knowledge = bool(_knowledge.list_documents(user.id, project_id))
+    problems: list[str] = []
+    updates: dict[str, Any] = {}
+    for change in req.agents:
+        agent = agents.get(change.id)
+        if agent is None:
+            problems.append(f"no agent '{change.id}' in this plan")
+            continue
+        if (change.provider, change.model) not in allowed_models:
+            problems.append(f"{change.provider}/{change.model} isn't one of the available models")
+        unknown = [t for t in change.tools if t not in TOOL_REGISTRY]
+        if unknown:
+            problems.append(f"unknown tool(s) for '{change.id}': {unknown}")
+        if set(change.tools) & KNOWLEDGE_TOOLS and not has_knowledge:
+            problems.append("knowledge_search needs files attached to this project first")
+        llm = agent.llm
+        if (change.provider, change.model) != (llm.provider, llm.model):
+            # Provider-specific extras don't carry over to a different model.
+            llm = LLMConfig(provider=change.provider, model=change.model, temperature=llm.temperature)
+        updates[change.id] = agent.model_copy(update={"llm": llm, "tools": list(dict.fromkeys(change.tools))})
+    if problems:
+        raise KnowledgeError("; ".join(problems), status=422)
+
+    plan = project.plan.model_copy(update={"agents": [updates.get(a.id, a) for a in project.plan.agents]})
+    plan = AgentPlan.model_validate(plan.model_dump())  # same integrity checks as any plan
+    if plan == project.plan:
+        return _project_body(project)
+    used_external = {t for a in plan.agents for t in a.tools} & SIDE_EFFECT_TOOLS
+    enabled = sorted(set(project.side_effect_tools_enabled) | used_external)
+    updated = _store.update_plan(project_id, plan, side_effect_tools_enabled=enabled)
+    if updated is None:
+        raise ProjectNotFoundError(project_id)
+    _COMPILED.pop(project_id, None)
+    return _project_body(updated)
 
 
 @app.patch("/projects/{project_id}/plan")
