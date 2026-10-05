@@ -384,8 +384,28 @@ whenever a change departs from or extends the contract above — don't silently 
     price it was costed with, so editing the table doesn't rewrite history.
   - **Totals:** computed in Python over the requested range (plain CRUD, per the MongoDB
     decision).
-  - **Not counted:** deployed runtimes invoked directly through AWS (not via this
-    platform), and tool API costs such as Tavily.
+  - **Not counted:** tool API costs such as Tavily.
+
+### 2026-10-05 — Deployed runs invoked straight through AWS are counted from runtime logs
+- **Why:** a runtime called with `InvokeAgentRuntime` directly (not through the platform)
+  spent tokens without any record: the runtime has no database and no channel back.
+- **Rule:**
+  - **The log line:** every runtime invocation, on every path, prints one JSON line
+    (`{"type": "agentic_usage", "v": 1, run_id, via, at, usage}`) to stdout, which
+    AgentCore ships to CloudWatch. It holds only ids, labels and token counts — never
+    task input, output, document text or keys — and needs no prompt changes.
+  - **Matching platform calls:** the platform sends its own `run_id` with each call, so
+    its immediate record and the log line match.
+  - **The sync:** `usage_sync` reads each deployment's log group from a per-deployment
+    cursor (`usage_synced_until`), re-reading 10 minutes of overlap because delivery can
+    lag. It validates lines as untrusted input, skips run ids already stored, and records
+    the rest as `deployed_run` with `via="direct"`, dated when the run happened. Re-reading
+    is harmless.
+  - **Old runtimes:** runtimes deployed before this don't print the line; their
+    deployments carry `reports_usage=False` and the UI asks for a redeploy.
+  - **Known deviation:** with no job queue, the sync runs on demand — in the background
+    when the Usage page loads (at most every two minutes per project) and via
+    `POST /usage/sync`. Move it to the job queue when one exists.
 
 ## Working style — verify-and-retry, always
 

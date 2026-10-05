@@ -175,6 +175,9 @@ browser. Set `VITE_API_BASE` to point the console at a different API.
    Finished runs on the Run page and the deployed *Try it* also show their tokens and
    cost. Costs are estimates from list prices in `backend/pricing.json` (each with its
    source and date); add a model there to price it. Embedding tokens are estimated.
+   Deployed flows called straight through AWS (not through this platform) are counted
+   too: each runtime logs its usage, and the page reads those logs (*Sync now*, or
+   automatically when it opens). Runtimes deployed before this need a redeploy.
 
 Try it end to end with curl:
 
@@ -273,6 +276,7 @@ signed-in user's projects. Interactive docs: http://127.0.0.1:8000/docs.
 | `PUT /knowledge/embedding` | Change the library's embedding model (re-embeds every passage) |
 | `POST /knowledge/search` | Search the whole library |
 | `GET /usage?days=30&project_id=` | Models, tokens and estimated cost: totals, per day, per model, per project, per activity, recent runs |
+| `POST /usage/sync` | Read deployed runtimes' usage logs now, counting runs invoked straight through AWS |
 | `GET /usage/pricing` | The price table in use, and models you've used that have no price |
 | `GET /projects/{id}/knowledge` | The files attached to a project, and the library files that could be |
 | `POST /projects/{id}/knowledge/documents` | Upload files to the library and attach them to the project |

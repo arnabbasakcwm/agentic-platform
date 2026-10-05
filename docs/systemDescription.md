@@ -705,8 +705,14 @@ GET /usage ──► usage.dashboard(): totals · by day · by model · by proje
 - **Prices:** `backend/pricing.json` maps `provider/model` to prices per 1M tokens, with
   an optional `long_context` rate. Each entry has a source URL and a checked date;
   unconfirmed models stay unpriced.
-- **Deployed runs:** the runtime returns its usage in `/invocations`, so runs invoked
-  through the platform are counted. Calls made straight to `InvokeAgentRuntime` aren't.
+- **Deployed runs:**
+  - The runtime returns its usage in `/invocations` **and** prints it as one
+    `agentic_usage` log line per invocation.
+  - Runs invoked through the platform are recorded at once under the `run_id` the
+    platform sent.
+  - Runs invoked straight through AWS are picked up by `usage_sync` from the runtime's
+    CloudWatch log group (cursor + 10-minute overlap, deduplicated by run id) and recorded
+    with `via="direct"`.
 
 ## 12. Cross-cutting invariants (hold at every stage)
 
