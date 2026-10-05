@@ -10,6 +10,7 @@ const PAGES = [
   ["plan", `/#/projects/${PROJECT}/plan`, ".agentgrid"],
   ["compile", `/#/projects/${PROJECT}/compile`, ".flow"],
   ["deploy", `/#/projects/${PROJECT}/deploy`, ".panel"],
+  ["knowledge-workspace", "/#/knowledge", ".kstats, .empty"],
   ["new", "/#/new", ".chat"],
 ];
 

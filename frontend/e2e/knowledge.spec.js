@@ -32,7 +32,7 @@ for (const scheme of ["light", "dark"]) {
 
     await page.goto(`/#/projects/${PROJECT}/knowledge`);
     await expect(page.getByText("No files yet")).toBeVisible();
-    await expect(page.getByRole("link", { name: /Knowledge/ })).toContainText("Optional");
+    await expect(page.locator(".stepper").getByRole("link", { name: /Knowledge/ })).toContainText("Optional");
     await expect(page.getByText("Agents can't use these files yet")).toBeVisible();
     await expect(page.getByRole("button", { name: "Give agents access" })).toBeDisabled();
     expect(await axeProblems(page, "empty")).toEqual([]);
@@ -56,7 +56,7 @@ for (const scheme of ["light", "dark"]) {
     // Polling picks up the finished indexing.
     await expect(files.locator(".badge", { hasText: "Ready" })).toBeVisible({ timeout: 10_000 });
     await expect(files.getByText("4 passages")).toBeVisible();
-    await expect(page.getByRole("link", { name: /Knowledge/ })).toContainText("1 of 2 ready");
+    await expect(page.locator(".stepper").getByRole("link", { name: /Knowledge/ })).toContainText("1 of 2 ready");
     await expect(page.getByText(/sent to\s+Google Gemini/)).toBeVisible();
 
     await page.getByLabel("Search the knowledge base").fill("hotel cap in Delhi");
@@ -69,14 +69,14 @@ for (const scheme of ["light", "dark"]) {
     await page.getByRole("button", { name: "Give agents access" }).click();
     await expect(page.getByText(/Gave flight_searcher the knowledge_search tool/)).toBeVisible();
     await expect(page.locator(".panel", { hasText: "Agent access" }).locator(".pill", { hasText: "flight_searcher" })).toBeVisible();
-    await expect(page.getByRole("link", { name: /Compile/ })).toContainText("Not compiled");
+    await expect(page.locator(".stepper").getByRole("link", { name: /Compile/ })).toContainText("Not compiled");
     await page.screenshot({ path: `e2e/screenshots/knowledge-ready-${scheme}.png`, fullPage: true });
     expect(await axeProblems(page, "ready")).toEqual([]);
 
     await page.getByRole("button", { name: "Delete scan.pdf" }).click();
     await page.getByRole("button", { name: "Delete", exact: true }).click();
     await expect(files.getByText("scan.pdf")).toHaveCount(0);
-    await expect(page.getByRole("link", { name: /Knowledge/ })).toContainText("1 file");
+    await expect(page.locator(".stepper").getByRole("link", { name: /Knowledge/ })).toContainText("1 file");
 
     expect(errors).toEqual([]);
   });

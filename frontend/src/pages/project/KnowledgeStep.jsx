@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { DeleteButton, UploadArea } from "../../components/KnowledgeUpload.jsx";
 import { Icon } from "../../components/icons.jsx";
 import {
   ActionBar,
@@ -29,69 +30,8 @@ import { useAction } from "../../lib/useAction.js";
 
 const POLL_MS = 2000;
 
-function UploadArea({ knowledge, onFiles, uploading }) {
-  const inputRef = useRef(null);
-  const [over, setOver] = useState(false);
-  const { limits } = knowledge;
-  const accept = limits.file_types.join(",");
-
-  function drop(event) {
-    event.preventDefault();
-    setOver(false);
-    if (event.dataTransfer.files.length) onFiles([...event.dataTransfer.files]);
-  }
-
-  return (
-    <div
-      className={["dropzone", over && "dropzone--over"].filter(Boolean).join(" ")}
-      onDragOver={(e) => {
-        e.preventDefault();
-        setOver(true);
-      }}
-      onDragLeave={() => setOver(false)}
-      onDrop={drop}
-    >
-      <Icon name="upload" size={22} />
-      <div className="dropzone__title">Drop files here, or</div>
-      <Button variant="primary" onClick={() => inputRef.current?.click()} loading={uploading}>
-        {!uploading && <Icon name="plus" size={14} />}
-        Choose files
-      </Button>
-      <input
-        ref={inputRef}
-        type="file"
-        multiple
-        accept={accept}
-        className="sr-only"
-        tabIndex={-1}
-        aria-label="Choose files to add"
-        onChange={(e) => {
-          if (e.target.files.length) onFiles([...e.target.files]);
-          e.target.value = "";
-        }}
-      />
-      <div className="dropzone__hint">
-        PDF, Word (.docx), text, Markdown or CSV · up to {formatBytes(limits.max_file_bytes)} each ·{" "}
-        {limits.max_files} files per project
-      </div>
-    </div>
-  );
-}
-
 function DocumentRow({ doc, onDelete }) {
-  const [confirm, setConfirm] = useState(false);
-  const [deleting, setDeleting] = useState(false);
   const { badge, label } = documentBadge(doc.status);
-
-  async function remove() {
-    setDeleting(true);
-    const ok = await onDelete(doc);
-    if (!ok) {
-      setDeleting(false);
-      setConfirm(false);
-    }
-  }
-
   return (
     <li className="doclist__item">
       <Icon name="file" size={18} />
@@ -107,26 +47,7 @@ function DocumentRow({ doc, onDelete }) {
         {doc.status === "failed" && doc.error && <div className="doclist__error">{doc.error}</div>}
       </div>
       <StatusBadge status={badge} label={label} />
-      {confirm ? (
-        <span className="row">
-          <Button size="sm" variant="danger" onClick={remove} loading={deleting}>
-            Delete
-          </Button>
-          <Button size="sm" onClick={() => setConfirm(false)} disabled={deleting}>
-            Keep
-          </Button>
-        </span>
-      ) : (
-        <button
-          type="button"
-          className="iconbtn"
-          onClick={() => setConfirm(true)}
-          aria-label={`Delete ${doc.filename}`}
-          title="Delete"
-        >
-          <Icon name="trash" />
-        </button>
-      )}
+      <DeleteButton filename={doc.filename} onDelete={() => onDelete(doc)} />
     </li>
   );
 }
@@ -390,7 +311,7 @@ export function KnowledgeStep({ project, onKnowledgeChanged, onRevised }) {
                   index and search them. The files themselves aren&apos;t kept — only the text
                   passages taken from them.
                 </Callout>
-                <UploadArea knowledge={knowledge} onFiles={addFiles} uploading={upload.busy} />
+                <UploadArea limits={knowledge.limits} onFiles={addFiles} uploading={upload.busy} />
                 {problems.length > 0 && (
                   <Callout tone="warn" title="Some files weren't added">
                     <ul className="steps-list">

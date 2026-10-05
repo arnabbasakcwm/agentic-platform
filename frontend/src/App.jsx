@@ -8,6 +8,7 @@ import { projectTitle } from "./lib/format.js";
 import { navigate, paths, useRoute } from "./lib/router.js";
 import { ThemeContext, useThemeState } from "./lib/theme.js";
 import { useAction } from "./lib/useAction.js";
+import { KnowledgePage } from "./pages/KnowledgePage.jsx";
 import { NewProjectPage } from "./pages/NewProjectPage.jsx";
 import { ProjectWorkspace } from "./pages/ProjectWorkspace.jsx";
 import { ProjectsPage } from "./pages/ProjectsPage.jsx";
@@ -35,6 +36,7 @@ function readCollapsed() {
 function crumbsFor(route, projects) {
   const root = { label: "Projects", href: paths.projects };
   if (route.page === "new") return [root, { label: "New project" }];
+  if (route.page === "knowledge") return [{ label: "Knowledge" }];
   if (route.page === "project") {
     const known = projects?.find((p) => p.project_id === route.id);
     return [
@@ -66,6 +68,8 @@ function Console() {
   const [projectsError, setProjectsError] = useState(null);
 
   const [collapsed, setCollapsed] = useState(readCollapsed);
+  // Files across all projects, for the sidebar count; null = not loaded yet.
+  const [knowledgeCount, setKnowledgeCount] = useState(null);
 
   useEffect(() => {
     api
@@ -103,11 +107,21 @@ function Console() {
       .catch(setProjectsError);
   }, []);
 
+  const refreshKnowledgeCount = useCallback(() => {
+    api
+      .knowledgeOverview()
+      .then((r) => setKnowledgeCount(r.documents.length))
+      .catch(() => {});
+  }, []);
+
   const userId = user?.id;
   // Load the signed-in user's projects (sign-out clears them, in signOut below).
   useEffect(() => {
-    if (userId) refreshProjects();
-  }, [userId, refreshProjects]);
+    if (userId) {
+      refreshProjects();
+      refreshKnowledgeCount();
+    }
+  }, [userId, refreshProjects, refreshKnowledgeCount]);
 
   async function authenticate(action, credentials) {
     const result = await auth.run(() => action(credentials));
@@ -122,6 +136,7 @@ function Console() {
     setUser(null);
     setProjects(null);
     setProjectsError(null);
+    setKnowledgeCount(null);
     setAuthNotice(null);
     navigate(paths.projects);
   }
@@ -169,6 +184,7 @@ function Console() {
       <Sidebar
         route={route}
         projects={projects}
+        knowledgeCount={knowledgeCount}
         user={user}
         collapsed={collapsed}
         onToggle={toggleSidebar}
@@ -187,6 +203,7 @@ function Console() {
           {route.page === "projects" && (
             <ProjectsPage projects={projects} error={projectsError} onRetry={refreshProjects} />
           )}
+          {route.page === "knowledge" && <KnowledgePage onCountChanged={setKnowledgeCount} />}
           {route.page === "new" && (
             <NewProjectPage
               tools={tools}

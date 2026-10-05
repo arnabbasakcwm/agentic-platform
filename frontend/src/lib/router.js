@@ -3,6 +3,7 @@
 //
 //   #/projects                 the project list
 //   #/new                      define a new project
+//   #/knowledge                every knowledge-base file across projects
 //   #/projects/<id>/<step>     one project, at a step of its workflow
 
 import { useEffect, useState } from "react";
@@ -12,6 +13,7 @@ export const PROJECT_STEPS = ["brief", "knowledge", "plan", "compile", "run", "d
 export function parseRoute(hash) {
   const [first, id, step] = hash.replace(/^#\/?/, "").split("/").filter(Boolean);
   if (first === "new") return { page: "new" };
+  if (first === "knowledge") return { page: "knowledge" };
   if (first === "projects" && id) {
     return { page: "project", id, step: PROJECT_STEPS.includes(step) ? step : "plan" };
   }
@@ -35,5 +37,6 @@ export function navigate(path) {
 export const paths = {
   projects: "#/projects",
   newProject: "#/new",
+  knowledge: "#/knowledge",
   project: (id, step = "plan") => `#/projects/${id}/${step}`,
 };

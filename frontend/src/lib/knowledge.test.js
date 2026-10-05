@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { batches, checkFiles, documentBadge, formatBytes, isIndexing, knowledgeHint } from "./knowledge.js";
+import {
+  batches,
+  checkFiles,
+  documentBadge,
+  filterDocuments,
+  formatBytes,
+  isIndexing,
+  knowledgeHint,
+  knowledgeTotals,
+} from "./knowledge.js";
 
 const LIMITS = {
   max_file_bytes: 1000,
@@ -59,5 +68,28 @@ describe("knowledge helpers", () => {
     expect(knowledgeHint({ documents: 0, ready: 0 })).toBe("Optional");
     expect(knowledgeHint({ documents: 3, ready: 1 })).toBe("1 of 3 ready");
     expect(knowledgeHint({ documents: 1, ready: 1 })).toBe("1 file");
+  });
+});
+
+describe("workspace filters", () => {
+  const docs = [
+    { filename: "Policy.pdf", project_id: "p1", status: "ready", chunk_count: 4 },
+    { filename: "fares.csv", project_id: "p2", status: "processing", chunk_count: 0 },
+    { filename: "scan.pdf", project_id: "p1", status: "failed", chunk_count: 0 },
+    { filename: "notes.md", project_id: "p2", status: "queued", chunk_count: 0 },
+  ];
+  const names = (list) => list.map((d) => d.filename);
+
+  it("filters by name, project and status together", () => {
+    expect(names(filterDocuments(docs, { query: "pdf" }))).toEqual(["Policy.pdf", "scan.pdf"]);
+    expect(names(filterDocuments(docs, { query: " POLICY " }))).toEqual(["Policy.pdf"]);
+    expect(names(filterDocuments(docs, { project: "p2" }))).toEqual(["fares.csv", "notes.md"]);
+    expect(names(filterDocuments(docs, { status: "indexing" }))).toEqual(["fares.csv", "notes.md"]);
+    expect(names(filterDocuments(docs, { project: "p1", status: "failed" }))).toEqual(["scan.pdf"]);
+    expect(filterDocuments(docs)).toHaveLength(4);
+  });
+
+  it("totals files by state", () => {
+    expect(knowledgeTotals(docs)).toEqual({ files: 4, ready: 1, indexing: 2, failed: 1, passages: 4 });
   });
 });

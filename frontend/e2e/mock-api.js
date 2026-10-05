@@ -168,11 +168,48 @@ const LIMITS = {
   file_types: [".csv", ".docx", ".markdown", ".md", ".pdf", ".txt"],
 };
 
-function knowledgeBody() {
+// A second, empty project, so the workspace Knowledge page has a choice of projects.
+const SECOND_PROJECT = { project_id: "e2e0second0project", brief: "Weekend budget planner", updated_at: "2026-09-30T10:00:00Z" };
+
+// Files finish indexing INDEX_MS after upload, whenever anything asks.
+function settle() {
   const now = Date.now();
-  const documents = knowledge.documents.map((d) =>
-    d.status === "processing" && now - d.added >= INDEX_MS ? Object.assign(d, { status: "ready", chunk_count: 4 }) : d,
-  );
+  for (const d of knowledge.documents) {
+    if (d.status === "processing" && now - d.added >= INDEX_MS) Object.assign(d, { status: "ready", chunk_count: 4 });
+  }
+}
+
+const publicDoc = ({ added, ...d }) => d;
+
+function overviewBody() {
+  settle();
+  const summary = (id, brief, updatedAt, usedBy) => {
+    const docs = knowledge.documents.filter((d) => d.project_id === id);
+    return {
+      project_id: id,
+      brief,
+      embedding: docs.length ? { provider: "google_genai", model: "gemini-embedding-001" } : null,
+      documents: docs.length,
+      ready: docs.filter((d) => d.status === "ready").length,
+      passages: docs.reduce((n, d) => n + d.chunk_count, 0),
+      used_by: usedBy,
+      updated_at: updatedAt,
+    };
+  };
+  return {
+    documents: [...knowledge.documents].reverse().map(publicDoc),
+    projects: [
+      summary(PROJECT_ID, project.brief, project.updated_at,
+        plan.agents.filter((a) => a.tools.includes("knowledge_search")).map((a) => a.id)),
+      summary(SECOND_PROJECT.project_id, SECOND_PROJECT.brief, SECOND_PROJECT.updated_at, []),
+    ],
+    limits: LIMITS,
+  };
+}
+
+function knowledgeBody() {
+  settle();
+  const documents = knowledge.documents.filter((d) => d.project_id === PROJECT_ID);
   project.knowledge = {
     documents: documents.length,
     ready: documents.filter((d) => d.status === "ready").length,
@@ -184,7 +221,7 @@ function knowledgeBody() {
       { provider: "google_genai", model: "gemini-embedding-001", available: true },
       { provider: "openai", model: "text-embedding-3-small", available: false },
     ],
-    documents: documents.map(({ added, ...d }) => d),
+    documents: documents.map(publicDoc),
     passages: documents.reduce((n, d) => n + d.chunk_count, 0),
     used_by: plan.agents.filter((a) => a.tools.includes("knowledge_search")).map((a) => a.id),
     limits: LIMITS,
@@ -199,12 +236,13 @@ function readRaw(req) {
   });
 }
 
-async function upload(req, res) {
+async function upload(req, res, projectId) {
   const raw = await readRaw(req);
   const names = [...raw.matchAll(/filename="([^"]+)"/g)].map((m) => m[1]);
   knowledge.embedding ??= { provider: "google_genai", model: "gemini-embedding-001" };
   const added = names.map((filename, i) => ({
     id: `doc${Date.now()}${i}`,
+    project_id: projectId,
     filename,
     kind: filename.slice(filename.lastIndexOf(".")).toLowerCase(),
     size_bytes: 2048,
@@ -216,7 +254,7 @@ async function upload(req, res) {
     added: Date.now(),
   }));
   knowledge.documents.push(...added);
-  send(res, 202, { documents: added.map(({ added: _, ...d }) => d) });
+  send(res, 202, { documents: added.map(publicDoc) });
 }
 
 function revise(res, message) {
@@ -262,15 +300,17 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, project);
   }
   if (path === `${p}/knowledge` && req.method === "GET") return send(res, 200, knowledgeBody());
-  if (path === `${p}/knowledge/documents` && req.method === "POST") return upload(req, res);
-  const doc = path.match(new RegExp(`^${p}/knowledge/documents/([^/]+)$`));
+  if (path === "/knowledge" && req.method === "GET") return send(res, 200, overviewBody());
+  const uploadTo = path.match(/^\/projects\/([^/]+)\/knowledge\/documents$/);
+  if (uploadTo && req.method === "POST") return upload(req, res, uploadTo[1]);
+  const doc = path.match(/^\/projects\/[^/]+\/knowledge\/documents\/([^/]+)$/);
   if (doc && req.method === "DELETE") {
     knowledge.documents = knowledge.documents.filter((d) => d.id !== doc[1]);
     return send(res, 200, { deleted: doc[1] });
   }
   if (path === `${p}/knowledge/search` && req.method === "POST") {
     const body = await readBody(req);
-    const ready = knowledge.documents.filter((d) => d.status === "ready");
+    const ready = knowledge.documents.filter((d) => d.status === "ready" && d.project_id === PROJECT_ID);
     return send(res, 200, {
       results: ready.slice(0, 1).map((d) => ({
         filename: d.filename,

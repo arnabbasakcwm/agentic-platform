@@ -87,3 +87,34 @@ export function knowledgeHint(summary) {
   if (summary.ready < n) return `${summary.ready} of ${n} ready`;
   return `${n} file${n === 1 ? "" : "s"}`;
 }
+
+// Status filter values on the workspace Knowledge page -> document statuses.
+export const STATUS_FILTERS = {
+  all: null,
+  ready: ["ready"],
+  indexing: ["queued", "processing"],
+  failed: ["failed"],
+};
+
+/** Documents matching a name search, a project id ("" = all) and a STATUS_FILTERS key. */
+export function filterDocuments(documents, { query = "", project = "", status = "all" } = {}) {
+  const needle = query.trim().toLowerCase();
+  const statuses = STATUS_FILTERS[status] ?? null;
+  return documents.filter(
+    (d) =>
+      (!needle || d.filename.toLowerCase().includes(needle)) &&
+      (!project || d.project_id === project) &&
+      (!statuses || statuses.includes(d.status)),
+  );
+}
+
+export function knowledgeTotals(documents) {
+  const totals = { files: documents.length, ready: 0, indexing: 0, failed: 0, passages: 0 };
+  for (const d of documents) {
+    if (d.status === "ready") totals.ready += 1;
+    else if (d.status === "failed") totals.failed += 1;
+    else totals.indexing += 1;
+    totals.passages += d.chunk_count ?? 0;
+  }
+  return totals;
+}

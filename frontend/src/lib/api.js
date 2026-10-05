@@ -143,6 +143,8 @@ export const api = {
   invokeDeployment: (id, input) =>
     request(`/projects/${id}/deployment/invoke`, { method: "POST", body: { input } }),
   removeDeployment: (id) => request(`/projects/${id}/deployment`, { method: "DELETE" }),
+  // Every knowledge-base file across the signed-in user's projects.
+  knowledgeOverview: () => request("/knowledge"),
   getKnowledge: (id) => request(`/projects/${id}/knowledge`),
   uploadDocuments: (id, files) => {
     const form = new FormData();

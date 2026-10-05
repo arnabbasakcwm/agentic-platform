@@ -21,7 +21,7 @@ function NavItem({ href, icon, label, active, trail, className = "", ...props })
   );
 }
 
-export function Sidebar({ route, projects, user, collapsed, onToggle, onSignOut }) {
+export function Sidebar({ route, projects, knowledgeCount, user, collapsed, onToggle, onSignOut }) {
   const recent = (projects ?? []).slice(0, RECENT_LIMIT);
 
   return (
@@ -65,6 +65,14 @@ export function Sidebar({ route, projects, user, collapsed, onToggle, onSignOut 
               <span className="navitem__count">{projects.length}</span>
             ) : null
           }
+        />
+
+        <NavItem
+          href={paths.knowledge}
+          icon="book"
+          label="Knowledge"
+          active={route.page === "knowledge"}
+          trail={knowledgeCount > 0 ? <span className="navitem__count">{knowledgeCount}</span> : null}
         />
 
         {recent.length > 0 && (
