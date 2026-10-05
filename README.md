@@ -145,23 +145,27 @@ browser. Set `VITE_API_BASE` to point the console at a different API.
 3. **Brief / Knowledge / Plan / Compile / Run** — each project has one page per step. The
    plan assistant beside Brief, Knowledge, Plan and Compile takes change requests in plain
    language; any change makes a new plan version that has to be compiled again.
-   - **Knowledge** (optional) — add PDF, Word, text, Markdown or CSV files for the agents
-     to search. Each file is indexed in the background (its status updates live). *Test
+   - **Knowledge** (optional) — the files attached to this project; its agents search
+     only these. Attach files from your library or add new ones (they go into your library
+     too); *Detach* removes a file from this project but keeps it in the library. *Test
      search* shows what an agent would find. *Give agents access* asks the assistant to
      give the `knowledge_search` tool to the agents that need it; their answers then cite
-     the file and page or rows. File text and search queries go to the embedding
-     provider shown on the page; the files themselves aren't stored.
+     the file and page or rows.
 4. **Deploy** — after Run, the Deploy page puts the compiled plan on Amazon Bedrock
    AgentCore Runtime, lets you try the live deployment, and shows how to call it from an
    app. Needs AWS set up — see [Deploying to AWS](#deploying-to-aws-agentcore).
 5. **Projects** — every project you've created, newest first; the sidebar also lists the
-   most recent ones. The trash icon on a row deletes a project with its plan, conversation
-   and knowledge-base files (it asks first). A project deployed on AgentCore must have its
-   deployment removed on the Deploy page before it can be deleted.
-6. **Knowledge** (sidebar) — every knowledge-base file across your projects in one table:
-   totals, live indexing status, filters by name, project and status, upload to any
-   project, and delete. Each file links to its project's Knowledge step, which is where
-   test search and *Give agents access* live.
+   most recent ones. The trash icon on a row deletes a project with its plan and
+   conversation (it asks first); its files stay in your knowledge library. A project
+   deployed on AgentCore must have its deployment removed on the Deploy page before it
+   can be deleted.
+6. **Knowledge** (sidebar) — your knowledge library. Upload PDF, Word, text, Markdown or
+   CSV files without choosing a project (or attach them on upload), see each file's live
+   indexing status, attach any file to any number of projects from its row, filter by
+   name, project ("not attached" included) and status, and delete files. The library has
+   one embedding model, chosen here; changing it re-indexes every file. File text and
+   agents' search queries go to that embedding provider; the files themselves aren't
+   stored, only the text passages taken from them.
 
 Try it end to end with curl:
 
@@ -247,18 +251,23 @@ signed-in user's projects. Interactive docs: http://127.0.0.1:8000/docs.
 | `POST /projects` | Plan a new project from a brief (`agent_count` optional) |
 | `GET /projects`, `GET /projects/{id}` | List your projects / fetch one with its plan and conversation |
 | `POST /projects/{id}/revise` | Change the brief or plan by asking in plain language |
-| `DELETE /projects/{id}` | Delete a project with its knowledge-base files (refused while it's deployed) |
+| `DELETE /projects/{id}` | Delete a project; its files stay in your library (refused while it's deployed) |
 | `PATCH /projects/{id}/plan` | Replace the plan with an edited one (re-validated) |
 | `POST /projects/{id}/compile` | Build the runnable graph (no model calls) |
 | `POST /projects/{id}/run` | Run the whole team on an input |
 | `POST /projects/{id}/run/stream` | Same, streaming each agent's progress as Server-Sent Events |
 | `POST /projects/{id}/agents/{agent_id}/invoke` | Run one agent on its own |
-| `GET /knowledge` | Every knowledge-base file across your projects, with a summary per project |
-| `GET /projects/{id}/knowledge` | Knowledge base: files with indexing status, embedding model, limits |
-| `POST /projects/{id}/knowledge/documents` | Upload files (multipart field `files`); indexed in the background |
-| `DELETE /projects/{id}/knowledge/documents/{doc_id}` | Remove a file and its passages |
-| `PUT /projects/{id}/knowledge/embedding` | Change the embedding model (re-embeds every passage) |
-| `POST /projects/{id}/knowledge/search` | Search the knowledge base the way `knowledge_search` does |
+| `GET /knowledge` | Your library: every file with the projects it's attached to, the embedding model, limits |
+| `POST /knowledge/documents` | Upload files to the library, attached to no project (multipart field `files`) |
+| `PUT /knowledge/documents/{doc_id}/projects` | Set which projects a file is attached to |
+| `DELETE /knowledge/documents/{doc_id}` | Delete a file from the library (and every project) |
+| `PUT /knowledge/embedding` | Change the library's embedding model (re-embeds every passage) |
+| `POST /knowledge/search` | Search the whole library |
+| `GET /projects/{id}/knowledge` | The files attached to a project, and the library files that could be |
+| `POST /projects/{id}/knowledge/documents` | Upload files to the library and attach them to the project |
+| `POST /projects/{id}/knowledge/documents/{doc_id}` | Attach a library file to the project |
+| `DELETE /projects/{id}/knowledge/documents/{doc_id}` | Detach a file from the project (it stays in the library) |
+| `POST /projects/{id}/knowledge/search` | Search the project's files the way `knowledge_search` does |
 | `POST /projects/{id}/deploy` | Deploy the compiled plan to AgentCore (runs in the background) |
 | `GET /projects/{id}/deployment` | Deployment status, and whether this server can deploy |
 | `POST /projects/{id}/deployment/invoke` | Run the deployed flow on AgentCore (same body as `/run`) |

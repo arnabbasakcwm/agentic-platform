@@ -136,7 +136,7 @@ backend/
     config.py               # Env loading, provider/model defaults
     errors.py               # Typed platform errors
     stores.py               # ProjectStore/UserStore/KnowledgeStore interfaces + in-memory and MongoDB implementations
-    knowledge.py            # Knowledge bases: extract/chunk documents, index, search, deploy snapshot
+    knowledge.py            # Knowledge libraries: extract/chunk documents, index, search, deploy snapshot
     auth.py                 # Password hashing (Argon2id) + JWT access tokens
     runtime_app.py          # The /ping + /invocations app a deployed project runs on AgentCore
     deploy.py               # Packaging (arm64 zip) + background deploy/remove jobs
@@ -339,11 +339,26 @@ whenever a change departs from or extends the contract above — don't silently 
 - **Why:** users need to clear out old projects; a project record is also what tracks its
   AgentCore runtime.
 - **Rule:** `DELETE /projects/{id}` (owner-scoped; someone else's project is a 404) removes
-  the project, its compiled-graph cache entry, and every knowledge document and passage.
-  The project record goes first, so a failure part-way leaves only files no listing shows.
+  the project and its compiled-graph cache entry, and detaches its knowledge files (they
+  stay in the owner's library). The project record goes first, so a failure part-way
+  leaves only attachments to a project that no listing shows.
   A project with a deployment in progress or a runtime in AWS is refused with
   `409 ProjectDeployed` — remove the deployment first, so no runtime is left running with
   nothing pointing at it.
+
+### 2026-10-05 — Knowledge is a per-user library; files are attached to projects
+- **Why:** users wanted to upload documents before (or without) choosing a project, and
+  to use one document in several projects without uploading and indexing it again.
+- **Rule:** this supersedes the "one knowledge base per project" scope above. A file
+  belongs to its owner's library (`KnowledgeDocument.tenant_id`) and is attached to any
+  number of that user's projects (`project_ids`); it is indexed once, with the library's
+  single embedding model (`knowledge_settings`), whatever LLM a project's agents use.
+  `knowledge_search`, the project's test search and a deployment snapshot see only the
+  files attached to that project. Every store method is scoped by tenant; attaching
+  checks that both the project and the file are the caller's (404 otherwise). Detaching
+  and deleting a project never delete files — only deleting from the library does. Limits
+  are per library (100 files, 20,000 passages). Existing project-scoped data is migrated
+  in place on first use, idempotently.
 
 ## Working style — verify-and-retry, always
 
