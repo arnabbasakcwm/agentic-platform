@@ -31,7 +31,7 @@ for (const scheme of ["light", "dark"]) {
     await page.emulateMedia({ colorScheme: scheme });
 
     await page.goto(`/#/projects/${PROJECT}/knowledge`);
-    await expect(page.getByText("No files yet")).toBeVisible();
+    await expect(page.getByText("No files attached")).toBeVisible();
     await expect(page.locator(".stepper").getByRole("link", { name: /Knowledge/ })).toContainText("Optional");
     await expect(page.getByText("Agents can't use these files yet")).toBeVisible();
     await expect(page.getByRole("button", { name: "Give agents access" })).toBeDisabled();
@@ -47,7 +47,7 @@ for (const scheme of ["light", "dark"]) {
     await expect(page.getByText("Some files weren't added")).toBeVisible();
     await expect(page.getByText(/slides\.pptx: not a supported type/)).toBeVisible();
 
-    const files = page.locator(".doclist");
+    const files = page.locator(".panel", { hasText: "Attached files" }).locator(".doclist");
     await expect(files.getByText("policy.pdf")).toBeVisible();
     await expect(files.locator(".badge", { hasText: "Indexing" })).toBeVisible();
     await expect(files.getByText(/scanned PDFs need OCR/)).toBeVisible();
@@ -73,10 +73,15 @@ for (const scheme of ["light", "dark"]) {
     await page.screenshot({ path: `e2e/screenshots/knowledge-ready-${scheme}.png`, fullPage: true });
     expect(await axeProblems(page, "ready")).toEqual([]);
 
-    await page.getByRole("button", { name: "Delete scan.pdf" }).click();
-    await page.getByRole("button", { name: "Delete", exact: true }).click();
+    // Detaching keeps the file in the library, offered under "Add from your library".
+    await page.getByRole("button", { name: "Detach scan.pdf from this project" }).click();
     await expect(files.getByText("scan.pdf")).toHaveCount(0);
     await expect(page.locator(".stepper").getByRole("link", { name: /Knowledge/ })).toContainText("1 file");
+    const library = page.locator(".panel", { hasText: "Add from your library" });
+    await expect(library.getByText("scan.pdf")).toBeVisible();
+    await library.getByRole("button", { name: "Attach scan.pdf" }).click();
+    await expect(files.getByText("scan.pdf")).toBeVisible();
+    await expect(page.locator(".panel", { hasText: "Add from your library" })).toHaveCount(0);
 
     expect(errors).toEqual([]);
   });

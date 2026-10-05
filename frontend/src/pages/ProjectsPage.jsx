@@ -49,7 +49,7 @@ function ProjectRow({ project, onDelete }) {
       <td className="table__actions" onClick={(e) => e.stopPropagation()}>
         <DeleteButton
           name={projectTitle(project.brief, 60)}
-          prompt="Delete project and its files?"
+          prompt="Delete this project? Its files stay in your library."
           onDelete={() => onDelete(project)}
         />
       </td>

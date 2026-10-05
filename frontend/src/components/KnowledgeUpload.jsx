@@ -53,7 +53,7 @@ export function UploadArea({ limits, onFiles, uploading, disabled }) {
       />
       <div className="dropzone__hint">
         PDF, Word (.docx), text, Markdown or CSV · up to {formatBytes(limits.max_file_bytes)} each ·{" "}
-        {limits.max_files} files per project
+        {limits.max_files} files in your library
       </div>
     </div>
   );

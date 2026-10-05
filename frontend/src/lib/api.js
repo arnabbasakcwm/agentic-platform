@@ -112,6 +112,12 @@ async function stream(path, body, onEvent, signal) {
   await readEventStream(response, onEvent);
 }
 
+function filesForm(files) {
+  const form = new FormData();
+  for (const file of files) form.append("files", file, file.name);
+  return form;
+}
+
 export const api = {
   health: () => request("/health"),
   tools: () => request("/tools"),
@@ -145,18 +151,27 @@ export const api = {
   invokeDeployment: (id, input) =>
     request(`/projects/${id}/deployment/invoke`, { method: "POST", body: { input } }),
   removeDeployment: (id) => request(`/projects/${id}/deployment`, { method: "DELETE" }),
-  // Every knowledge-base file across the signed-in user's projects.
+  // ---- knowledge library: files belong to the user, attached to any number of projects.
   knowledgeOverview: () => request("/knowledge"),
+  uploadToLibrary: (files) => request("/knowledge/documents", { method: "POST", form: filesForm(files) }),
+  deleteFromLibrary: (documentId) => request(`/knowledge/documents/${documentId}`, { method: "DELETE" }),
+  setAttachments: (documentId, projectIds) =>
+    request(`/knowledge/documents/${documentId}/projects`, {
+      method: "PUT",
+      body: { project_ids: projectIds },
+    }),
+  setLibraryEmbedding: ({ provider, model }) =>
+    request("/knowledge/embedding", { method: "PUT", body: { provider, model } }),
+  // ---- one project's view: the files attached to it.
   getKnowledge: (id) => request(`/projects/${id}/knowledge`),
-  uploadDocuments: (id, files) => {
-    const form = new FormData();
-    for (const file of files) form.append("files", file, file.name);
-    return request(`/projects/${id}/knowledge/documents`, { method: "POST", form });
-  },
-  deleteDocument: (id, documentId) =>
+  // Adds the files to the library and attaches them to the project.
+  uploadDocuments: (id, files) =>
+    request(`/projects/${id}/knowledge/documents`, { method: "POST", form: filesForm(files) }),
+  attachDocument: (id, documentId) =>
+    request(`/projects/${id}/knowledge/documents/${documentId}`, { method: "POST" }),
+  // Detaches only: the file stays in the library.
+  detachDocument: (id, documentId) =>
     request(`/projects/${id}/knowledge/documents/${documentId}`, { method: "DELETE" }),
-  setEmbedding: (id, { provider, model }) =>
-    request(`/projects/${id}/knowledge/embedding`, { method: "PUT", body: { provider, model } }),
   searchKnowledge: (id, query, k = 5) =>
     request(`/projects/${id}/knowledge/search`, { method: "POST", body: { query, k } }),
   reviseProject: (id, message) =>

@@ -158,19 +158,25 @@ function reset() {
   knowledge.documents = [];
 }
 
-// ---- knowledge base: uploads go from processing to ready after INDEX_MS.
+// ---- knowledge library: files belong to the user and are attached to any number of
+// projects. Uploads go from processing to ready after INDEX_MS.
 const INDEX_MS = 1200;
 const knowledge = { embedding: null, documents: [] };
 const LIMITS = {
   max_file_bytes: 20 * 1024 * 1024,
-  max_files: 50,
+  max_files: 100,
   max_files_per_upload: 10,
   max_passages: 20000,
   file_types: [".csv", ".docx", ".markdown", ".md", ".pdf", ".txt"],
 };
+const EMBEDDING_OPTIONS = [
+  { provider: "google_genai", model: "gemini-embedding-001", available: true },
+  { provider: "openai", model: "text-embedding-3-small", available: false },
+];
 
-// A second, empty project, so the workspace Knowledge page has a choice of projects.
+// A second project, so the library page has a choice of projects to attach to.
 const SECOND_PROJECT = { project_id: "e2e0second0project", brief: "Weekend budget planner", updated_at: "2026-09-30T10:00:00Z" };
+const projectIds = () => [...(project.deleted ? [] : [PROJECT_ID]), SECOND_PROJECT.project_id];
 
 // Files finish indexing INDEX_MS after upload, whenever anything asks.
 function settle() {
@@ -180,51 +186,54 @@ function settle() {
   }
 }
 
-const publicDoc = ({ added, ...d }) => d;
+const publicDoc = ({ added, ...d }) => ({ ...d, project_ids: d.project_ids.filter((id) => projectIds().includes(id)) });
+const newestFirst = (docs) => [...docs].reverse();
+const usedBy = (id) =>
+  id === PROJECT_ID ? plan.agents.filter((a) => a.tools.includes("knowledge_search")).map((a) => a.id) : [];
 
-function overviewBody() {
+function libraryBody() {
   settle();
-  const summary = (id, brief, updatedAt, usedBy) => {
-    const docs = knowledge.documents.filter((d) => d.project_id === id);
+  const summary = (id, brief, updatedAt) => {
+    const docs = knowledge.documents.filter((d) => d.project_ids.includes(id));
     return {
       project_id: id,
       brief,
-      embedding: docs.length ? { provider: "google_genai", model: "gemini-embedding-001" } : null,
       documents: docs.length,
       ready: docs.filter((d) => d.status === "ready").length,
-      passages: docs.reduce((n, d) => n + d.chunk_count, 0),
-      used_by: usedBy,
+      used_by: usedBy(id),
       updated_at: updatedAt,
     };
   };
   return {
-    documents: [...knowledge.documents].reverse().map(publicDoc),
+    embedding: knowledge.embedding,
+    embedding_options: EMBEDDING_OPTIONS,
+    documents: newestFirst(knowledge.documents).map(publicDoc),
+    passages: knowledge.documents.reduce((n, d) => n + d.chunk_count, 0),
     projects: [
-      summary(PROJECT_ID, project.brief, project.updated_at,
-        plan.agents.filter((a) => a.tools.includes("knowledge_search")).map((a) => a.id)),
-      summary(SECOND_PROJECT.project_id, SECOND_PROJECT.brief, SECOND_PROJECT.updated_at, []),
+      ...(project.deleted ? [] : [summary(PROJECT_ID, project.brief, project.updated_at)]),
+      summary(SECOND_PROJECT.project_id, SECOND_PROJECT.brief, SECOND_PROJECT.updated_at),
     ],
     limits: LIMITS,
   };
 }
 
-function knowledgeBody() {
+function knowledgeBody(projectId = PROJECT_ID) {
   settle();
-  const documents = knowledge.documents.filter((d) => d.project_id === PROJECT_ID);
-  project.knowledge = {
-    documents: documents.length,
-    ready: documents.filter((d) => d.status === "ready").length,
-    embedding: knowledge.embedding,
-  };
+  const attached = knowledge.documents.filter((d) => d.project_ids.includes(projectId));
+  if (projectId === PROJECT_ID) {
+    project.knowledge = {
+      documents: attached.length,
+      ready: attached.filter((d) => d.status === "ready").length,
+      embedding: knowledge.embedding,
+    };
+  }
   return {
     embedding: knowledge.embedding,
-    embedding_options: [
-      { provider: "google_genai", model: "gemini-embedding-001", available: true },
-      { provider: "openai", model: "text-embedding-3-small", available: false },
-    ],
-    documents: documents.map(publicDoc),
-    passages: documents.reduce((n, d) => n + d.chunk_count, 0),
-    used_by: plan.agents.filter((a) => a.tools.includes("knowledge_search")).map((a) => a.id),
+    embedding_options: EMBEDDING_OPTIONS,
+    documents: newestFirst(attached).map(publicDoc),
+    available: newestFirst(knowledge.documents.filter((d) => !d.project_ids.includes(projectId))).map(publicDoc),
+    passages: attached.reduce((n, d) => n + d.chunk_count, 0),
+    used_by: usedBy(projectId),
     limits: LIMITS,
   };
 }
@@ -237,13 +246,13 @@ function readRaw(req) {
   });
 }
 
-async function upload(req, res, projectId) {
+async function upload(req, res, projectId = null) {
   const raw = await readRaw(req);
   const names = [...raw.matchAll(/filename="([^"]+)"/g)].map((m) => m[1]);
   knowledge.embedding ??= { provider: "google_genai", model: "gemini-embedding-001" };
   const added = names.map((filename, i) => ({
     id: `doc${Date.now()}${i}`,
-    project_id: projectId,
+    project_ids: projectId ? [projectId] : [],
     filename,
     kind: filename.slice(filename.lastIndexOf(".")).toLowerCase(),
     size_bytes: 2048,
@@ -277,7 +286,7 @@ function revise(res, message) {
 const server = http.createServer(async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
   if (req.method === "OPTIONS") return res.writeHead(204).end();
 
   const path = new URL(req.url, "http://x").pathname;
@@ -299,32 +308,56 @@ const server = http.createServer(async (req, res) => {
   }
   if (path === p && req.method === "DELETE") {
     project.deleted = true;
-    const files = knowledge.documents.filter((d) => d.project_id === PROJECT_ID).length;
-    knowledge.documents = knowledge.documents.filter((d) => d.project_id !== PROJECT_ID);
-    return send(res, 200, { deleted: PROJECT_ID, knowledge_documents_deleted: files });
+    let detached = 0;
+    for (const d of knowledge.documents) {
+      if (d.project_ids.includes(PROJECT_ID)) {
+        d.project_ids = d.project_ids.filter((id) => id !== PROJECT_ID);
+        detached += 1;
+      }
+    }
+    return send(res, 200, { deleted: PROJECT_ID, knowledge_documents_detached: detached });
   }
   if (path === p) {
     knowledgeBody();
     return send(res, 200, project);
   }
-  if (path === `${p}/knowledge` && req.method === "GET") return send(res, 200, knowledgeBody());
-  if (path === "/knowledge" && req.method === "GET") return send(res, 200, overviewBody());
+  // Library
+  if (path === "/knowledge" && req.method === "GET") return send(res, 200, libraryBody());
+  if (path === "/knowledge/documents" && req.method === "POST") return upload(req, res);
+  const libDoc = path.match(/^\/knowledge\/documents\/([^/]+)$/);
+  if (libDoc && req.method === "DELETE") {
+    knowledge.documents = knowledge.documents.filter((d) => d.id !== libDoc[1]);
+    return send(res, 200, { deleted: libDoc[1] });
+  }
+  const attachments = path.match(/^\/knowledge\/documents\/([^/]+)\/projects$/);
+  if (attachments && req.method === "PUT") {
+    const body = await readBody(req);
+    const d = knowledge.documents.find((x) => x.id === attachments[1]);
+    if (!d) return send(res, 404, { error_type: "DocumentNotFound", message: "document not found", details: null });
+    d.project_ids = [...new Set(body.project_ids ?? [])];
+    return send(res, 200, { document: publicDoc(d) });
+  }
+  // One project's view
+  const projectKnowledge = path.match(/^\/projects\/([^/]+)\/knowledge$/);
+  if (projectKnowledge && req.method === "GET") return send(res, 200, knowledgeBody(projectKnowledge[1]));
   const uploadTo = path.match(/^\/projects\/([^/]+)\/knowledge\/documents$/);
   if (uploadTo && req.method === "POST") return upload(req, res, uploadTo[1]);
-  const doc = path.match(/^\/projects\/[^/]+\/knowledge\/documents\/([^/]+)$/);
-  if (doc && req.method === "DELETE") {
-    knowledge.documents = knowledge.documents.filter((d) => d.id !== doc[1]);
-    return send(res, 200, { deleted: doc[1] });
+  const doc = path.match(/^\/projects\/([^/]+)\/knowledge\/documents\/([^/]+)$/);
+  if (doc) {
+    const d = knowledge.documents.find((x) => x.id === doc[2]);
+    if (!d) return send(res, 404, { error_type: "DocumentNotFound", message: "document not found", details: null });
+    if (req.method === "POST") d.project_ids = [...new Set([...d.project_ids, doc[1]])];
+    if (req.method === "DELETE") d.project_ids = d.project_ids.filter((id) => id !== doc[1]);
+    return send(res, 200, { document: publicDoc(d) });
   }
   if (path === `${p}/knowledge/search` && req.method === "POST") {
     const body = await readBody(req);
-    const ready = knowledge.documents.filter((d) => d.status === "ready" && d.project_id === PROJECT_ID);
+    const ready = knowledge.documents.filter((d) => d.status === "ready" && d.project_ids.includes(PROJECT_ID));
     return send(res, 200, {
       results: ready.slice(0, 1).map((d) => ({
         filename: d.filename,
         source: "page 2",
-        text: `Matched "${body.query}": the nightly hotel cap in Delhi is INR 9,000.
-Meals are reimbursed up to INR 1,500 a day.`,
+        text: `Matched "${body.query}": the nightly hotel cap in Delhi is INR 9,000.\nMeals are reimbursed up to INR 1,500 a day.`,
         score: 0.82,
       })),
     });

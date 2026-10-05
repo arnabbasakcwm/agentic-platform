@@ -20,8 +20,9 @@ for (const scheme of ["light", "dark"]) {
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.emulateMedia({ colorScheme: scheme });
 
-    // Give the project a knowledge file, so deleting it is seen to take the file too.
+    // Attach a library file to the project, to see deleting the project keep the file.
     await page.goto("/#/knowledge");
+    await page.getByRole("combobox", { name: /^Attach to/ }).selectOption({ label: TITLE });
     await page.getByLabel("Choose files to add").setInputFiles([
       { name: "policy.md", mimeType: "text/markdown", buffer: Buffer.from("# Policy") },
     ]);
@@ -34,7 +35,7 @@ for (const scheme of ["light", "dark"]) {
     // The trash button asks first and doesn't navigate into the project.
     await row.getByRole("button", { name: `Delete ${TITLE}` }).click();
     await expect(page).toHaveURL(/#\/projects$/);
-    await expect(row).toContainText("Delete project and its files?");
+    await expect(row).toContainText("Delete this project? Its files stay in your library.");
     await page.screenshot({ path: `e2e/screenshots/projects-delete-confirm-${scheme}.png` });
     const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
     const bad = results.violations.filter((v) => ["serious", "critical"].includes(v.impact));
@@ -46,9 +47,12 @@ for (const scheme of ["light", "dark"]) {
     await row.getByRole("button", { name: `Delete ${TITLE}` }).click();
     await row.getByRole("button", { name: "Delete", exact: true }).click();
     await expect(page.getByText("No projects yet")).toBeVisible();
-    // Gone from the sidebar's recent list and its file from the knowledge count.
+    // Gone from the sidebar's recent list; its file stays in the library.
     await expect(page.locator(".sidebar__recent")).toHaveCount(0);
-    await expect(page.getByRole("link", { name: /^Knowledge/ }).locator(".navitem__count")).toHaveCount(0);
+    await expect(page.getByRole("link", { name: /^Knowledge/ }).locator(".navitem__count")).toHaveText("1");
+
+    await page.getByRole("link", { name: /^Knowledge/ }).click();
+    await expect(page.locator(".ktable tbody tr", { hasText: "policy.md" })).toContainText("Library only");
 
     expect(errors).toEqual([]);
   });

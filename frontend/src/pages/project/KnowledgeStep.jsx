@@ -5,10 +5,8 @@ import {
   ActionBar,
   Button,
   Callout,
-  DeleteButton,
   Empty,
   ErrorCallout,
-  Field,
   LinkButton,
   Panel,
   Pill,
@@ -31,7 +29,7 @@ import { useAction } from "../../lib/useAction.js";
 
 const POLL_MS = 2000;
 
-function DocumentRow({ doc, onDelete }) {
+function DocumentRow({ doc, onDetach }) {
   const { badge, label } = documentBadge(doc.status);
   return (
     <li className="doclist__item">
@@ -48,61 +46,78 @@ function DocumentRow({ doc, onDelete }) {
         {doc.status === "failed" && doc.error && <div className="doclist__error">{doc.error}</div>}
       </div>
       <StatusBadge status={badge} label={label} />
-      <DeleteButton name={doc.filename} onDelete={() => onDelete(doc)} />
+      <button
+        type="button"
+        className="iconbtn"
+        onClick={() => onDetach(doc)}
+        aria-label={`Detach ${doc.filename} from this project`}
+        title="Detach — it stays in your library"
+      >
+        <Icon name="close" />
+      </button>
     </li>
   );
 }
 
-function EmbeddingPanel({ project, knowledge, onChanged }) {
-  const current = knowledge.embedding;
-  const [choice, setChoice] = useState(current?.provider ?? "");
-  const save = useAction();
-  const options = knowledge.embedding_options;
-  const changed = current && choice && choice !== current.provider;
-  const busy = isIndexing(knowledge.documents);
-
-  async function apply() {
-    const option = options.find((o) => o.provider === choice);
-    const res = await save.run(() => api.setEmbedding(project.project_id, option));
-    if (res) onChanged(res);
-  }
-
+function EmbeddingNote({ knowledge }) {
+  const { embedding } = knowledge;
   return (
     <Panel title="Embedding model">
-      {current ? (
-        <div className="stack">
-          <Field
-            label="Model used to index and search these files"
-            hint="Every file is indexed with one model. Changing it re-indexes all of them; nothing needs uploading again."
-          >
-            <select value={choice} onChange={(e) => setChoice(e.target.value)} disabled={save.busy}>
-              {options.map((o) => (
-                <option key={o.provider} value={o.provider} disabled={!o.available}>
-                  {providerName(o.provider)} · {o.model}
-                  {o.available ? "" : " (no API key)"}
-                </option>
-              ))}
-            </select>
-          </Field>
-          {changed && (
-            <div className="row">
-              <Button variant="primary" onClick={apply} loading={save.busy} disabled={busy}>
-                Re-index with {providerName(choice)}
+      <p className="muted">
+        {embedding ? (
+          <>
+            Your library uses <strong>{providerName(embedding.provider)}</strong> ·{" "}
+            <span className="mono">{embedding.model}</span> for every file, in every project.
+          </>
+        ) : (
+          "Chosen when you add your first file."
+        )}{" "}
+        <a href={paths.knowledge}>Change it on the Knowledge page</a>.
+      </p>
+    </Panel>
+  );
+}
+
+function LibraryPanel({ knowledge, onAttach, attaching }) {
+  const { available } = knowledge;
+  if (available.length === 0) return null;
+  return (
+    <Panel
+      title="Add from your library"
+      subtitle={`${available.length} file${available.length === 1 ? "" : "s"} not attached here`}
+      flush
+    >
+      <ul className="doclist">
+        {available.map((doc) => {
+          const { badge, label } = documentBadge(doc.status);
+          return (
+            <li key={doc.id} className="doclist__item">
+              <Icon name="file" size={18} />
+              <div className="doclist__main">
+                <div className="doclist__name" title={doc.filename}>
+                  {doc.filename}
+                </div>
+                <div className="doclist__meta">
+                  {formatBytes(doc.size_bytes)}
+                  {doc.status === "ready" && ` · ${doc.chunk_count} passage${doc.chunk_count === 1 ? "" : "s"}`}
+                  {doc.project_ids.length > 0 &&
+                    ` · in ${doc.project_ids.length} other project${doc.project_ids.length === 1 ? "" : "s"}`}
+                </div>
+              </div>
+              <StatusBadge status={badge} label={label} />
+              <Button
+                size="sm"
+                onClick={() => onAttach(doc)}
+                loading={attaching === doc.id}
+                disabled={Boolean(attaching)}
+                aria-label={`Attach ${doc.filename}`}
+              >
+                Attach
               </Button>
-              <Button onClick={() => setChoice(current.provider)} disabled={save.busy}>
-                Cancel
-              </Button>
-            </div>
-          )}
-          {changed && busy && <p className="muted">Wait for indexing to finish before switching.</p>}
-          <ErrorCallout error={save.error} />
-        </div>
-      ) : (
-        <p className="muted">
-          Chosen when you add the first file: the embedding model of your agents&apos; provider if it
-          has one (Gemini or OpenAI), otherwise the first one this server has a key for.
-        </p>
-      )}
+            </li>
+          );
+        })}
+      </ul>
     </Panel>
   );
 }
@@ -222,7 +237,9 @@ export function KnowledgeStep({ project, onKnowledgeChanged, onRevised }) {
   const [problems, setProblems] = useState([]);
   const load = useAction();
   const upload = useAction();
-  const remove = useAction();
+  const detach = useAction();
+  const attach = useAction();
+  const [attaching, setAttaching] = useState(null);
   const { run: runLoad } = load;
 
   const loaded = useCallback(
@@ -256,10 +273,11 @@ export function KnowledgeStep({ project, onKnowledgeChanged, onRevised }) {
   }, [indexing, id, loaded]);
 
   async function addFiles(files) {
+    // Names must be unique across the whole library, not just this project.
     const { accepted, problems: refused } = checkFiles(
       files,
       knowledge.limits,
-      knowledge.documents.map((d) => d.filename),
+      [...knowledge.documents, ...knowledge.available].map((d) => d.filename),
     );
     setProblems(refused);
     if (accepted.length === 0) return;
@@ -277,12 +295,16 @@ export function KnowledgeStep({ project, onKnowledgeChanged, onRevised }) {
     if (body) loaded(body);
   }, [id, runLoad, loaded]);
 
-  async function deleteDocument(doc) {
-    const res = await remove.run(() => api.deleteDocument(id, doc.id));
-    if (!res) return false;
-    const body = await runLoad(() => api.getKnowledge(id));
-    if (body) loaded(body);
-    return true;
+  async function detachDocument(doc) {
+    const res = await detach.run(() => api.detachDocument(id, doc.id));
+    if (res) await reload();
+  }
+
+  async function attachDocument(doc) {
+    setAttaching(doc.id);
+    const res = await attach.run(() => api.attachDocument(id, doc.id));
+    setAttaching(null);
+    if (res) await reload();
   }
 
   if (!knowledge) {
@@ -302,8 +324,8 @@ export function KnowledgeStep({ project, onKnowledgeChanged, onRevised }) {
         <div className="split">
           <div className="stack">
             <Panel
-              title="Knowledge base"
-              subtitle="Documents this project's agents can search and cite."
+              title="Knowledge for this project"
+              subtitle="This project's agents search only the files attached here. New files also go into your library."
             >
               <div className="stack">
                 <Callout tone="info" title="Where your files go">
@@ -322,12 +344,12 @@ export function KnowledgeStep({ project, onKnowledgeChanged, onRevised }) {
                     </ul>
                   </Callout>
                 )}
-                <ErrorCallout error={upload.error || remove.error} />
+                <ErrorCallout error={upload.error || detach.error || attach.error} />
               </div>
             </Panel>
 
             <Panel
-              title="Files"
+              title="Attached files"
               subtitle={
                 documents.length > 0
                   ? `${documents.length} file${documents.length === 1 ? "" : "s"} · ${knowledge.passages} passages`
@@ -337,30 +359,27 @@ export function KnowledgeStep({ project, onKnowledgeChanged, onRevised }) {
             >
               {documents.length === 0 ? (
                 <div className="panel__body">
-                  <Empty title="No files yet">
-                    A knowledge base is optional. Add files when your agents need facts that only
-                    your documents have.
+                  <Empty title="No files attached">
+                    Optional. Attach files from your library or add new ones when this project&apos;s
+                    agents need facts that only your documents have.
                   </Empty>
                 </div>
               ) : (
                 <ul className="doclist" aria-live="polite">
                   {documents.map((doc) => (
-                    <DocumentRow key={doc.id} doc={doc} onDelete={deleteDocument} />
+                    <DocumentRow key={doc.id} doc={doc} onDetach={detachDocument} />
                   ))}
                 </ul>
               )}
             </Panel>
+
+            <LibraryPanel knowledge={knowledge} onAttach={attachDocument} attaching={attaching} />
           </div>
 
           <aside className="split__aside stack">
             <AccessPanel project={project} knowledge={knowledge} onRevised={onRevised} onReload={reload} />
             <SearchPanel project={project} knowledge={knowledge} />
-            <EmbeddingPanel
-              key={embedding?.provider ?? "none"}
-              project={project}
-              knowledge={knowledge}
-              onChanged={loaded}
-            />
+            <EmbeddingNote knowledge={knowledge} />
           </aside>
         </div>
       </div>

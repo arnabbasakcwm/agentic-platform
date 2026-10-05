@@ -3636,3 +3636,78 @@ code {
   color: var(--danger);
   white-space: nowrap;
 }
+
+/* ================================================================ library: project attachments */
+.kattach {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.kattach__list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.kattach__item {
+  display: flex;
+  flex-direction: column;
+}
+
+.kattach__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--surface);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.kattach__toggle:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.kattach__toggle[aria-expanded="true"] {
+  color: var(--accent);
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
+/* Expands in place (the table's panel clips anything floating over its edge). */
+.kattach__panel {
+  min-width: 220px;
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+}
+
+.kattach__legend {
+  padding: 0 4px 6px;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.kattach__option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 4px;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  color: var(--text);
+}
+
+.kattach__option:hover {
+  background: var(--surface-sunken);
+}

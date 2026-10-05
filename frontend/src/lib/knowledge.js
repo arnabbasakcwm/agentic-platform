@@ -96,14 +96,21 @@ export const STATUS_FILTERS = {
   failed: ["failed"],
 };
 
-/** Documents matching a name search, a project id ("" = all) and a STATUS_FILTERS key. */
+// Project filter value for files attached to no project.
+export const NO_PROJECT = "__none__";
+
+/**
+ * Documents matching a name search, a project ("" = any, NO_PROJECT = attached to none, else a
+ * project id) and a STATUS_FILTERS key.
+ */
 export function filterDocuments(documents, { query = "", project = "", status = "all" } = {}) {
   const needle = query.trim().toLowerCase();
   const statuses = STATUS_FILTERS[status] ?? null;
   return documents.filter(
     (d) =>
       (!needle || d.filename.toLowerCase().includes(needle)) &&
-      (!project || d.project_id === project) &&
+      (!project ||
+        (project === NO_PROJECT ? d.project_ids.length === 0 : d.project_ids.includes(project))) &&
       (!statuses || statuses.includes(d.status)),
   );
 }
