@@ -28,6 +28,7 @@ export function formatCount(value) {
 const KINDS = {
   run: "Agent runs",
   deployed_run: "Deployed runs",
+  deployed_run_direct: "Deployed runs (direct AWS calls)",
   planner: "Planning",
   assistant: "Plan assistant",
   embedding_index: "Indexing files",

@@ -48,10 +48,19 @@ for (const scheme of ["light", "dark"]) {
     await expect(page.locator(".panel", { hasText: "By activity" })).toContainText("Planning");
     await expect(page.locator(".panel", { hasText: "By project" })).toContainText("Deleted project");
 
-    // Recent runs expand to per-agent rows.
+    // Direct AWS calls: sync status, Sync now, and the warning for an old runtime.
+    const sync = page.locator(".usync");
+    await expect(sync).toContainText(/not synced yet|synced/);
+    await expect(sync.getByText("Redeploy to count direct AWS calls")).toBeVisible();
+    await expect(sync).toContainText("Old deployed flow");
+    await sync.getByRole("button", { name: "Sync now" }).click();
+    await expect(sync).toContainText(/synced (just now|\d+ (second|seconds|minute|minutes) ago)/);
+
+    // Recent runs expand to per-agent rows; direct AWS calls are tagged as such.
     const runs = page.locator(".urun");
-    await expect(runs).toHaveCount(2);
+    await expect(runs).toHaveCount(3);
     await expect(runs.nth(1)).toContainText("AgentCore");
+    await expect(runs.nth(2)).toContainText("AgentCore · direct");
     await runs.first().getByRole("button").click();
     await expect(runs.first().locator(".urun__detail")).toContainText("travel_advisor");
     await expect(runs.first().locator(".urun__detail")).toContainText("knowledge search");

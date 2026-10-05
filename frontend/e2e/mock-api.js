@@ -221,9 +221,17 @@ function usageBody(days, projectId) {
       { kind: "assistant", calls: 2, input_tokens: 3000, output_tokens: 500, cost: 0.02, unpriced_tokens: 0 },
       { kind: "embedding_query", calls: 2, input_tokens: 14, output_tokens: 0, cost: 0, unpriced_tokens: 14 },
     ],
-    recent_runs: [run("run-local", 2, false), run("run-deployed", 26, true)],
+    recent_runs: [run("run-local", 2, false), run("run-deployed", 26, true), { ...run("run-direct", 30, true), via: "direct" }],
+    deployments: [
+      { project_id: PROJECT_ID, name: project.brief, reports_usage: true, synced_until: usageSync.at, last_sync: usageSync.last },
+      { project_id: "e2e0old0deploy", name: "Old deployed flow", reports_usage: false, synced_until: null, last_sync: null },
+    ],
+    sync_available: true,
   };
 }
+
+// The deployed-usage sync: "Sync now" moves the cursor and records the result.
+const usageSync = { at: null, last: null };
 
 // The knowledge spec changes the project (uploads, a revision); it resets it afterwards
 // so the other specs see the original.
@@ -406,6 +414,11 @@ const server = http.createServer(async (req, res) => {
   if (path === "/usage" && req.method === "GET") {
     const params = new URL(req.url, "http://x").searchParams;
     return send(res, 200, usageBody(Number(params.get("days") ?? 30), params.get("project_id")));
+  }
+  if (path === "/usage/sync" && req.method === "POST") {
+    usageSync.at = new Date().toISOString();
+    usageSync.last = { project_id: PROJECT_ID, status: "synced", added: 1, detail: null, at: usageSync.at };
+    return send(res, 200, { results: [usageSync.last], deployments: [] });
   }
   if (path === "/usage/pricing") {
     return send(res, 200, {

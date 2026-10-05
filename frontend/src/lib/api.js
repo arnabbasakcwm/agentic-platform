@@ -155,6 +155,8 @@ export const api = {
   usage: (days = 30, projectId) =>
     request(`/usage?days=${days}${projectId ? `&project_id=${encodeURIComponent(projectId)}` : ""}`),
   usagePricing: () => request("/usage/pricing"),
+  // Read deployed runtimes' usage logs now (counts runs invoked straight through AWS).
+  syncUsage: () => request("/usage/sync", { method: "POST" }),
   // ---- knowledge library: files belong to the user, attached to any number of projects.
   knowledgeOverview: () => request("/knowledge"),
   uploadToLibrary: (files) => request("/knowledge/documents", { method: "POST", form: filesForm(files) }),

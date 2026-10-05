@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { CostChart } from "../components/CostChart.jsx";
 import { Icon } from "../components/icons.jsx";
-import { Callout, Empty, ErrorCallout, PageHeader, Panel, Pill, Skeleton } from "../components/ui.jsx";
+import { Button, Callout, Empty, ErrorCallout, PageHeader, Panel, Pill, Skeleton } from "../components/ui.jsx";
 import { api } from "../lib/api.js";
 import { fullDate, projectTitle, timeAgo } from "../lib/format.js";
 import { paths } from "../lib/router.js";
@@ -143,7 +143,11 @@ function RunRow({ run, currency }) {
             {timeAgo(run.at)}
           </span>
         </span>
-        {run.deployed ? <Pill tone="accent">AgentCore</Pill> : <Pill>Local</Pill>}
+        {run.deployed ? (
+          <Pill tone="accent">{run.via === "direct" ? "AgentCore · direct" : "AgentCore"}</Pill>
+        ) : (
+          <Pill>Local</Pill>
+        )}
         <span className="urun__tokens mono">{formatTokens(run.input_tokens + run.output_tokens)} tokens</span>
         <span className="urun__cost mono">{costCell(run, currency)}</span>
       </button>
@@ -188,18 +192,74 @@ function RunRow({ run, currency }) {
   );
 }
 
+/**
+ * Deployed runs invoked straight through AWS are counted from the runtimes' logs: show how
+ * far each deployment has been read, warn about ones that can't report, and sync on demand.
+ */
+function DeployedSync({ deployments, available, onSynced }) {
+  const sync = useAction();
+  if (!deployments?.length) return null;
+  const notReporting = deployments.filter((d) => !d.reports_usage);
+  const failed = deployments.filter((d) => d.last_sync?.status === "failed");
+  const synced = deployments.map((d) => d.synced_until).filter(Boolean).sort();
+  const oldest = synced[0];
+
+  async function syncNow() {
+    const res = await sync.run(() => api.syncUsage());
+    if (res) onSynced();
+  }
+
+  return (
+    <div className="usync">
+      <div className="usync__row">
+        <span className="muted">
+          Direct AWS calls to deployed flows are read from their logs —{" "}
+          {oldest ? (
+            <span title={fullDate(oldest)}>synced {timeAgo(oldest)}</span>
+          ) : (
+            "not synced yet"
+          )}
+          .
+        </span>
+        <Button size="sm" onClick={syncNow} loading={sync.busy} disabled={!available}>
+          Sync now
+        </Button>
+      </div>
+      {!available && (
+        <Callout tone="warn" title="Can't read deployed usage">
+          This server has no AWS credentials, so direct AWS calls to your deployments can&apos;t be counted.
+        </Callout>
+      )}
+      {notReporting.length > 0 && (
+        <Callout tone="warn" title="Redeploy to count direct AWS calls">
+          {notReporting.map((d) => projectTitle(d.name, 50)).join(", ")}{" "}
+          {notReporting.length === 1 ? "was" : "were"} deployed before runtimes reported their usage. Runs made
+          through this platform are counted; calls straight through AWS aren&apos;t until you redeploy.
+        </Callout>
+      )}
+      {failed.map((d) => (
+        <Callout key={d.project_id} tone="danger" title={`Couldn't read usage for ${projectTitle(d.name, 40)}`}>
+          {d.last_sync.detail}
+        </Callout>
+      ))}
+      <ErrorCallout error={sync.error} />
+    </div>
+  );
+}
+
 /** Models, tokens and estimated cost of everything the user ran. */
 export function UsagePage({ projects }) {
   const [days, setDays] = useState(30);
   const [projectId, setProjectId] = useState("");
   const [data, setData] = useState(null);
   const [pricing, setPricing] = useState(null);
+  const [reload, setReload] = useState(0);
   const load = useAction();
   const { run: runLoad } = load;
 
   useEffect(() => {
     runLoad(() => api.usage(days, projectId || undefined)).then((body) => body && setData(body));
-  }, [days, projectId, runLoad]);
+  }, [days, projectId, runLoad, reload]);
 
   useEffect(() => {
     api.usagePricing().then(setPricing).catch(() => {});
@@ -245,6 +305,11 @@ export function UsagePage({ projects }) {
       ) : (
         <>
           <ErrorCallout error={load.error} />
+          <DeployedSync
+            deployments={data.deployments}
+            available={data.sync_available !== false}
+            onSynced={() => setReload((n) => n + 1)}
+          />
           <div className="kstats" aria-label="Totals for the period">
             <Stat label="Estimated cost" value={`~${formatCost(totals.cost, currency)}`} hint={currency} />
             <Stat label="Input tokens" value={formatTokens(totals.input_tokens)} />
@@ -318,7 +383,8 @@ export function UsagePage({ projects }) {
             Costs are estimates from list prices in <code>backend/pricing.json</code> (with each price&apos;s
             source and date), recorded at the time of use. Token counts are what the provider reported;
             embedding tokens are estimated (~4 characters per token). Gemini&apos;s thinking tokens count as
-            output. Runs called directly through AWS, not through this platform, aren&apos;t counted.
+            output. Deployed runs called straight through AWS are counted from the runtime&apos;s logs after a
+            sync (runtimes deployed before this was added need a redeploy).
           </p>
         </>
       )}

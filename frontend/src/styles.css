@@ -3922,3 +3922,20 @@ code {
     transition: none;
   }
 }
+
+
+/* ================================================================ usage: deployed sync */
+.usync {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.usync__row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: var(--text-sm);
+}

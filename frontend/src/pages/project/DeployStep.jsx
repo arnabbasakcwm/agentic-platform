@@ -267,6 +267,11 @@ print(json.loads(response["response"].read()))`;
         Or directly through AWS, with IAM credentials allowed to invoke the runtime:
       </p>
       <pre className="codeblock">{boto}</pre>
+      <p className="muted" style={{ marginTop: 8 }}>
+        {deployment.reports_usage
+          ? "Direct AWS calls are counted on the Usage page too, from the runtime's logs, after the next sync."
+          : "Direct AWS calls to this runtime aren't counted on the Usage page: redeploy to get a runtime that reports its usage."}
+      </p>
     </Panel>
   );
 }
