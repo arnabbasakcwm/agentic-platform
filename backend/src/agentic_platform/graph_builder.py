@@ -9,6 +9,7 @@ uniform error surface.
 
 from __future__ import annotations
 
+import logging
 import operator
 import os
 import queue
@@ -39,6 +40,21 @@ from .errors import (
 )
 from .tools import get_tools
 from .usage import UsageCallback, UsageCollector
+
+logger = logging.getLogger(__name__)
+
+# Providers reject a tool call whose arguments aren't valid JSON (Groq: 400 tool_use_failed,
+# "Failed to parse tool call arguments as JSON"). That's the model's slip on one turn, so it
+# is corrected in place rather than by restarting the agent's whole attempt.
+_MALFORMED_TOOL_CALL_MARKERS = ("tool_use_failed", "Failed to parse tool call arguments")
+
+
+def _malformed_tool_call(error: Exception) -> str | None:
+    """The provider's message if `error` rejected a malformed tool call, else None."""
+    text = str(error)
+    if not any(marker in text for marker in _MALFORMED_TOOL_CALL_MARKERS):
+        return None
+    return text[:1500]
 
 if TYPE_CHECKING:
     from .knowledge import KnowledgeContext
@@ -245,7 +261,26 @@ def _run_agent_once(
         bound = llm.bind_tools(tools)
         tool_map = {t.name: t for t in tools}
         for _ in range(bounds.max_steps):
-            ai = bound.invoke(messages, config=call_config)
+            try:
+                ai = bound.invoke(messages, config=call_config)
+            except Exception as e:  # noqa: BLE001 — only malformed tool calls are handled here
+                rejected = _malformed_tool_call(e)
+                if rejected is None:
+                    raise  # anything else goes to the node's retry loop
+                # Feed the provider's actual error (including the broken call it quotes) back
+                # into this agent's context and let it re-issue the call. Counts as a step,
+                # so it stays bounded by max_steps.
+                logger.warning("agent %s sent a malformed tool call; asking it to resend: %s", spec.id, rejected[:300])
+                messages.append(
+                    HumanMessage(
+                        content=(
+                            "Your last tool call was rejected because its arguments were not valid "
+                            f"JSON:\n{rejected}\n\nCall the tool again with valid JSON arguments. "
+                            "Inside string values, escape double quotes as \\\" or leave them out."
+                        )
+                    )
+                )
+                continue
             messages.append(ai)
             tool_calls = getattr(ai, "tool_calls", None) or []
             if not tool_calls:

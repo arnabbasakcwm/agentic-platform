@@ -431,3 +431,81 @@ def test_short_or_multiline_answers_are_not_treated_as_flattened():
     assert not _looks_flattened("The speed of light is 299,792 km/s.")
     assert not _looks_flattened("# Title\n\n- one\n- two")
     assert _looks_flattened("x " * 400)
+
+
+# ------------------------------------------------------------------ malformed tool calls
+_MALFORMED = Exception(
+    "Error code: 400 - {'error': {'message': 'Failed to parse tool call arguments as JSON', "
+    "'type': 'invalid_request_error', 'code': 'tool_use_failed', "
+    "'failed_generation': '{\"name\": \"web_search\", \"arguments\": {\"query\": \"x\" \"y\"}}'}}"
+)
+
+
+class _FlakyToolLLM:
+    """First tool-call turn: the provider rejects malformed JSON. Then a valid call, then done."""
+
+    def __init__(self, structured, failures=1, then_valid=True):
+        self._structured = structured
+        self.failures = failures
+        self.then_valid = then_valid
+        self.turns = []
+
+    def bind_tools(self, tools):
+        return self
+
+    def invoke(self, messages, config=None):
+        self.turns.append(list(messages))
+        if self.failures > 0:
+            self.failures -= 1
+            raise _MALFORMED
+        if self.then_valid and not any(getattr(m, "tool_call_id", None) for m in messages):
+            return _FakeAIMessage(tool_calls=[{"name": _fake_web_search.name, "args": {"query": "x"}, "id": "c1"}])
+        return _FakeAIMessage(tool_calls=[])
+
+    def with_structured_output(self, schema):
+        return self._structured
+
+
+def _web_agent_plan():
+    spec = AgentSpec(id="a", role="worker", system_prompt="agent a",
+                     llm=LLMConfig(provider="google_genai", model="m"), tools=["web_search"])
+    return AgentPlan(agents=[spec], orchestration_pattern="sequential")
+
+
+def test_a_malformed_tool_call_is_corrected_in_place_not_by_restarting_the_agent(monkeypatch):
+    monkeypatch.setitem(tools_module.TOOL_REGISTRY, "web_search", lambda: _fake_web_search)
+    llm = _FlakyToolLLM(_Structured([AgentOutput(content="done")]))
+    monkeypatch.setattr(gb, "get_llm", lambda cfg: llm)
+    monkeypatch.setattr(gb.time, "sleep", lambda s: None)
+    events = []
+    plan = _web_agent_plan()
+    result = compile_graph(plan).invoke(
+        initial_state({"q": "x"}), {"configurable": {"emit": lambda e, **d: events.append(e)}})
+
+    assert result["errors"] == [] and result["outputs"]["a"]["content"] == "done"
+    assert "node_retry" not in events  # the agent's attempt was never thrown away
+    correction = llm.turns[1][-1].content  # what the model saw on the next turn
+    assert "not valid JSON" in correction and "tool_use_failed" in correction
+    assert any(getattr(m, "tool_call_id", None) == "c1" for m in llm.turns[-1])  # the search still ran
+
+
+def test_a_model_that_keeps_sending_malformed_calls_stays_bounded(monkeypatch):
+    monkeypatch.setitem(tools_module.TOOL_REGISTRY, "web_search", lambda: _fake_web_search)
+    llm = _FlakyToolLLM(_Structured([AgentOutput(content="no search")]), failures=99)
+    monkeypatch.setattr(gb, "get_llm", lambda cfg: llm)
+    plan = _web_agent_plan()
+    result = compile_graph(plan).invoke(initial_state({"q": "x"}))
+    assert len(llm.turns) == plan.bounds.max_steps  # each correction counts as a step
+    assert result["outputs"]["a"]["content"] == "no search"
+
+
+def test_other_provider_errors_still_go_to_the_agent_retry_loop(monkeypatch):
+    class Broken(_FlakyToolLLM):
+        def invoke(self, messages, config=None):
+            raise RuntimeError("503 service unavailable")
+
+    monkeypatch.setitem(tools_module.TOOL_REGISTRY, "web_search", lambda: _fake_web_search)
+    monkeypatch.setattr(gb, "get_llm", lambda cfg: Broken(_Structured([AgentOutput(content="x")])))
+    monkeypatch.setattr(gb.time, "sleep", lambda s: None)
+    result = compile_graph(_web_agent_plan()).invoke(initial_state({"q": "x"}))
+    assert result["errors"][0]["attempts"] == 3 and "503" in result["errors"][0]["error"]
