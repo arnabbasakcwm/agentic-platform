@@ -113,7 +113,8 @@ changed or extended this contract are recorded, with their reasons, in the
 | Observability | LangSmith (or equivalent) — every run and every retry must be traceable |
 | Deployment / serving | Amazon Bedrock AgentCore Runtime (ARM64 container, `/invocations` + `/ping`); FastAPI in-process for local/MVP |
 
-LLM providers: OpenAI, Anthropic, Google, Groq via LangChain's native
+LLM providers: Amazon Bedrock via `langchain-aws` `ChatBedrockConverse` (IAM, no key — see
+the decision log); OpenAI, Anthropic, Google, Groq via LangChain's native
 `init_chat_model`. Moonshot (Kimi) via a direct `ChatOpenAI` client against Moonshot's
 OpenAI-compatible endpoint (not a native `init_chat_model` provider) — confirm current
 base URL and `reasoning_effort` support against Moonshot's docs before relying on it,
@@ -142,6 +143,7 @@ backend/
     runtime_app.py          # The /ping + /invocations app a deployed project runs on AgentCore
     deploy.py               # Packaging (arm64 zip) + background deploy/remove jobs
     agentcore.py            # AWS wrapper: S3, IAM role, AgentCore runtime create/update/invoke
+    bedrock_catalog.py      # Live, cached list of the account's Bedrock chat models / inference profiles
     app.py                  # FastAPI serving layer
   tests/                    # Offline, fully mocked suite
   scripts/                  # Real-API smoke checks
@@ -423,6 +425,32 @@ whenever a change departs from or extends the contract above — don't silently 
   - **Files on create:** `POST /projects` takes `document_ids` from the caller's own
     library. The planner gets `knowledge_search` and the files' **names** only, never
     their content, and the files are attached once the project exists.
+
+### 2026-10-06 — Amazon Bedrock models through IAM (chat and embeddings)
+- **Why:** provider API keys bring per-provider limits (Groq's on-demand tier capped a
+  search-heavy agent at 8,000 tokens/minute) and put keys in deployments' environment;
+  the user already has an IAM identity with Bedrock access.
+- **Rule:**
+  - **Chat:** `provider="bedrock"` in `get_llm()` only (`ChatBedrockConverse`,
+    `BEDROCK_REGION`, default ap-south-1). Credentials are the AWS chain — the user's IAM
+    keys locally, a deployment's **execution role** in AgentCore — so no model key is
+    stored or passed.
+  - **Model IDs:** a model id or an **inference-profile id**. Claude is only reachable
+    through a profile (`in.` / `apac.` / `global.`).
+  - **Catalog:** `bedrock_catalog` lists the account's chat models and profiles live
+    (cached 10 minutes; a failed refresh keeps the last good list), dropping embedding,
+    image, speech and guard models, and keeping one profile per model (in-country, then
+    regional, then global). Bedrock ids are accepted only if they're in that list
+    (create, `/agents`); the assistant may use the recommended ones.
+  - **Embeddings:** each option in `config.EMBEDDING_OPTIONS` carries its vector size
+    (Gemini/OpenAI 768; Bedrock Titan v2 and Cohere v4 1024). A library uses one model,
+    and a deploy snapshot refuses mixed sizes.
+  - **Permissions:** the IAM user and the execution role need `bedrock:InvokeModel` (and
+    `InvokeModelWithResponseStream`) on `arn:aws:bedrock:*::foundation-model/*` and
+    `arn:aws:bedrock:*:<account>:inference-profile/*`. Platform-created roles get this;
+    an admin-made role needs it added. `boto3` now ships in runtime packages.
+  - **Tests:** the offline suite must not call AWS: `tests/conftest.py` stubs the catalog
+    for every test.
 
 ## Working style — verify-and-retry, always
 

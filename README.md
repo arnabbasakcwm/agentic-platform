@@ -296,6 +296,29 @@ signed-in user's projects. Interactive docs: http://127.0.0.1:8000/docs.
 
 ---
 
+## Amazon Bedrock models (no API key)
+
+If `backend/.env` has AWS credentials (the same ones used for deploying), the model menus
+also list every Amazon Bedrock chat model your account can use, grouped under **Amazon
+Bedrock**. That includes Claude (through inference profiles such as
+`in.anthropic.claude-haiku-4-5…`), Amazon Nova, gpt-oss and Kimi. Bedrock models are
+called with your IAM credentials, so there's no per-provider key, and deployed flows call
+them as their AgentCore execution role. The knowledge library can also embed with Bedrock
+Titan Text Embeddings v2 or Cohere Embed v4 (1024-dimension vectors).
+
+Your IAM user, and the execution role for deployed flows, need:
+
+```json
+{"Effect": "Allow",
+ "Action": ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
+ "Resource": ["arn:aws:bedrock:*::foundation-model/*",
+              "arn:aws:bedrock:*:<account-id>:inference-profile/*"]}
+```
+
+plus `bedrock:ListFoundationModels` and `bedrock:ListInferenceProfiles` to fill the
+menus. Set `BEDROCK_REGION` to use a region other than the AgentCore one (default
+ap-south-1).
+
 ## Deploying to AWS (AgentCore)
 
 Each project deploys as its own Amazon Bedrock AgentCore runtime. The platform builds a

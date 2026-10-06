@@ -187,6 +187,16 @@ nothing at all.
 every agent it calls `get_tools(spec.tools)` so an unknown tool name, or a side-effect
 tool missing its API key, is caught at compile time, not mid-run.
 
+### 5.0 Amazon Bedrock
+
+`provider="bedrock"` builds `langchain_aws.ChatBedrockConverse(model=<model or
+inference-profile id>, region_name=BEDROCK_REGION)`. It authenticates with the AWS
+credential chain (IAM keys locally, the execution role when deployed), so there's no
+model key. `bedrock_catalog.bedrock_models()` supplies the selectable ids from
+`ListFoundationModels` + `ListInferenceProfiles`, cached. Embeddings use
+`BedrockEmbeddings` (Titan v2, Cohere v4) at 1024 dimensions; each embedding option
+declares its own size.
+
 ### 5.1 The LLM factory — `get_llm(config)`
 
 The single point where a provider string becomes a `BaseChatModel`. Adding a provider
