@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import {
+  cannotCallTools,
   filterSections,
   modelKey,
   modelName,
@@ -29,6 +30,7 @@ export function ModelPicker({
   emptyLabel,
   placeholder = "Choose a model",
   isDisabled = (o) => o.available === false,
+  disabledReason = () => null,
   disabled = false,
   className,
 }) {
@@ -254,7 +256,11 @@ export function ModelPicker({
                   const off = isDisabled(o);
                   const scope = scopeLabel(o);
                   return (
-                    <div key={key} {...optionProps(key, off)} title={o.model}>
+                    <div
+                      key={key}
+                      {...optionProps(key, off)}
+                      title={(off && disabledReason(o)) || o.model}
+                    >
                       <span className="mpick__name">{modelName(o)}</span>
                       {!section.id.startsWith("vendor-") && (
                         <span className="mpick__meta">{modelVendor(o)}</span>
@@ -264,9 +270,14 @@ export function ModelPicker({
                           <span className="mpick__tag">Default</span>
                         )}
                         {scope && <span className="mpick__tag">{scope}</span>}
-                        {off && (
+                        {o.available === false && (
                           <span className="mpick__tag mpick__tag--warn">
                             No API key
+                          </span>
+                        )}
+                        {cannotCallTools(o) && (
+                          <span className="mpick__tag mpick__tag--warn">
+                            No tool calling
                           </span>
                         )}
                         {key === value && <Icon name="check" size={13} />}

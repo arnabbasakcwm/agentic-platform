@@ -546,15 +546,17 @@ const server = http.createServer(async (req, res) => {
   if (path === "/providers") {
     return send(res, 200, {
       providers: [
-        { provider: "google_genai", model: "gemini-3.1-pro-preview", default: true, available: true },
-        { provider: "openai", model: "gpt-4o-mini", default: false, available: true },
-        { provider: "anthropic", model: "claude-sonnet-4-6", default: false, available: false },
+        { provider: "google_genai", model: "gemini-3.1-pro-preview", default: true, available: true, tool_calling: true },
+        { provider: "openai", model: "gpt-4o-mini", default: false, available: true, tool_calling: true },
+        { provider: "anthropic", model: "claude-sonnet-4-6", default: false, available: false, tool_calling: true },
         { provider: "bedrock", model: "global.anthropic.claude-sonnet-4-6", vendor: "Anthropic", name: "Claude Sonnet 4.6", scope: "global", label: "Anthropic · Claude Sonnet 4.6", recommended: true, default: false, available: true, group: "Amazon Bedrock" },
         { provider: "bedrock", model: "in.anthropic.claude-haiku-4-5-20251001-v1:0", vendor: "Anthropic", name: "Claude Haiku 4.5", scope: "in", label: "Anthropic · Claude Haiku 4.5", recommended: true, default: false, available: true, group: "Amazon Bedrock" },
         { provider: "bedrock", model: "openai.gpt-oss-120b-1:0", vendor: "OpenAI", name: "gpt-oss-120b", scope: null, label: "OpenAI · gpt-oss-120b", recommended: true, default: false, available: true, group: "Amazon Bedrock" },
         { provider: "bedrock", model: "global.anthropic.claude-opus-4-6-v1", vendor: "Anthropic", name: "Claude Opus 4.6", scope: "global", label: "Anthropic · Claude Opus 4.6", recommended: false, default: false, available: true, group: "Amazon Bedrock" },
         { provider: "bedrock", model: "mistral.mistral-large-3-675b-instruct", vendor: "Mistral AI", name: "Mistral Large 3", scope: null, label: "Mistral AI · Mistral Large 3", recommended: false, default: false, available: true, group: "Amazon Bedrock" },
         { provider: "bedrock", model: "qwen.qwen3-32b-v1:0", vendor: "Qwen", name: "Qwen3 32B (dense)", scope: null, label: "Qwen · Qwen3 32B (dense)", recommended: false, default: false, available: true, group: "Amazon Bedrock" },
+        { provider: "bedrock", model: "google.gemma-3-12b-it", vendor: "Google", name: "Gemma 3 12B IT", scope: null, label: "Google · Gemma 3 12B IT", recommended: false, default: false, available: true, group: "Amazon Bedrock", tool_calling: false },
+        { provider: "bedrock", model: "meta.llama3-70b-instruct-v1:0", vendor: "Meta", name: "Llama 3 70B Instruct", scope: null, label: "Meta · Llama 3 70B Instruct", recommended: false, default: false, available: true, group: "Amazon Bedrock", tool_calling: null },
       ],
     });
   }
@@ -629,6 +631,12 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, project);
   }
   // Library
+  if (path === "/models/check" && req.method === "POST") {
+    const body = await readBody(req);
+    await sleep(400);
+    // Like the real check: Llama 3 and Gemma answer in prose when asked to call a tool.
+    return send(res, 200, { ...body, tool_calling: !/llama3|gemma/.test(body.model) });
+  }
   if (path.startsWith("/datasources") || /^\/projects\/[^/]+\/datasources/.test(path)) {
     const handled = await dataRoute(req, res, path);
     if (handled !== false) return handled;

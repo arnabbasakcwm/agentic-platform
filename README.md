@@ -362,6 +362,15 @@ Every query is checked by the platform before Google sees it:
 
 Check the connection from a terminal with `uv run python scripts/bigquery_check.py`.
 
+## Models that can't call tools
+
+Some Bedrock models (Gemma 3, for example) answer in prose when asked to call a tool. The
+first time anyone picks a Bedrock model, the platform checks with one tiny test call, a
+fraction of a cent, counted on the Usage page as "Model checks", and remembers the result
+for 30 days. Models that can't call tools are tagged **No tool calling** in the model menus:
+- **Agents with tools, and supervisors:** can't use them; the menu says why.
+- **Agents without tools:** can; they give their answer as checked JSON.
+
 ## Deploying to AWS (AgentCore)
 
 Each project deploys as its own Amazon Bedrock AgentCore runtime. The platform builds a

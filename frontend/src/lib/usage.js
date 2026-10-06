@@ -41,6 +41,7 @@ const KINDS = {
   embedding_index: "Indexing files",
   embedding_query: "Knowledge searches",
   bigquery_query: "Data queries (BigQuery)",
+  model_check: "Model checks",
 };
 
 export function kindLabel(kind) {

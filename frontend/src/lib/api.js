@@ -205,6 +205,9 @@ export const api = {
       method: "PUT",
       body: { provider, model },
     }),
+  // Whether a model can call tools (checked once, server-side, the first time).
+  checkModel: (provider, model) =>
+    request("/models/check", { method: "POST", body: { provider, model } }),
   // ---- data sources (BigQuery)
   dataSources: () => request("/datasources"),
   createDataSource: (body) => request("/datasources", { method: "POST", body }),

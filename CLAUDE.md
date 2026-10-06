@@ -145,6 +145,7 @@ backend/
     agentcore.py            # AWS wrapper: S3, IAM role, AgentCore runtime create/update/invoke
     bedrock_catalog.py      # Live, cached list of the account's Bedrock chat models / inference profiles
     datasources.py          # BigQuery data sources: federation sign-in, SQL guardrails, sql_schema/sql_query context
+    capabilities.py         # Measures whether a model can call tools (one-time probe per model)
     app.py                  # FastAPI serving layer
   tests/                    # Offline, fully mocked suite
   scripts/                  # Real-API smoke checks
@@ -535,6 +536,37 @@ whenever a change departs from or extends the contract above — don't silently 
     as it. Mitigation now: a service account belongs to one tenant (409 if already
     claimed). Before multi-tenant use, move to a per-tenant AWS role (or a per-tenant
     pool) so Google can tell tenants apart.
+
+### 2026-10-06 — Whether a model can call tools is measured, and enforced
+- **Why:** an agent on Bedrock Gemma 3 12B failed after 3 attempts (~7,900 tokens) with a
+  bare `NoneType` error. Gemma answers in prose when asked to call a tool, and the
+  platform gets *every* agent's final answer, and a supervisor's routing, through tool
+  calling. AWS's model card claims Gemma supports tool calling, so documentation can't be
+  the source of truth.
+- **Rule:**
+  - **Measured:** `capabilities.probe_tool_calling` asks a model for one tool call
+    (~50–600 tokens). The verdict is stored platform-wide (`model_capabilities`) and
+    re-checked after 30 days. It's counted as `model_check` usage for the user who
+    triggered it.
+  - **Which models:** only Bedrock models are checked. Gemini, OpenAI, Anthropic, Groq and
+    Moonshot are known to call tools. An inconclusive check (throttling, no access) stores
+    nothing. A run that fails with `ModelCannotCallTools` records `False`.
+  - **When:** the console checks a model when it's chosen (`POST /models/check`).
+    `/providers` reports `tool_calling: true | false | null`.
+  - **Enforced server-side:** a model that can't call tools may not be given tools or
+    supervise. This is checked by `PUT /projects/{id}/agents`, compile, and the planner's
+    `_semantic_check`. The server marks such models in the planner's options (`"tools":
+    false`) and never trusts a caller's claim.
+  - **JSON answers:** tool-less agents on such a model answer by JSON, which is validated
+    against `AgentOutput` with the error fed back on retry. That's one call, never a wasted
+    tool attempt, and structured output (principle 3) still holds. Deploys carry these
+    models in `models.json`.
+  - **Clear failure:** a missing structured answer raises `ModelCannotCallToolsError`
+    ("can't call tools…") instead of an `AttributeError`.
+  - **Console:** such models carry a "No tool calling" tag and are disabled, with the
+    reason, for agents with tools and for routers. An agent left in that state shows an
+    inline warning and blocks Save. Tool chips can be switched off but not on. In the
+    new-project settings, choosing one disables the tools and explains why.
 
 ## Working style — verify-and-retry, always
 

@@ -1,3 +1,10 @@
+import {
+  cannotCallTools,
+  modelName,
+  toolsBlocked,
+  withVerdicts,
+} from "../../lib/models.js";
+import { useToolCheck } from "../../lib/useToolCheck.js";
 import { useMemo, useState } from "react";
 import { Icon } from "../../components/icons.jsx";
 import { ModelPicker } from "../../components/ModelPicker.jsx";
@@ -56,9 +63,18 @@ function AgentSettings({ project, tools, providers, onSaved, savedVersion }) {
   const original = useMemo(() => draftFrom(plan), [plan]);
   const [draft, setDraft] = useState(original);
   const save = useAction();
+  const toolCheck = useToolCheck();
   const options = useMemo(
-    () => modelOptions(providers, plan),
-    [providers, plan],
+    () => withVerdicts(modelOptions(providers, plan), toolCheck.verdicts),
+    [providers, plan, toolCheck.verdicts],
+  );
+  const optionFor = (key) => options.find((o) => o.key === key);
+  // Agents whose model can't call tools but whose job needs it: they can't be saved.
+  const blocked = plan.agents.filter((a) =>
+    toolsBlocked(optionFor(draft[a.id].model), {
+      tools: draft[a.id].tools,
+      isRouter: a.id === plan.supervisor_id,
+    }),
   );
   const hasData = (project.data_sources?.sources ?? 0) > 0;
   const hasKnowledge = (project.knowledge?.documents ?? 0) > 0;
@@ -96,6 +112,11 @@ function AgentSettings({ project, tools, providers, onSaved, savedVersion }) {
     setDraft((d) => ({ ...d, [id]: { ...d[id], ...patch } }));
   }
 
+  function chooseModel(id, key) {
+    setAgent(id, { model: key });
+    toolCheck.check(optionFor(key));
+  }
+
   function toggleTool(id, name) {
     const current = new Set(draft[id].tools);
     current.has(name) ? current.delete(name) : current.add(name);
@@ -107,6 +128,7 @@ function AgentSettings({ project, tools, providers, onSaved, savedVersion }) {
 
   function applyToAll(key) {
     if (!key) return;
+    toolCheck.check(optionFor(key));
     setDraft((d) =>
       Object.fromEntries(
         Object.entries(d).map(([id, v]) => [id, { ...v, model: key }]),
@@ -151,6 +173,9 @@ function AgentSettings({ project, tools, providers, onSaved, savedVersion }) {
         {plan.agents.map((agent) => {
           const d = draft[agent.id];
           const isRouter = agent.id === plan.supervisor_id;
+          const current = optionFor(d.model);
+          const noTools = cannotCallTools(current);
+          const job = { tools: d.tools, isRouter };
           return (
             <li key={agent.id} className="agentset__item">
               <div className="agentset__who">
@@ -163,11 +188,35 @@ function AgentSettings({ project, tools, providers, onSaved, savedVersion }) {
                   label={`Model for ${agent.id}`}
                   value={d.model}
                   options={options}
-                  onChange={(model) => setAgent(agent.id, { model })}
-                  isDisabled={(o) => o.available === false && o.key !== d.model}
+                  onChange={(model) => chooseModel(agent.id, model)}
+                  isDisabled={(o) =>
+                    o.key !== d.model &&
+                    (o.available === false || toolsBlocked(o, job))
+                  }
+                  disabledReason={(o) =>
+                    toolsBlocked(o, job)
+                      ? isRouter
+                        ? "Can't call tools, so it can't route the team"
+                        : "Can't call tools, and this agent has tools"
+                      : null
+                  }
                   disabled={save.busy}
                 />
               </div>
+              {toolCheck.checking === d.model && (
+                <span className="muted agentset__note" role="status">
+                  Checking whether {modelName(current ?? { model: d.model })}{" "}
+                  can call tools…
+                </span>
+              )}
+              {toolsBlocked(current, job) && (
+                <p className="agentset__warn" role="alert">
+                  <strong>{modelName(current)}</strong> can&apos;t call tools,{" "}
+                  {isRouter
+                    ? "so it can't route the team. Choose a model that can call tools."
+                    : "so it can't use this agent's tools. Remove its tools, or choose a model that can call tools."}
+                </p>
+              )}
               {isRouter ? (
                 <span className="muted agentset__note">
                   The router only chooses who acts next; it uses no tools.
@@ -193,13 +242,16 @@ function AgentSettings({ project, tools, providers, onSaved, savedVersion }) {
                           .join(" ")}
                         aria-pressed={on}
                         title={
-                          tool.description +
-                          (tool.side_effect
-                            ? " — sends data to a third party"
-                            : "")
+                          !on && noTools
+                            ? `${modelName(current)} can't call tools`
+                            : tool.description +
+                              (tool.side_effect
+                                ? " — sends data to a third party"
+                                : "")
                         }
                         onClick={() => toggleTool(agent.id, tool.name)}
-                        disabled={save.busy}
+                        // A tool can always be switched off; switched on only if the model can call tools.
+                        disabled={save.busy || (!on && noTools)}
                       >
                         {on && <Icon name="check" size={12} />}
                         {tool.name}
@@ -240,7 +292,11 @@ function AgentSettings({ project, tools, providers, onSaved, savedVersion }) {
             variant="primary"
             onClick={submit}
             loading={save.busy}
-            disabled={changed.length === 0}
+            disabled={
+              changed.length === 0 ||
+              blocked.length > 0 ||
+              toolCheck.checking !== null
+            }
           >
             Save changes
           </Button>

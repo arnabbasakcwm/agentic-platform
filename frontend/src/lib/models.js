@@ -100,3 +100,33 @@ export function filterSections(sections, query) {
     }))
     .filter((s) => s.options.length > 0);
 }
+
+// ---- tool calling. Every agent with tools, and a supervisor (it routes by tool
+// calling), needs a model that can call tools; the server measures which can (`tool_calling`:
+// true, false, or null when not checked yet).
+export function cannotCallTools(option) {
+  return option?.tool_calling === false;
+}
+
+/** Whether an agent's job needs tool calling: it has tools, or it routes the team. */
+export function needsToolCalling({ tools = [], isRouter = false }) {
+  return tools.length > 0 || isRouter;
+}
+
+/** A model the agent can't use: it can't call tools and the agent needs it to. */
+export function toolsBlocked(option, job) {
+  return cannotCallTools(option) && needsToolCalling(job);
+}
+
+/** Only Bedrock models vary; they're checked once (server-side) when first chosen. */
+export function needsCheck(option) {
+  return option?.provider === "bedrock" && option.tool_calling == null;
+}
+
+/** Options with verdicts learned on this page applied. */
+export function withVerdicts(options, verdicts) {
+  return options.map((o) => {
+    const verdict = verdicts[modelKey(o)];
+    return verdict === undefined ? o : { ...o, tool_calling: verdict };
+  });
+}

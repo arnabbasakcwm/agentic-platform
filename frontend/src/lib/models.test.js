@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  cannotCallTools,
   filterSections,
   modelKey,
   modelSections,
   pickerLabel,
+  needsCheck,
   scopeLabel,
+  toolsBlocked,
+  withVerdicts,
 } from "./models.js";
 
 const OPTIONS = [
@@ -103,5 +107,46 @@ describe("labels", () => {
     );
     expect(scopeLabel(OPTIONS[2])).toBe("India");
     expect(scopeLabel(OPTIONS[3])).toBeNull();
+  });
+});
+
+describe("tool calling", () => {
+  const gemma = {
+    provider: "bedrock",
+    model: "google.gemma-3-12b-it",
+    tool_calling: false,
+  };
+  const haiku = {
+    provider: "bedrock",
+    model: "in.anthropic.claude-haiku-4-5",
+    tool_calling: true,
+  };
+  const fresh = { provider: "bedrock", model: "new.model", tool_calling: null };
+  const gemini = {
+    provider: "google_genai",
+    model: "gemini-3.1-pro-preview",
+    tool_calling: true,
+  };
+
+  it("blocks a model that can't call tools only where the agent needs it", () => {
+    expect(toolsBlocked(gemma, { tools: ["web_search"] })).toBe(true);
+    expect(toolsBlocked(gemma, { tools: [], isRouter: true })).toBe(true);
+    expect(toolsBlocked(gemma, { tools: [] })).toBe(false);
+    expect(toolsBlocked(haiku, { tools: ["web_search"] })).toBe(false);
+    expect(toolsBlocked(fresh, { tools: ["web_search"] })).toBe(false); // not known yet
+  });
+
+  it("checks only Bedrock models nobody has checked", () => {
+    expect(needsCheck(fresh)).toBe(true);
+    expect(needsCheck(gemma)).toBe(false);
+    expect(needsCheck(gemini)).toBe(false);
+  });
+
+  it("applies verdicts learned on the page", () => {
+    const [updated, same] = withVerdicts([fresh, haiku], {
+      "bedrock/new.model": false,
+    });
+    expect(cannotCallTools(updated)).toBe(true);
+    expect(same).toBe(haiku);
   });
 });

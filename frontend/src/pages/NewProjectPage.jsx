@@ -1,4 +1,5 @@
-import { pickerLabel } from "../lib/models.js";
+import { cannotCallTools, pickerLabel, withVerdicts } from "../lib/models.js";
+import { useToolCheck } from "../lib/useToolCheck.js";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Icon } from "../components/icons.jsx";
 import { ModelPicker } from "../components/ModelPicker.jsx";
@@ -283,6 +284,10 @@ function SettingsTray({ settings, onChange, tools, providers, disabled }) {
   );
   const defaultModel = providers.find((p) => p.default);
   const auto = settings.agentCount === null;
+  const chosen = providers.find(
+    (p) => `${p.provider}/${p.model}` === settings.model,
+  );
+  const noTools = cannotCallTools(chosen);
 
   function toggleTool(name) {
     const next = new Set(settings.tools);
@@ -380,7 +385,7 @@ function SettingsTray({ settings, onChange, tools, providers, disabled }) {
                     (tool.side_effect ? " — sends data to a third party" : "")
                   }
                   onClick={() => toggleTool(tool.name)}
-                  disabled={disabled}
+                  disabled={disabled || noTools}
                 >
                   {on && <Icon name="check" size={12} />}
                   {tool.name}
@@ -388,6 +393,13 @@ function SettingsTray({ settings, onChange, tools, providers, disabled }) {
               );
             })}
           </div>
+          {noTools && (
+            <span className="tray__hint tray__hint--warn" role="status">
+              {chosen.name ?? chosen.model} can&apos;t call tools, so its agents
+              get no tools (including knowledge search and data queries). Choose
+              another model to use tools.
+            </span>
+          )}
           <span className="tray__hint">
             {externalOn.length > 0
               ? `External access on: agents may send task data to ${externalOn.map((t) => t.name).join(", ")}.`
@@ -565,6 +577,8 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
   const [sources, setSources] = useState([]);
   // agentCount null = the planner decides. tools null = follow the platform default.
   const [settings, setSettings] = useState(readSettings);
+  const toolCheck = useToolCheck();
+  const modelList = withVerdicts(providers, toolCheck.verdicts);
   const textareaRef = useRef(null);
   const endRef = useRef(null);
 
@@ -593,10 +607,15 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
       saveSettings(next);
       return next;
     });
+    if (patch.model) {
+      toolCheck.check(
+        modelList.find((p) => `${p.provider}/${p.model}` === patch.model),
+      );
+    }
   }
 
   async function plan(request, replyId) {
-    const chosen = providers.find(
+    const chosen = modelList.find(
       (p) => `${p.provider}/${p.model}` === request.model,
     );
     if (request.model && !chosen) {
@@ -621,7 +640,8 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
       const project = await api.createProject({
         brief: request.brief,
         agentCount: request.agentCount,
-        availableTools: request.tools,
+        // A model that can't call tools gets no tools (the server enforces this too).
+        availableTools: cannotCallTools(chosen) ? [] : request.tools,
         availableLlms: chosen
           ? [{ provider: chosen.provider, model: chosen.model }]
           : null,
@@ -726,7 +746,7 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
               key={message.id}
               message={message}
               busy={busy}
-              providers={providers}
+              providers={modelList}
               onRetry={() => retry(message)}
             />
           ))
@@ -751,7 +771,7 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
               settings={effectiveSettings}
               onChange={updateSettings}
               tools={tools}
-              providers={providers}
+              providers={modelList}
               disabled={busy}
             />
           )}
@@ -826,7 +846,7 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
                 aria-controls="composer-settings"
               >
                 <Icon name="sliders" size={14} />
-                {describeSettings(effectiveSettings, tools, providers)}
+                {describeSettings(effectiveSettings, tools, modelList)}
               </button>
               <button
                 type="submit"

@@ -4509,3 +4509,15 @@ code {
   font-size: var(--text-xs);
   color: var(--text-muted);
 }
+
+/* Brief editor: an agent's model can't do its job */
+.agentset__warn {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 6px 10px;
+  font-size: var(--text-xs);
+  color: var(--warn);
+  background: var(--warn-soft);
+  border: 1px solid var(--warn-border);
+  border-radius: var(--radius-sm);
+}
