@@ -3586,6 +3586,83 @@ code {
   width: fit-content;
 }
 
+/* Add files: centred above the table, with the default model for new uploads. */
+.kadd {
+  margin-bottom: 16px;
+  padding: 20px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+
+.kadd__inner {
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+.kadd__note {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.kdefault {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.kdefault__field {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.kdefault__label {
+  font-weight: 500;
+  color: var(--text);
+}
+
+.kdefault__field select {
+  width: auto;
+  max-width: 100%;
+}
+
+.kdefault__hint {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  text-align: center;
+}
+
+/* A file's embedding model, with the inline re-index confirmation. */
+.kmodel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.kmodel select {
+  width: auto;
+  max-width: 260px;
+}
+
+.kmodel__confirm {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.kmodel__prompt {
+  flex-basis: 100%;
+  font-size: var(--text-xs);
+  color: var(--text);
+}
+
 .kcol-actions {
   width: 1%;
   white-space: nowrap;

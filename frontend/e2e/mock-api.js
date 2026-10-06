@@ -255,7 +255,8 @@ function reset() {
 }
 
 // ---- knowledge library: files belong to the user and are attached to any number of
-// projects. Uploads go from processing to ready after INDEX_MS.
+// projects. Uploads go from processing to ready after INDEX_MS. `embedding` is the
+// default for new uploads; each file keeps its own model.
 const INDEX_MS = 1200;
 const knowledge = { embedding: null, documents: [] };
 const LIMITS = {
@@ -303,6 +304,7 @@ function libraryBody() {
     };
   };
   return {
+    default_embedding: knowledge.embedding,
     embedding: knowledge.embedding,
     embedding_options: EMBEDDING_OPTIONS,
     documents: newestFirst(knowledge.documents).map(publicDoc),
@@ -326,6 +328,7 @@ function knowledgeBody(projectId = PROJECT_ID) {
     };
   }
   return {
+    default_embedding: knowledge.embedding,
     embedding: knowledge.embedding,
     embedding_options: EMBEDDING_OPTIONS,
     documents: newestFirst(attached).map(publicDoc),
@@ -357,6 +360,7 @@ async function upload(req, res, projectId = null) {
     status: filename.startsWith("scan") ? "failed" : "processing",
     error: filename.startsWith("scan") ? "no text could be extracted from this PDF; scanned PDFs need OCR, which isn't supported" : null,
     chunk_count: 0,
+    embedding: knowledge.embedding,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
     added: Date.now(),
@@ -507,6 +511,18 @@ const server = http.createServer(async (req, res) => {
     knowledge.documents = knowledge.documents.filter((d) => d.id !== libDoc[1]);
     return send(res, 200, { deleted: libDoc[1] });
   }
+  if (path === "/knowledge/embedding" && req.method === "PUT") {
+    knowledge.embedding = await readBody(req);
+    return send(res, 200, libraryBody());
+  }
+  const docEmbedding = path.match(/^\/knowledge\/documents\/([^/]+)\/embedding$/);
+  if (docEmbedding && req.method === "PUT") {
+    const body = await readBody(req);
+    const d = knowledge.documents.find((x) => x.id === docEmbedding[1]);
+    if (!d) return send(res, 404, { error_type: "DocumentNotFound", message: "document not found", details: null });
+    Object.assign(d, { embedding: body, status: "processing", added: Date.now() });
+    return send(res, 202, { document: publicDoc(d) });
+  }
   const attachments = path.match(/^\/knowledge\/documents\/([^/]+)\/projects$/);
   if (attachments && req.method === "PUT") {
     const body = await readBody(req);
@@ -537,6 +553,7 @@ const server = http.createServer(async (req, res) => {
         source: "page 2",
         text: `Matched "${body.query}": the nightly hotel cap in Delhi is INR 9,000.\nMeals are reimbursed up to INR 1,500 a day.`,
         score: 0.82,
+        model: d.embedding?.model ?? null,
       })),
     });
   }

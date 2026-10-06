@@ -355,17 +355,72 @@ def test_library_file_size_count_and_name_limits(monkeypatch):
     assert r.status_code == 409 and "attach" in r.json()["message"]
 
 
-def test_changing_the_library_embedding_model_reembeds_everything(monkeypatch):
+GEMINI = {"provider": "google_genai", "model": "gemini-embedding-001"}
+OPENAI = {"provider": "openai", "model": "text-embedding-3-small"}
+
+
+def test_the_library_default_applies_to_new_uploads_only(monkeypatch):
     c, pid = _setup(monkeypatch)
     monkeypatch.setattr(app_module, "embedding_available", lambda provider: True)
     _library_upload(c, ("policy.md", GUIDE, "text/markdown"))
-    r = c.put("/knowledge/embedding", json={"provider": "openai", "model": "text-embedding-3-small"})
-    assert r.status_code == 202
+    r = c.put("/knowledge/embedding", json=OPENAI)
+    assert r.status_code == 200
     body = c.get("/knowledge").json()
-    assert body["embedding"]["provider"] == "openai"
-    assert body["documents"][0]["status"] == "ready"
-    assert c.get(f"/projects/{pid}").json()["knowledge"]["embedding"]["provider"] == "openai"
+    assert body["default_embedding"] == OPENAI
+    # The existing file keeps the model it was indexed with, and isn't re-indexed.
+    assert body["documents"][0]["embedding"] == GEMINI and body["documents"][0]["status"] == "ready"
+    _library_upload(c, ("later.md", b"# Visa\nvisa rules", "text/markdown"))
+    models = {d["filename"]: d["embedding"] for d in c.get("/knowledge").json()["documents"]}
+    assert models == {"policy.md": GEMINI, "later.md": OPENAI}
     assert c.put("/knowledge/embedding", json={"provider": "openai", "model": "gpt-4o"}).status_code == 422
+
+
+def test_files_from_before_per_file_models_keep_their_model_when_the_default_changes(monkeypatch):
+    c, pid = _setup(monkeypatch)
+    monkeypatch.setattr(app_module, "embedding_available", lambda provider: True)
+    _library_upload(c, ("policy.md", GUIDE, "text/markdown"))
+    user_id = c.get("/auth/me").json()["id"]
+    doc = app_module._knowledge.list_documents(user_id)[0]
+    app_module._knowledge.update_document(user_id, doc.id, embedding=None)  # an old record
+    c.put("/knowledge/embedding", json=OPENAI)
+    assert app_module._knowledge.get_document(user_id, doc.id).embedding.model == GEMINI["model"]
+
+
+def test_changing_one_files_model_reindexes_only_that_file(monkeypatch):
+    c, pid = _setup(monkeypatch)
+    monkeypatch.setattr(app_module, "embedding_available", lambda provider: True)
+    _upload(c, pid, ("policy.md", GUIDE, "text/markdown"), ("visa.md", b"# Visa\nvisa rules visa", "text/markdown"))
+    docs = {d["filename"]: d for d in c.get("/knowledge").json()["documents"]}
+    r = c.put(f"/knowledge/documents/{docs['visa.md']['id']}/embedding", json=OPENAI)
+    assert r.status_code == 202
+    after = {d["filename"]: d for d in c.get("/knowledge").json()["documents"]}
+    assert after["visa.md"]["embedding"] == OPENAI and after["visa.md"]["status"] == "ready"
+    assert after["policy.md"]["embedding"] == GEMINI
+    # Search embeds the question once per model and finds passages from both files.
+    results = c.post(f"/projects/{pid}/knowledge/search", json={"query": "visa hotel", "k": 5}).json()["results"]
+    assert {r["filename"] for r in results} == {"policy.md", "visa.md"}
+    assert {r["model"] for r in results} == {GEMINI["model"], OPENAI["model"]}
+    from datetime import datetime, timezone
+
+    usage = app_module._usage.list(c.get("/auth/me").json()["id"], datetime(2000, 1, 1, tzinfo=timezone.utc))
+    query_models = sorted(u.model for u in usage if u.kind == "embedding_query")
+    assert query_models == sorted([GEMINI["model"], OPENAI["model"]])
+    # The same model again changes nothing.
+    assert c.put(f"/knowledge/documents/{docs['visa.md']['id']}/embedding", json=OPENAI).status_code == 200
+
+
+def test_changing_a_files_model_is_checked(monkeypatch):
+    c, pid = _setup(monkeypatch)
+    _library_upload(c, ("policy.md", GUIDE, "text/markdown"))
+    doc_id = c.get("/knowledge").json()["documents"][0]["id"]
+    bad = c.put(f"/knowledge/documents/{doc_id}/embedding", json={"provider": "openai", "model": "gpt-4o"})
+    assert bad.status_code == 422
+    assert _other_user().put(f"/knowledge/documents/{doc_id}/embedding", json=OPENAI).status_code == 404
+    user_id = c.get("/auth/me").json()["id"]
+    app_module._knowledge.update_document(user_id, doc_id, status="processing")
+    monkeypatch.setattr(app_module, "embedding_available", lambda provider: True)
+    busy = c.put(f"/knowledge/documents/{doc_id}/embedding", json=OPENAI)
+    assert busy.status_code == 409 and busy.json()["error_type"] == "KnowledgeBusy"
 
 
 def test_deleting_a_project_keeps_its_files_in_the_library(monkeypatch):

@@ -125,3 +125,29 @@ export function knowledgeTotals(documents) {
   }
   return totals;
 }
+
+// ---- embedding models. A file is indexed with its own model; the library's default is
+// what new uploads use. Options are identified by provider and model, since one provider
+// can offer several (Amazon Bedrock has Titan and Cohere).
+export function embeddingKey(option) {
+  return option ? `${option.provider}/${option.model}` : "";
+}
+
+export function embeddingLabel(option) {
+  if (!option) return "";
+  return `${providerName(option.provider)} · ${option.model}`;
+}
+
+/** The option for a "provider/model" key, or null. */
+export function findEmbedding(options, key) {
+  return options.find((o) => embeddingKey(o) === key) ?? null;
+}
+
+/**
+ * Whether a file's model can be changed now: not while it is being indexed, and not for a
+ * file that has no stored passages to re-index (one that failed before any were taken).
+ */
+export function canChangeEmbedding(doc) {
+  if (doc.status === "queued" || doc.status === "processing") return false;
+  return doc.chunk_count > 0;
+}

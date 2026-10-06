@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { UploadArea } from "../components/KnowledgeUpload.jsx";
 import { Icon } from "../components/icons.jsx";
 import {
@@ -7,7 +14,6 @@ import {
   DeleteButton,
   Empty,
   ErrorCallout,
-  Field,
   PageHeader,
   Panel,
   Pill,
@@ -19,10 +25,14 @@ import { fullDate, projectTitle, timeAgo } from "../lib/format.js";
 import {
   NO_PROJECT,
   batches,
+  canChangeEmbedding,
   checkFiles,
   documentBadge,
+  embeddingKey,
+  embeddingLabel,
   extensionOf,
   filterDocuments,
+  findEmbedding,
   formatBytes,
   isIndexing,
   knowledgeTotals,
@@ -32,27 +42,11 @@ import { paths } from "../lib/router.js";
 import { useAction } from "../lib/useAction.js";
 
 const POLL_MS = 2000;
-const ATTACH_KEY = "agentic-platform.knowledge-attach-to";
-
-function readSaved() {
-  try {
-    return localStorage.getItem(ATTACH_KEY) ?? "";
-  } catch {
-    return "";
-  }
-}
-
-function save(value) {
-  try {
-    localStorage.setItem(ATTACH_KEY, value);
-  } catch {
-    // Not remembered across visits; still works for this one.
-  }
-}
-
 function Stat({ label, value, tone }) {
   return (
-    <div className={["kstat", tone && `kstat--${tone}`].filter(Boolean).join(" ")}>
+    <div
+      className={["kstat", tone && `kstat--${tone}`].filter(Boolean).join(" ")}
+    >
       <span className="kstat__value mono">{value}</span>
       <span className="kstat__label">{label}</span>
     </div>
@@ -66,13 +60,16 @@ function ProjectAttachments({ doc, projects, projectsById, onChange }) {
   const [pending, setPending] = useState(null);
   const panelId = useId();
   const wrapRef = useRef(null);
-  const attached = doc.project_ids.map((id) => projectsById[id]).filter(Boolean);
+  const attached = doc.project_ids
+    .map((id) => projectsById[id])
+    .filter(Boolean);
 
   // Close the checklist on Escape or a click elsewhere.
   useEffect(() => {
     if (!open) return undefined;
     const onKey = (e) => e.key === "Escape" && setOpen(false);
-    const onClick = (e) => wrapRef.current && !wrapRef.current.contains(e.target) && setOpen(false);
+    const onClick = (e) =>
+      wrapRef.current && !wrapRef.current.contains(e.target) && setOpen(false);
     document.addEventListener("keydown", onKey);
     document.addEventListener("mousedown", onClick);
     return () => {
@@ -83,7 +80,9 @@ function ProjectAttachments({ doc, projects, projectsById, onChange }) {
 
   async function toggle(projectId, checked) {
     const current = pending ?? doc.project_ids;
-    const next = checked ? [...current, projectId] : current.filter((id) => id !== projectId);
+    const next = checked
+      ? [...current, projectId]
+      : current.filter((id) => id !== projectId);
     setPending(next);
     await onChange(doc, next);
     setPending(null);
@@ -97,11 +96,17 @@ function ProjectAttachments({ doc, projects, projectsById, onChange }) {
         {attached.length === 0 && <span className="muted">Library only</span>}
         {attached.map((p) => (
           <span key={p.project_id} className="kattach__item">
-            <a className="kproject" href={paths.project(p.project_id, "knowledge")}>
+            <a
+              className="kproject"
+              href={paths.project(p.project_id, "knowledge")}
+            >
               {projectTitle(p.brief, 60)}
             </a>
             {p.ready > 0 && p.used_by.length === 0 && (
-              <a href={paths.project(p.project_id, "knowledge")} className="kproject__hint">
+              <a
+                href={paths.project(p.project_id, "knowledge")}
+                className="kproject__hint"
+              >
                 <Pill tone="warn">Agents can&apos;t use yet</Pill>
               </a>
             )}
@@ -122,7 +127,11 @@ function ProjectAttachments({ doc, projects, projectsById, onChange }) {
         </button>
       )}
       {open && (
-        <fieldset id={panelId} className="kattach__panel" disabled={pending !== null}>
+        <fieldset
+          id={panelId}
+          className="kattach__panel"
+          disabled={pending !== null}
+        >
           <legend className="kattach__legend">Attach {doc.filename} to</legend>
           {projects.map((p) => (
             <label key={p.project_id} className="kattach__option">
@@ -140,7 +149,93 @@ function ProjectAttachments({ doc, projects, projectsById, onChange }) {
   );
 }
 
-function FileRow({ doc, projects, projectsById, onDelete, onAttachmentsChange }) {
+/**
+ * A file's embedding model. Picking another one asks first, in the row, because
+ * re-indexing sends all of the file's text to that model again.
+ */
+function FileEmbedding({ doc, options, onChange }) {
+  const [choice, setChoice] = useState(null);
+  const change = useAction();
+  const current = embeddingKey(doc.embedding);
+  const chosen = choice ? findEmbedding(options, choice) : null;
+  const locked = !canChangeEmbedding(doc);
+
+  async function confirm() {
+    const done = await change.run(() => onChange(doc, chosen));
+    if (done) setChoice(null);
+  }
+
+  if (!doc.embedding) return <span className="muted">—</span>;
+  return (
+    <div className="kmodel">
+      <select
+        aria-label={`Embedding model for ${doc.filename}`}
+        value={choice ?? current}
+        disabled={locked || change.busy}
+        title={
+          locked && doc.status === "failed"
+            ? "Nothing to re-index: upload the file again"
+            : embeddingLabel(doc.embedding)
+        }
+        onChange={(e) =>
+          setChoice(e.target.value === current ? null : e.target.value)
+        }
+      >
+        {!findEmbedding(options, current) && (
+          <option value={current}>{embeddingLabel(doc.embedding)}</option>
+        )}
+        {options.map((o) => (
+          <option
+            key={embeddingKey(o)}
+            value={embeddingKey(o)}
+            disabled={!o.available && embeddingKey(o) !== current}
+          >
+            {embeddingLabel(o)}
+            {o.available ? "" : " (no API key)"}
+          </option>
+        ))}
+      </select>
+      {chosen && (
+        <span
+          className="row kmodel__confirm"
+          role="group"
+          aria-label={`Confirm re-indexing ${doc.filename}`}
+        >
+          <span className="kmodel__prompt">
+            Re-index with {providerName(chosen.provider)}? Its text is embedded
+            again.
+          </span>
+          <Button
+            size="sm"
+            variant="primary"
+            onClick={confirm}
+            loading={change.busy}
+          >
+            Re-index
+          </Button>
+          <Button
+            size="sm"
+            onClick={() => setChoice(null)}
+            disabled={change.busy}
+          >
+            Cancel
+          </Button>
+        </span>
+      )}
+      <ErrorCallout error={change.error} />
+    </div>
+  );
+}
+
+function FileRow({
+  doc,
+  projects,
+  projectsById,
+  embeddingOptions,
+  onDelete,
+  onAttachmentsChange,
+  onEmbeddingChange,
+}) {
   const { badge, label } = documentBadge(doc.status);
   return (
     <tr>
@@ -152,10 +247,12 @@ function FileRow({ doc, projects, projectsById, onDelete, onAttachmentsChange })
               {doc.filename}
             </span>
             <span className="table__sub" title={fullDate(doc.created_at)}>
-              {extensionOf(doc.filename).slice(1).toUpperCase()} · {formatBytes(doc.size_bytes)} · added{" "}
-              {timeAgo(doc.created_at)}
+              {extensionOf(doc.filename).slice(1).toUpperCase()} ·{" "}
+              {formatBytes(doc.size_bytes)} · added {timeAgo(doc.created_at)}
             </span>
-            {doc.status === "failed" && doc.error && <span className="doclist__error">{doc.error}</span>}
+            {doc.status === "failed" && doc.error && (
+              <span className="doclist__error">{doc.error}</span>
+            )}
           </div>
         </div>
       </td>
@@ -167,14 +264,27 @@ function FileRow({ doc, projects, projectsById, onDelete, onAttachmentsChange })
           onChange={onAttachmentsChange}
         />
       </td>
-      <td className="table__num">{doc.status === "ready" ? doc.chunk_count : "—"}</td>
+      <td>
+        <FileEmbedding
+          doc={doc}
+          options={embeddingOptions}
+          onChange={onEmbeddingChange}
+        />
+      </td>
+      <td className="table__num">
+        {doc.status === "ready" ? doc.chunk_count : "—"}
+      </td>
       <td>
         <StatusBadge status={badge} label={label} />
       </td>
       <td className="kcol-actions">
         <DeleteButton
           name={doc.filename}
-          prompt={doc.project_ids.length ? "Delete from library and all projects?" : "Delete from library?"}
+          prompt={
+            doc.project_ids.length
+              ? "Delete from library and all projects?"
+              : "Delete from library?"
+          }
           onDelete={() => onDelete(doc)}
         />
       </td>
@@ -182,20 +292,62 @@ function FileRow({ doc, projects, projectsById, onDelete, onAttachmentsChange })
   );
 }
 
-function AddFilesPanel({ library, onUploaded }) {
-  const { projects, documents, limits, embedding, embedding_options: options } = library;
-  const [attachTo, setAttachTo] = useState(() => {
-    const saved = readSaved();
-    return projects.some((p) => p.project_id === saved) ? saved : "";
-  });
+/** The model new uploads are indexed with. Changing it re-indexes nothing. */
+function DefaultEmbedding({ library, onChanged }) {
+  const change = useAction();
+  const options = library.embedding_options;
+  const current = library.default_embedding;
+
+  async function choose(key) {
+    const option = findEmbedding(options, key);
+    if (!option) return;
+    const body = await change.run(() => api.setLibraryEmbedding(option));
+    if (body) onChanged(body);
+  }
+
+  return (
+    <div className="kdefault">
+      <label className="kdefault__field">
+        <span className="kdefault__label">New files use</span>
+        <select
+          value={embeddingKey(current)}
+          onChange={(e) => choose(e.target.value)}
+          disabled={change.busy}
+        >
+          {!current && <option value="">Chosen with your first file</option>}
+          {options.map((o) => (
+            <option
+              key={embeddingKey(o)}
+              value={embeddingKey(o)}
+              disabled={!o.available}
+            >
+              {embeddingLabel(o)}
+              {o.dimensions ? ` · ${o.dimensions}-dim` : ""}
+              {o.available ? "" : " (no API key)"}
+            </option>
+          ))}
+        </select>
+      </label>
+      <span className="kdefault__hint">
+        Files already added keep their model; change one from its row.
+      </span>
+      <ErrorCallout error={change.error} />
+    </div>
+  );
+}
+
+/** The centred upload area. Files go to the library; attach them to projects from their rows. */
+function AddFiles({ library, onUploaded, onChanged }) {
+  const {
+    documents,
+    limits,
+    default_embedding: current,
+    embedding_options: options,
+  } = library;
   const [problems, setProblems] = useState([]);
   const upload = useAction();
-  const provider = embedding?.provider ?? options.find((o) => o.available)?.provider;
-
-  function choose(value) {
-    setAttachTo(value);
-    save(value);
-  }
+  const provider =
+    current?.provider ?? options.find((o) => o.available)?.provider;
 
   async function addFiles(files) {
     const { accepted, problems: refused } = checkFiles(
@@ -206,34 +358,28 @@ function AddFilesPanel({ library, onUploaded }) {
     setProblems(refused);
     if (accepted.length === 0) return;
     const done = await upload.run(async () => {
-      for (const batch of batches(accepted, limits.max_files_per_upload)) {
-        if (attachTo) await api.uploadDocuments(attachTo, batch);
-        else await api.uploadToLibrary(batch);
-      }
+      for (const batch of batches(accepted, limits.max_files_per_upload))
+        await api.uploadToLibrary(batch);
       return true;
     });
     if (done) onUploaded();
   }
 
   return (
-    <Panel title="Add files">
-      <div className="stack">
-        <Field label="Attach to" hint="Optional. You can attach files to projects any time from the table.">
-          <select value={attachTo} onChange={(e) => choose(e.target.value)} disabled={upload.busy}>
-            <option value="">No project — library only</option>
-            {projects.map((p) => (
-              <option key={p.project_id} value={p.project_id}>
-                {projectTitle(p.brief, 60)}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Callout tone="info" title="Where your files go">
-          Text from your files, and the questions agents search with, are sent to{" "}
-          <strong>{provider ? providerName(provider) : "the embedding provider"}</strong>. The files
+    <section className="kadd" aria-label="Add files">
+      <div className="kadd__inner stack">
+        <UploadArea
+          limits={limits}
+          onFiles={addFiles}
+          uploading={upload.busy}
+        />
+        <DefaultEmbedding library={library} onChanged={onChanged} />
+        <p className="kadd__note">
+          Text from your files, and the questions agents search with, are sent
+          to each file&apos;s embedding provider
+          {provider ? ` (new files: ${providerName(provider)})` : ""}. The files
           themselves aren&apos;t kept — only the text passages taken from them.
-        </Callout>
-        <UploadArea limits={limits} onFiles={addFiles} uploading={upload.busy} />
+        </p>
         {problems.length > 0 && (
           <Callout tone="warn" title="Some files weren't added">
             <ul className="steps-list">
@@ -245,66 +391,7 @@ function AddFilesPanel({ library, onUploaded }) {
         )}
         <ErrorCallout error={upload.error} />
       </div>
-    </Panel>
-  );
-}
-
-function EmbeddingPanel({ library, onChanged }) {
-  const current = library.embedding;
-  const options = library.embedding_options;
-  // Options are identified by provider and model: one provider can offer several
-  // embedding models (Amazon Bedrock has Titan and Cohere).
-  const keyOf = (o) => (o ? `${o.provider}/${o.model}` : "");
-  const [choice, setChoice] = useState(keyOf(current));
-  const change = useAction();
-  const changed = current && choice && choice !== keyOf(current);
-  const chosen = options.find((o) => keyOf(o) === choice);
-  const busy = isIndexing(library.documents);
-
-  async function apply() {
-    const option = chosen;
-    const res = await change.run(() => api.setLibraryEmbedding(option));
-    if (res) onChanged(res);
-  }
-
-  return (
-    <Panel title="Embedding model">
-      {current ? (
-        <div className="stack">
-          <Field
-            label="Indexes and searches every file in your library"
-            hint="One model for the whole library, whatever model a project's agents use. Changing it re-indexes every file; nothing needs uploading again."
-          >
-            <select value={choice} onChange={(e) => setChoice(e.target.value)} disabled={change.busy}>
-              {options.map((o) => (
-                <option key={keyOf(o)} value={keyOf(o)} disabled={!o.available}>
-                  {providerName(o.provider)} · {o.model}
-                  {o.dimensions ? ` · ${o.dimensions}-dim` : ""}
-                  {o.available ? "" : " (no API key)"}
-                </option>
-              ))}
-            </select>
-          </Field>
-          {changed && (
-            <div className="row">
-              <Button variant="primary" onClick={apply} loading={change.busy} disabled={busy}>
-                Re-index with {chosen ? `${providerName(chosen.provider)} · ${chosen.model}` : "the new model"}
-              </Button>
-              <Button onClick={() => setChoice(keyOf(current))} disabled={change.busy}>
-                Cancel
-              </Button>
-            </div>
-          )}
-          {changed && busy && <p className="muted">Wait for indexing to finish before switching.</p>}
-          <ErrorCallout error={change.error} />
-        </div>
-      ) : (
-        <p className="muted">
-          Chosen when you add your first file: Gemini&apos;s embedding model if this server has a
-          Gemini key, otherwise OpenAI&apos;s.
-        </p>
-      )}
-    </Panel>
+    </section>
   );
 }
 
@@ -351,11 +438,19 @@ export function KnowledgePage({ onCountChanged }) {
   }, [indexing, loaded]);
 
   const projectsById = useMemo(
-    () => Object.fromEntries((library?.projects ?? []).map((p) => [p.project_id, p])),
+    () =>
+      Object.fromEntries(
+        (library?.projects ?? []).map((p) => [p.project_id, p]),
+      ),
     [library],
   );
   const visible = useMemo(
-    () => filterDocuments(library?.documents ?? [], { query, project: projectFilter, status }),
+    () =>
+      filterDocuments(library?.documents ?? [], {
+        query,
+        project: projectFilter,
+        status,
+      }),
     [library, query, projectFilter, status],
   );
 
@@ -364,6 +459,12 @@ export function KnowledgePage({ onCountChanged }) {
     if (!res) return false;
     await reload();
     return true;
+  }
+
+  async function changeEmbedding(doc, option) {
+    const res = await api.setDocumentEmbedding(doc.id, option);
+    await reload();
+    return res;
   }
 
   async function changeAttachments(doc, projectIds) {
@@ -382,7 +483,13 @@ export function KnowledgePage({ onCountChanged }) {
     return (
       <div className="page">
         {header}
-        <Panel>{load.error ? <ErrorCallout error={load.error} /> : <Skeleton lines={4} />}</Panel>
+        <Panel>
+          {load.error ? (
+            <ErrorCallout error={load.error} />
+          ) : (
+            <Skeleton lines={4} />
+          )}
+        </Panel>
       </div>
     );
   }
@@ -396,115 +503,128 @@ export function KnowledgePage({ onCountChanged }) {
       <div className="kstats" aria-label="Library totals">
         <Stat label="Files" value={totals.files} />
         <Stat label="Ready" value={totals.ready} tone="success" />
-        <Stat label="Indexing" value={totals.indexing} tone={totals.indexing ? "info" : undefined} />
-        <Stat label="Failed" value={totals.failed} tone={totals.failed ? "danger" : undefined} />
+        <Stat
+          label="Indexing"
+          value={totals.indexing}
+          tone={totals.indexing ? "info" : undefined}
+        />
+        <Stat
+          label="Failed"
+          value={totals.failed}
+          tone={totals.failed ? "danger" : undefined}
+        />
         <Stat label="Passages" value={totals.passages} />
       </div>
 
-      <div className="split">
-        <div className="kmain">
-          <Panel title="Files" subtitle={filtering ? `${visible.length} of ${totals.files}` : undefined} flush>
-            {library.documents.length > 0 && (
-              <div className="ktoolbar">
-                <input
-                  type="text"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search file names"
-                  aria-label="Search file names"
-                />
-                <select
-                  value={projectFilter}
-                  onChange={(e) => setProjectFilter(e.target.value)}
-                  aria-label="Filter by project"
-                >
-                  <option value="">All files</option>
-                  <option value={NO_PROJECT}>Not attached to a project</option>
-                  {library.projects
-                    .filter((p) => p.documents > 0)
-                    .map((p) => (
-                      <option key={p.project_id} value={p.project_id}>
-                        {projectTitle(p.brief, 40)}
-                      </option>
-                    ))}
-                </select>
-                <select value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Filter by status">
-                  <option value="all">Any status</option>
-                  <option value="ready">Ready</option>
-                  <option value="indexing">Indexing</option>
-                  <option value="failed">Failed</option>
-                </select>
-              </div>
-            )}
+      <AddFiles library={library} onUploaded={reload} onChanged={loaded} />
 
-            {library.documents.length === 0 ? (
-              <div className="panel__body">
-                <Empty title="No files yet">
-                  Add PDF, Word, text, Markdown or CSV files. They don&apos;t need a project: attach
-                  them to projects now or later, and those projects&apos; agents can search them and
-                  cite them in their answers.
-                </Empty>
-              </div>
-            ) : visible.length === 0 ? (
-              <div className="panel__body">
-                <Empty
-                  title="No files match"
-                  action={
-                    <Button
-                      onClick={() => {
-                        setQuery("");
-                        setProjectFilter("");
-                        setStatus("all");
-                      }}
-                    >
-                      Clear filters
-                    </Button>
-                  }
-                />
-              </div>
-            ) : (
-              <table className="table ktable">
-                <thead>
-                  <tr>
-                    <th>File</th>
-                    <th>Projects</th>
-                    <th>Passages</th>
-                    <th>Status</th>
-                    <th className="kcol-actions">
-                      <span className="sr-only">Actions</span>
-                    </th>
-                  </tr>
-                </thead>
-                <tbody aria-live="polite">
-                  {visible.map((doc) => (
-                    <FileRow
-                      key={doc.id}
-                      doc={doc}
-                      projects={library.projects}
-                      projectsById={projectsById}
-                      onDelete={deleteDocument}
-                      onAttachmentsChange={changeAttachments}
-                    />
+      <div className="kmain">
+        <Panel
+          title="Files"
+          subtitle={
+            filtering ? `${visible.length} of ${totals.files}` : undefined
+          }
+          flush
+        >
+          {library.documents.length > 0 && (
+            <div className="ktoolbar">
+              <input
+                type="text"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search file names"
+                aria-label="Search file names"
+              />
+              <select
+                value={projectFilter}
+                onChange={(e) => setProjectFilter(e.target.value)}
+                aria-label="Filter by project"
+              >
+                <option value="">All files</option>
+                <option value={NO_PROJECT}>Not attached to a project</option>
+                {library.projects
+                  .filter((p) => p.documents > 0)
+                  .map((p) => (
+                    <option key={p.project_id} value={p.project_id}>
+                      {projectTitle(p.brief, 40)}
+                    </option>
                   ))}
-                </tbody>
-              </table>
-            )}
-            {(remove.error || attach.error) && (
-              <div className="panel__body">
-                <ErrorCallout error={remove.error || attach.error} />
-              </div>
-            )}
-          </Panel>
-        </div>
+              </select>
+              <select
+                value={status}
+                onChange={(e) => setStatus(e.target.value)}
+                aria-label="Filter by status"
+              >
+                <option value="all">Any status</option>
+                <option value="ready">Ready</option>
+                <option value="indexing">Indexing</option>
+                <option value="failed">Failed</option>
+              </select>
+            </div>
+          )}
 
-        <aside className="split__aside stack">
-          <AddFilesPanel library={library} onUploaded={reload} />
-          <EmbeddingPanel
-            key={library.embedding ? `${library.embedding.provider}/${library.embedding.model}` : "none"}
-            library={library}
-            onChanged={loaded}
-          />
-        </aside>
+          {library.documents.length === 0 ? (
+            <div className="panel__body">
+              <Empty title="No files yet">
+                Add PDF, Word, text, Markdown or CSV files. They don&apos;t need
+                a project: attach them to projects now or later, and those
+                projects&apos; agents can search them and cite them in their
+                answers.
+              </Empty>
+            </div>
+          ) : visible.length === 0 ? (
+            <div className="panel__body">
+              <Empty
+                title="No files match"
+                action={
+                  <Button
+                    onClick={() => {
+                      setQuery("");
+                      setProjectFilter("");
+                      setStatus("all");
+                    }}
+                  >
+                    Clear filters
+                  </Button>
+                }
+              />
+            </div>
+          ) : (
+            <table className="table ktable">
+              <thead>
+                <tr>
+                  <th>File</th>
+                  <th>Projects</th>
+                  <th>Embedding model</th>
+                  <th>Passages</th>
+                  <th>Status</th>
+                  <th className="kcol-actions">
+                    <span className="sr-only">Actions</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody aria-live="polite">
+                {visible.map((doc) => (
+                  <FileRow
+                    key={doc.id}
+                    doc={doc}
+                    projects={library.projects}
+                    projectsById={projectsById}
+                    embeddingOptions={library.embedding_options}
+                    onDelete={deleteDocument}
+                    onAttachmentsChange={changeAttachments}
+                    onEmbeddingChange={changeEmbedding}
+                  />
+                ))}
+              </tbody>
+            </table>
+          )}
+          {(remove.error || attach.error) && (
+            <div className="panel__body">
+              <ErrorCallout error={remove.error || attach.error} />
+            </div>
+          )}
+        </Panel>
       </div>
     </div>
   );

@@ -22,11 +22,14 @@ for (const scheme of ["light", "dark"]) {
 
     // Attach a library file to the project, to see deleting the project keep the file.
     await page.goto("/#/knowledge");
-    await page.getByRole("combobox", { name: /^Attach to/ }).selectOption({ label: TITLE });
     await page.getByLabel("Choose files to add").setInputFiles([
       { name: "policy.md", mimeType: "text/markdown", buffer: Buffer.from("# Policy") },
     ]);
     await expect(page.getByRole("link", { name: /^Knowledge/ }).locator(".navitem__count")).toHaveText("1");
+    const file = page.locator(".ktable tbody tr", { hasText: "policy.md" });
+    await file.getByRole("button", { name: "Projects for policy.md" }).click();
+    await page.getByRole("group", { name: "Attach policy.md to" }).getByLabel(TITLE).check();
+    await expect(file).toContainText(TITLE);
 
     await page.getByRole("link", { name: "Projects", exact: false }).first().click();
     const row = page.locator(".table tbody tr", { hasText: TITLE });

@@ -380,16 +380,20 @@ def _build_knowledge_search(knowledge: KnowledgeContext | None = None) -> BaseTo
         [file name — page/section/rows]. Ask a specific question or name the facts you need;
         search again with different words if the first results don't answer it. Cite the
         file and location for any fact you use from these passages."""
-        hits = knowledge.search(query)
-        # The query was embedded: count it (estimated) against the run, if one is counting.
-        usage = ((config or {}).get("configurable") or {}).get("usage")
-        if usage is not None and knowledge.embedding:
-            provider, model = knowledge.embedding
-            usage.add(
-                kind="embedding_query", provider=provider, model=model, estimated=True,
-                input_tokens=estimate_tokens(query),
-                agent_id=((config or {}).get("configurable") or {}).get("agent_id"),
-            )
+        configurable = (config or {}).get("configurable") or {}
+        usage = configurable.get("usage")
+
+        def count(embedding, text: str) -> None:
+            # The query was embedded (once per model in use): count it, estimated, against
+            # the run, if one is counting.
+            if usage is not None:
+                usage.add(
+                    kind="embedding_query", provider=embedding.provider, model=embedding.model,
+                    estimated=True, input_tokens=estimate_tokens(text),
+                    agent_id=configurable.get("agent_id"),
+                )
+
+        hits = knowledge.search(query, on_query_embedded=count)
         return format_hits(query, hits)
 
     return knowledge_search

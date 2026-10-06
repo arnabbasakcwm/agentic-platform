@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   batches,
+  canChangeEmbedding,
   checkFiles,
   documentBadge,
+  embeddingKey,
+  embeddingLabel,
+  findEmbedding,
   filterDocuments,
   formatBytes,
   isIndexing,
@@ -93,5 +97,33 @@ describe("workspace filters", () => {
 
   it("totals files by state", () => {
     expect(knowledgeTotals(docs)).toEqual({ files: 4, ready: 1, indexing: 2, failed: 1, passages: 4 });
+  });
+});
+
+describe("embedding models", () => {
+  const options = [
+    { provider: "google_genai", model: "gemini-embedding-001" },
+    { provider: "bedrock", model: "amazon.titan-embed-text-v2:0" },
+    { provider: "bedrock", model: "global.cohere.embed-v4:0" },
+  ];
+
+  it("identifies an option by provider and model", () => {
+    expect(embeddingKey(options[1])).toBe("bedrock/amazon.titan-embed-text-v2:0");
+    expect(embeddingKey(null)).toBe("");
+    expect(findEmbedding(options, "bedrock/global.cohere.embed-v4:0")).toBe(options[2]);
+    expect(findEmbedding(options, "openai/x")).toBeNull();
+  });
+
+  it("labels an option with the provider's name", () => {
+    expect(embeddingLabel(options[0])).toBe("Google Gemini · gemini-embedding-001");
+    expect(embeddingLabel(null)).toBe("");
+  });
+
+  it("allows a change only for an indexed file with passages", () => {
+    expect(canChangeEmbedding({ status: "ready", chunk_count: 4 })).toBe(true);
+    expect(canChangeEmbedding({ status: "failed", chunk_count: 4 })).toBe(true);
+    expect(canChangeEmbedding({ status: "failed", chunk_count: 0 })).toBe(false);
+    expect(canChangeEmbedding({ status: "processing", chunk_count: 4 })).toBe(false);
+    expect(canChangeEmbedding({ status: "queued", chunk_count: 0 })).toBe(false);
   });
 });

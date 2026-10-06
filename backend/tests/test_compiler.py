@@ -246,7 +246,7 @@ def test_agent_searches_the_projects_documents_and_gets_cited_passages(monkeypat
     queries = []
 
     class Context(KnowledgeContext):
-        def search(self, query, k=5):
+        def search(self, query, k=5, on_query_embedded=None):
             queries.append(query)
             return [Hit("policy.pdf", "page 4", "The Delhi hotel cap is INR 9,000.", 0.8)]
 
@@ -264,7 +264,7 @@ def test_agent_searches_the_projects_documents_and_gets_cited_passages(monkeypat
 
     monkeypatch.setattr(gb, "get_llm", lambda cfg: RecordingLLM(_Structured([AgentOutput(content="done")])))
     plan = AgentPlan(agents=[_knowledge_spec()], orchestration_pattern="sequential")
-    context = Context(embed_query=lambda q: [], load=lambda: ([], {}))
+    context = Context(load_groups=lambda: [], embedder_for=lambda config: None)
     result = compile_graph(plan, knowledge=context).invoke(initial_state({"q": "x"}))
 
     assert result["errors"] == []

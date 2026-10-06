@@ -327,6 +327,19 @@ def test_document_status_updates(knowledge):
     assert (doc.status, doc.chunk_count) == ("ready", 3)
 
 
+def test_a_documents_embedding_model_round_trips(knowledge):
+    from agentic_platform.agent_schema import EmbeddingConfig
+
+    knowledge.add_document(_kdoc("d1"))  # a file from before per-file models
+    assert knowledge.get_document("u1", "d1").embedding is None
+    titan = EmbeddingConfig(provider="bedrock", model="amazon.titan-embed-text-v2:0")
+    knowledge.add_document(_kdoc("d2", embedding=titan))
+    assert knowledge.get_document("u1", "d2").embedding == titan
+    openai = EmbeddingConfig(provider="openai", model="text-embedding-3-small")
+    assert knowledge.update_document("u1", "d1", embedding=openai)
+    assert knowledge.get_document("u1", "d1").embedding == openai
+
+
 def test_chunks_replace_filter_and_delete_with_their_document(knowledge):
     knowledge.add_document(_kdoc("d1"))
     knowledge.add_document(_kdoc("d2"))

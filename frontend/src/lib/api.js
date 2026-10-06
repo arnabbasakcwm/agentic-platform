@@ -170,8 +170,12 @@ export const api = {
       method: "PUT",
       body: { project_ids: projectIds },
     }),
+  // The model new uploads use; files already in the library keep theirs.
   setLibraryEmbedding: ({ provider, model }) =>
     request("/knowledge/embedding", { method: "PUT", body: { provider, model } }),
+  // Re-index one file with another model (in the background).
+  setDocumentEmbedding: (documentId, { provider, model }) =>
+    request(`/knowledge/documents/${documentId}/embedding`, { method: "PUT", body: { provider, model } }),
   // ---- one project's view: the files attached to it.
   getKnowledge: (id) => request(`/projects/${id}/knowledge`),
   // Adds the files to the library and attaches them to the project.

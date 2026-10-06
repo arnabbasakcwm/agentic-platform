@@ -27,7 +27,7 @@ from pydantic import BaseModel, Field
 from .agent_schema import AgentPlan
 from .errors import PlatformError
 from .graph_builder import compile_graph, get_embeddings, run_graph, run_single_agent
-from .knowledge import KnowledgeContext, SnapshotContext, load_snapshot
+from .knowledge import KnowledgeContext, cached_embedders, load_snapshot, snapshot_context
 from .usage import UsageCollector
 
 # Every invocation prints one line like this (stdout → CloudWatch, via AgentCore), so the
@@ -71,13 +71,10 @@ def _error(status: int, error_type: str, message: str) -> JSONResponse:
 
 
 def _snapshot_context(directory: Path | None) -> KnowledgeContext | None:
-    snapshot = load_snapshot(directory) if directory is not None else None
-    if snapshot is None:
+    groups = load_snapshot(directory) if directory is not None else None
+    if groups is None:
         return None
-    embedding, filenames, passages, matrix = snapshot
-    context = SnapshotContext(get_embeddings(embedding).embed_query, filenames, passages, matrix)
-    context.embedding = (embedding.provider, embedding.model)
-    return context
+    return snapshot_context(groups, cached_embedders(lambda config: get_embeddings(config)))
 
 
 def create_app(plan_data: dict[str, Any], knowledge_dir: Path | None = None) -> FastAPI:

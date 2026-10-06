@@ -150,6 +150,9 @@ class KnowledgeDocument(BaseModel):
     status: Literal["queued", "processing", "ready", "failed"] = "queued"
     error: str | None = None
     chunk_count: int = 0
+    # The model the file is indexed with. None for files indexed before each file had
+    # its own model: those use the library default (knowledge.effective_embedding).
+    embedding: EmbeddingConfig | None = None
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
 
@@ -539,7 +542,7 @@ class KnowledgeStore(Protocol):
         ...
 
     def get_embedding(self, tenant_id: str) -> EmbeddingConfig | None:
-        """The library's embedding model, or None before the first upload."""
+        """The library's default embedding model for new uploads, or None before the first."""
         ...
 
     def set_embedding(self, tenant_id: str, config: EmbeddingConfig) -> None: ...
@@ -711,7 +714,10 @@ class MongoKnowledgeStore:
         with _mongo_errors():
             result = self._docs.update_one(
                 {"_id": document_id, "tenant_id": tenant_id},
-                {"$set": {**changes, "updated_at": _now()}},
+                {"$set": {
+                    **{k: v.model_dump() if isinstance(v, BaseModel) else v for k, v in changes.items()},
+                    "updated_at": _now(),
+                }},
             )
         return result.matched_count == 1
 

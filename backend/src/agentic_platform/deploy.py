@@ -84,15 +84,19 @@ def runtime_name(project_id: str) -> str:
     return f"{RUNTIME_NAME_PREFIX}{project_id}"
 
 
-def runtime_environment(plan: AgentPlan, embedding: EmbeddingConfig | None = None) -> dict[str, str]:
+def runtime_environment(
+    plan: AgentPlan, embeddings: list[EmbeddingConfig] | EmbeddingConfig | None = None
+) -> dict[str, str]:
     """The environment variables a deployed plan needs, and nothing else: one key per
-    provider its agents use (and for the knowledge base's embedding model, when an agent
-    searches it), plus keys for the tools they use. Raises if one is missing here, so a
-    deployment never starts that could only fail at run time."""
+    provider its agents use (and for every embedding model of the knowledge files, when an
+    agent searches them), plus keys for the tools they use. Raises if one is missing here,
+    so a deployment never starts that could only fail at run time."""
     env: dict[str, str] = {}
     providers = {agent.llm.provider for agent in plan.agents}
-    if embedding is not None and uses_knowledge(plan):
-        providers.add(embedding.provider)
+    if isinstance(embeddings, EmbeddingConfig):
+        embeddings = [embeddings]
+    if embeddings and uses_knowledge(plan):
+        providers |= {e.provider for e in embeddings}
     for provider in sorted(providers):
         if provider == "ollama":
             raise DeployError("ollama models run on your own machine and can't be deployed")
@@ -255,12 +259,12 @@ def run_deployment(
     cloud: Cloud,
     packager: Packager = build_package,
     knowledge_snapshot: Callable[[], tuple[bytes, bytes] | None] | None = None,
-    knowledge_embedding: EmbeddingConfig | None = None,
+    knowledge_embeddings: list[EmbeddingConfig] | EmbeddingConfig | None = None,
 ) -> None:
     """The background job: package, upload, provision, wait. Progress and the outcome are
     written to the project's deployment record; this never raises. `knowledge_snapshot`
     supplies the knowledge base to bake in when an agent searches it, embedded with
-    `knowledge_embedding` (the owner's library model)."""
+    `knowledge_embeddings` (the attached files' models)."""
     from .stores import Deployment  # local import: stores imports nothing from here
 
     def update(**changes: Any) -> Deployment | None:
@@ -278,7 +282,7 @@ def run_deployment(
         return
     current: Deployment = project.deployment
     try:
-        environment = runtime_environment(project.plan, knowledge_embedding)
+        environment = runtime_environment(project.plan, knowledge_embeddings)
         snapshot = knowledge_snapshot() if knowledge_snapshot is not None else None
         with tempfile.TemporaryDirectory(prefix="agentic-deploy-") as tmp:
             package = Path(tmp) / "package.zip"

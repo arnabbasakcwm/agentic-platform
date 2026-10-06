@@ -652,8 +652,8 @@ def test_runtime_searches_its_knowledge_snapshot(tmp_path, monkeypatch):
 
     monkeypatch.setattr(runtime_app, "compile_graph", fake_compile)
     runtime_app.create_app(_plan(tools=["knowledge_search"]).model_dump(), knowledge_dir=tmp_path)
-    assert used["cfg"] == embedding
     hits = captured["knowledge"].search("hotel limit", k=1)
+    assert used["cfg"] == embedding  # the query is embedded with the files' own model
     assert (hits[0].filename, hits[0].source, hits[0].text) == ("policy.pdf", "page 2", "Hotel cap INR 9,000.")
 
 
@@ -669,6 +669,12 @@ def test_environment_adds_the_embedding_key_only_when_documents_are_searched(key
     assert deploy.runtime_environment(_plan(), embedding) == {"GEMINI_API_KEY": "gemini-secret"}
     env = deploy.runtime_environment(_plan(tools=["knowledge_search"]), embedding)
     assert env == {"GEMINI_API_KEY": "gemini-secret", "OPENAI_API_KEY": "openai-secret"}
+    # Files on several models: every embedding provider's key (none for Bedrock).
+    from agentic_platform.agent_schema import EmbeddingConfig
+
+    titan = EmbeddingConfig(provider="bedrock", model="amazon.titan-embed-text-v2:0")
+    env = deploy.runtime_environment(_plan(tools=["knowledge_search"]), [embedding, titan])
+    assert env == {"GEMINI_API_KEY": "gemini-secret", "OPENAI_API_KEY": "openai-secret"}
 
 
 def test_package_includes_the_snapshot(tmp_path):
@@ -678,7 +684,7 @@ def test_package_includes_the_snapshot(tmp_path):
     deploy.build_package(_plan(), out, dependencies=lambda: deps, knowledge=(b'{"x": 1}', b"vectors"))
     with zipfile.ZipFile(out) as zf:
         assert zf.read("knowledge.json") == b'{"x": 1}'
-        assert zf.read("knowledge_vectors.npy") == b"vectors"
+        assert zf.read("knowledge_vectors.npz") == b"vectors"
     assert "pypdf" in deploy.PLATFORM_ONLY_PACKAGES and "python-docx" in deploy.PLATFORM_ONLY_PACKAGES
 
 
@@ -693,7 +699,7 @@ def test_deploy_bakes_in_the_knowledge_base_its_agents_search(api, monkeypatch):
         path.write_bytes(b"zip")
 
     monkeypatch.setattr(app_module, "_package_builder", packager)
-    monkeypatch.setattr(app_module, "_knowledge_context", lambda project, embedding=None: None)
+    monkeypatch.setattr(app_module, "_knowledge_context", lambda project: None)
     h = api.login("kb@example.com")
     pid = _compiled_project(api, h)
     plan = _plan(tools=["knowledge_search"])
@@ -715,7 +721,7 @@ def test_deploy_bakes_in_the_knowledge_base_its_agents_search(api, monkeypatch):
     assert r.status_code == 202
     assert api.get(f"/projects/{pid}/deployment", headers=h).json()["deployment"]["status"] == "ready"
     meta = json.loads(packaged["knowledge"][0])
-    assert meta["documents"] == {"d1": "policy.pdf"} and len(meta["passages"]) == 2
+    assert meta["documents"] == {"d1": "policy.pdf"} and len(meta["groups"][0]["passages"]) == 2
     assert api.cloud.environment["OPENAI_API_KEY"] == "openai-secret"
 
 

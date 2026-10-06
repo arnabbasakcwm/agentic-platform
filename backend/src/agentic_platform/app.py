@@ -281,29 +281,30 @@ def _get_project(project_id: str, user: UserRecord) -> ProjectRecord:
 
 
 def _compiled_graph(project: ProjectRecord) -> Any:
-    # The embedder is bound when the graph is built, so the library's embedding model is
-    # part of the cache key.
-    embedding = _knowledge.get_embedding(project.tenant_id) if uses_knowledge(project.plan) else None
+    # Knowledge files and their embedding models are read at search time, so only the plan
+    # version keys the cache.
     cached = _COMPILED.get(project.id)
-    if cached is not None and cached[0] == project.plan_version and cached[1] == embedding:
-        return cached[2]
-    graph = compile_graph(project.plan, _knowledge_context(project, embedding))
-    _COMPILED[project.id] = (project.plan_version, embedding, graph)
+    if cached is not None and cached[0] == project.plan_version:
+        return cached[1]
+    graph = compile_graph(project.plan, _knowledge_context(project))
+    _COMPILED[project.id] = (project.plan_version, graph)
     return graph
 
 
 # --------------------------------------------------------------------------- knowledge
-def _knowledge_context(
-    project: ProjectRecord, embedding: EmbeddingConfig | None = None
-) -> kb.KnowledgeContext | None:
+def _embedder_for(config: EmbeddingConfig):
+    """The embedder for one file's model (files may each use a different model)."""
+    return get_embeddings(config)
+
+
+def _knowledge_context(project: ProjectRecord) -> kb.KnowledgeContext | None:
     """The files attached to the project, for knowledge_search — or None when no agent uses
     it or nothing is attached (compiling then fails with KnowledgeUnavailable)."""
     if not uses_knowledge(project.plan):
         return None
-    embedding = embedding or _knowledge.get_embedding(project.tenant_id)
-    if embedding is None or not _knowledge.list_documents(project.tenant_id, project.id):
+    if not _knowledge.list_documents(project.tenant_id, project.id):
         return None
-    return kb.store_context(_knowledge, project.tenant_id, project.id, get_embeddings(embedding))
+    return kb.store_context(_knowledge, project.tenant_id, project.id, _embedder_for)
 
 
 def _has_ready_knowledge(project: ProjectRecord) -> bool:
@@ -350,8 +351,14 @@ def _default_embedding(project: ProjectRecord | None) -> EmbeddingConfig:
     )
 
 
-def _document_body(doc: KnowledgeDocument) -> dict[str, Any]:
-    return doc.effective().model_dump(exclude={"tenant_id"})
+def _document_body(doc: KnowledgeDocument, default: EmbeddingConfig | None = None) -> dict[str, Any]:
+    """A file as the API shows it, with the embedding model it is indexed with (the
+    library default for files from before per-file models)."""
+    body = doc.effective().model_dump(exclude={"tenant_id"})
+    if body["embedding"] is None:
+        default = default or _knowledge.get_embedding(doc.tenant_id)
+        body["embedding"] = default.model_dump() if default else None
+    return body
 
 
 def _knowledge_summary(project: ProjectRecord) -> dict[str, Any]:
@@ -385,11 +392,17 @@ def _index_upload(tenant_id: str, document_id: str, data: bytes, config: Embeddi
         _record_usage(tenant_id, project_id, collector.entries(), run_id=uuid.uuid4().hex)
 
 
-def _reembed(tenant_id: str, config: EmbeddingConfig) -> None:
+def _reembed(tenant_id: str, document_id: str, config: EmbeddingConfig) -> None:
+    """Background job: re-index one file with a different embedding model."""
     collector = UsageCollector()
     try:
-        kb.reembed_library(
-            _knowledge, tenant_id, get_embeddings(config),
+        try:
+            embedder = get_embeddings(config)
+        except Exception as e:  # noqa: BLE001 — recorded on the document, never raised
+            _knowledge.update_document(tenant_id, document_id, status="failed", error=kb._describe(e))
+            return
+        kb.reembed_document(
+            _knowledge, tenant_id, document_id, embedder, config,
             on_embedded=_embedding_counter(collector, config, "embedding_index"),
         )
     finally:
@@ -867,8 +880,11 @@ def _knowledge_limits() -> dict[str, Any]:
 
 def _library_embedding_body(tenant_id: str) -> dict[str, Any]:
     embedding = _knowledge.get_embedding(tenant_id)
+    body = embedding.model_dump() if embedding else None
     return {
-        "embedding": embedding.model_dump() if embedding else None,
+        # The default for new uploads; each file carries the model it is indexed with.
+        "default_embedding": body,
+        "embedding": body,  # older name, kept for compatibility
         "embedding_options": _embedding_options(),
     }
 
@@ -888,9 +904,10 @@ def knowledge_library(user: UserRecord = Depends(current_user)) -> dict[str, Any
     projects = _store.list_for_tenant(user.id)
     owned = {p.id for p in projects}
     docs = [d.effective() for d in _knowledge.list_documents(user.id)]
+    default = _knowledge.get_embedding(user.id)
     documents = []
     for d in docs:
-        body = _document_body(d)
+        body = _document_body(d, default)
         # Attachments to projects that no longer exist are never shown.
         body["project_ids"] = [pid for pid in d.project_ids if pid in owned]
         documents.append(body)
@@ -973,6 +990,7 @@ def _queue_uploads(
             filename=filename,
             kind=kb.file_kind(filename),
             size_bytes=len(data),
+            embedding=config,
         )
         _knowledge.add_document(doc)
         background.add_task(_index_upload, user.id, doc.id, data, config)
@@ -1113,41 +1131,74 @@ def set_embedding(
     response: Response,
     user: UserRecord = Depends(current_user),
 ) -> dict[str, Any]:
-    """Change your library's embedding model. Every stored passage is re-embedded in the
-    background (202); no file needs uploading again."""
+    """Set the embedding model new uploads use. Files already in the library keep the
+    model they were indexed with; change a file's model with
+    PUT /knowledge/documents/{id}/embedding."""
+    _check_embedding(config)
+    current = _knowledge.get_embedding(user.id)
+    if config == current:
+        return knowledge_library(user)
+    # Files from before per-file models follow the default: pin them to the model they
+    # were actually indexed with before it changes.
+    if current is not None:
+        for d in _knowledge.list_documents(user.id):
+            if d.embedding is None:
+                _knowledge.update_document(user.id, d.id, embedding=current)
+    _knowledge.set_embedding(user.id, config)
+    return knowledge_library(user)
+
+
+def _check_embedding(config: EmbeddingConfig) -> None:
     if embedding_option(config.provider, config.model) is None:
         raise KnowledgeError(
             f"unknown embedding model; choose one of {_embedding_options()}", status=422
         )
-    current = _knowledge.get_embedding(user.id)
-    if config == current:
-        return knowledge_library(user)
-    docs = [d.effective() for d in _knowledge.list_documents(user.id)]
-    if any(d.status in ("queued", "processing") for d in docs):
-        raise KnowledgeBusyError()
     get_embeddings(config)  # missing key -> MissingProviderKey now
-    _knowledge.set_embedding(user.id, config)
-    if docs:
-        for d in docs:
-            if d.status == "ready":
-                _knowledge.update_document(user.id, d.id, status="processing")
-        background.add_task(_reembed, user.id, config)
+
+
+@app.put("/knowledge/documents/{document_id}/embedding")
+def set_document_embedding(
+    document_id: str,
+    config: EmbeddingConfig,
+    background: BackgroundTasks,
+    response: Response,
+    user: UserRecord = Depends(current_user),
+) -> dict[str, Any]:
+    """Re-index one library file with a different embedding model. Its stored passages
+    are re-embedded in the background (202; the file shows processing until ready); the
+    file needn't be uploaded again. Agents keep finding it: search embeds the question
+    once per model in use."""
+    doc = _get_document(document_id, user).effective()
+    _check_embedding(config)
+    default = _knowledge.get_embedding(user.id)
+    if kb.effective_embedding(doc, default) == config and doc.status == "ready":
+        return {"document": _document_body(doc, default)}
+    if doc.status in ("queued", "processing"):
+        raise KnowledgeBusyError()
+    if doc.chunk_count == 0:
+        raise KnowledgeError(
+            f"'{doc.filename}' has no stored passages to re-index; upload it again", status=409
+        )
+    _knowledge.update_document(user.id, document_id, status="processing", error=None)
+    background.add_task(_reembed, user.id, document_id, config)
     response.status_code = 202
-    return knowledge_library(user)
+    return {"document": _document_body(_get_document(document_id, user), default)}
 
 
 def _search_body(tenant_id: str, project_id: str | None, req: KnowledgeSearchRequest) -> dict[str, Any]:
-    embedding = _knowledge.get_embedding(tenant_id)
-    if embedding is None:
-        return {"results": []}
-    context = kb.store_context(_knowledge, tenant_id, project_id, get_embeddings(embedding))
-    hits = context.search(req.query, req.k)
+    context = kb.store_context(_knowledge, tenant_id, project_id, _embedder_for)
     collector = UsageCollector()
-    _embedding_counter(collector, embedding, "embedding_query")([req.query])
-    _record_usage(tenant_id, project_id, collector.entries(), run_id=uuid.uuid4().hex)
+
+    def count(config: EmbeddingConfig, query: str) -> None:
+        _embedding_counter(collector, config, "embedding_query")([query])
+
+    try:
+        hits = context.search(req.query, req.k, on_query_embedded=count)
+    finally:
+        _record_usage(tenant_id, project_id, collector.entries(), run_id=uuid.uuid4().hex)
     return {
         "results": [
-            {"filename": h.filename, "source": h.source, "text": h.text, "score": h.score}
+            {"filename": h.filename, "source": h.source, "text": h.text, "score": h.score, "model": h.model}
             for h in hits
         ]
     }
@@ -1268,19 +1319,23 @@ def deploy_project(
     # Fail now, not minutes into the job, if a key the plan needs isn't configured or
     # the knowledge base its agents search isn't ready to be copied.
     snapshot = None
-    embedding = None
+    embeddings: list[EmbeddingConfig] = []
     if uses_knowledge(project.plan):
         docs = [d.effective() for d in _knowledge.list_documents(user.id, project_id)]
         if any(d.status in ("queued", "processing") for d in docs):
             raise KnowledgeBusyError()
-        embedding = _knowledge.get_embedding(user.id)
-        if embedding is None or not any(d.status == "ready" for d in docs):
+        default = _knowledge.get_embedding(user.id)
+        for d in docs:
+            model = kb.effective_embedding(d, default)
+            if d.status == "ready" and model is not None and model not in embeddings:
+                embeddings.append(model)
+        if not embeddings:
             raise KnowledgeUnavailableError()
 
         def snapshot():
-            return kb.build_snapshot(_knowledge, user.id, project_id, embedding)
+            return kb.build_snapshot(_knowledge, user.id, project_id)
 
-    runtime_environment(project.plan, embedding)
+    runtime_environment(project.plan, embeddings)
 
     deployment = Deployment(
         status="packaging",
@@ -1295,7 +1350,7 @@ def deploy_project(
         usage_synced_until=previous.usage_synced_until if previous else None,
     )
     _store.set_deployment(project_id, deployment)
-    background.add_task(run_deployment, project_id, _store, cloud, _package_builder, snapshot, embedding)
+    background.add_task(run_deployment, project_id, _store, cloud, _package_builder, snapshot, embeddings)
     return {"deployment": _deployment_body(_get_project(project_id, user))}
 
 

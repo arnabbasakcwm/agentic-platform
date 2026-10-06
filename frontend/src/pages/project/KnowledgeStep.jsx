@@ -66,13 +66,14 @@ function EmbeddingNote({ knowledge }) {
       <p className="muted">
         {embedding ? (
           <>
-            Your library uses <strong>{providerName(embedding.provider)}</strong> ·{" "}
-            <span className="mono">{embedding.model}</span> for every file, in every project.
+            New files are indexed with <strong>{providerName(embedding.provider)}</strong> ·{" "}
+            <span className="mono">{embedding.model}</span>. Each file keeps the model it was
+            indexed with, and search asks every model in use.
           </>
         ) : (
           "Chosen when you add your first file."
         )}{" "}
-        <a href={paths.knowledge}>Change it on the Knowledge page</a>.
+        <a href={paths.knowledge}>Change the default, or one file&apos;s model, on the Knowledge page</a>.
       </p>
     </Panel>
   );

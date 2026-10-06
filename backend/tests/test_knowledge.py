@@ -4,6 +4,8 @@ import io
 
 import pytest
 
+from agentic_platform.agent_schema import EmbeddingConfig
+
 from agentic_platform import knowledge as kb
 from agentic_platform.errors import KnowledgeError
 
@@ -177,6 +179,9 @@ def kstore():
     store.add_document(
         KnowledgeDocument(id="d1", tenant_id="u1", project_ids=["p1"], filename="guide.md", kind=".md", size_bytes=1)
     )
+    from agentic_platform.agent_schema import EmbeddingConfig
+
+    store.set_embedding("u1", EmbeddingConfig(provider="google_genai", model="gemini-embedding-001"))
     return store
 
 
@@ -247,11 +252,113 @@ def test_reembedding_replaces_vectors_and_keeps_text(kstore):
         def embed_documents(self, texts):
             return [[2 * x for x in _vector(t)] for t in texts]
 
-    kb.reembed_library(kstore, "u1", Doubled())
+    openai = EmbeddingConfig(provider="openai", model="text-embedding-3-small")
+    kb.reembed_document(kstore, "u1", "d1", Doubled(), openai)
     after = kstore.chunks_for_documents("u1", ["d1"])
     assert [c.text for c in after] == [c.text for c in before]
     assert after[0].embedding == [2 * x for x in before[0].embedding]
-    assert kstore.get_document("u1", "d1").status == "ready"
+    doc = kstore.get_document("u1", "d1")
+    assert doc.status == "ready" and doc.embedding == openai
+
+
+def test_a_failed_reembed_keeps_the_old_vectors_and_model(kstore):
+    kb.index_document(kstore, "u1", "d1", GUIDE, FakeEmbedder(), chunk_budget=100)
+    before = kstore.chunks_for_documents("u1", ["d1"])
+
+    class Broken(FakeEmbedder):
+        def embed_documents(self, texts):
+            raise RuntimeError("401 bad key")
+
+    kb.reembed_document(kstore, "u1", "d1", Broken(), EmbeddingConfig(provider="openai", model="text-embedding-3-small"))
+    doc = kstore.get_document("u1", "d1")
+    assert doc.status == "failed" and "401" in doc.error
+    assert doc.embedding is None  # still the library default it was indexed with
+    assert kstore.chunks_for_documents("u1", ["d1"])[0].embedding == before[0].embedding
+
+
+def _mixed_store():
+    """Two files on two embedding models with different vector sizes: guide.md on the
+    library default (4 numbers per vector), visa.md on a 'wide' model (8 numbers)."""
+    from agentic_platform.stores import InMemoryKnowledgeStore, KnowledgeChunk, KnowledgeDocument
+
+    store = InMemoryKnowledgeStore()
+    store.set_embedding("u1", GEMINI)
+    store.add_document(KnowledgeDocument(id="d1", tenant_id="u1", project_ids=["p1"], filename="guide.md",
+                                         kind=".md", size_bytes=1, status="ready", chunk_count=2))
+    store.add_document(KnowledgeDocument(id="d2", tenant_id="u1", project_ids=["p1"], filename="visa.md",
+                                         kind=".md", size_bytes=1, status="ready", chunk_count=2, embedding=WIDE))
+    texts = {"d1": ["hotel hotel hotel", "flight"], "d2": ["visa visa visa", "food"]}
+    for doc_id, items in texts.items():
+        wide = doc_id == "d2"
+        store.replace_chunks("u1", doc_id, [
+            KnowledgeChunk(id=f"{doc_id}-{i}", tenant_id="u1", document_id=doc_id, ordinal=i, text=t, source=f"s{i}",
+                           embedding=_vector(t) * 2 if wide else _vector(t))
+            for i, t in enumerate(items)
+        ])
+    return store
+
+
+GEMINI = EmbeddingConfig(provider="google_genai", model="gemini-embedding-001")
+WIDE = EmbeddingConfig(provider="bedrock", model="amazon.titan-embed-text-v2:0")
+
+
+class _ModelEmbedder(FakeEmbedder):
+    def __init__(self, wide, queries):
+        super().__init__()
+        self.wide, self.queries = wide, queries
+
+    def embed_query(self, text):
+        self.queries.append(("wide" if self.wide else "plain", text))
+        return _vector(text) * 2 if self.wide else _vector(text)
+
+
+def test_search_embeds_the_query_once_per_model_and_fuses_the_rankings():
+    store = _mixed_store()
+    queries, counted = [], []
+    context = kb.store_context(store, "u1", "p1", lambda config: _ModelEmbedder(config == WIDE, queries))
+    hits = context.search("hotel visa", k=4, on_query_embedded=lambda config, q: counted.append(config.model))
+    assert sorted(queries) == [("plain", "hotel visa"), ("wide", "hotel visa")]
+    assert sorted(counted) == sorted([GEMINI.model, WIDE.model])
+    # Each model's best passage comes first (rank 1 in its own ranking), then the rest.
+    assert {h.text for h in hits[:2]} == {"hotel hotel hotel", "visa visa visa"}
+    assert {h.text for h in hits[2:]} == {"flight", "food"}
+    assert {h.model for h in hits} == {GEMINI.model, WIDE.model}
+    assert [h.text for h in context.search("hotel visa", k=4)] == [h.text for h in hits]  # deterministic
+
+
+def test_one_model_gives_that_models_own_ranking(kstore):
+    kb.index_document(kstore, "u1", "d1", GUIDE, FakeEmbedder(), chunk_budget=100)
+    chunks = kstore.chunks_for_documents("u1", ["d1"])
+    expected = kb.search(chunks, {"d1": "guide.md"}, _vector("hotel cap"), k=3)
+    got = kb.store_context(kstore, "u1", "p1", FakeEmbedder()).search("hotel cap", k=3)
+    assert [(h.text, h.score) for h in got] == [(h.text, h.score) for h in expected]
+
+
+def test_a_snapshot_keeps_one_matrix_per_model_and_old_snapshots_still_load(tmp_path):
+    import json
+
+    import numpy as np
+
+    store = _mixed_store()
+    meta, vectors = kb.build_snapshot(store, "u1", "p1")
+    (tmp_path / kb.SNAPSHOT_FILE).write_bytes(meta)
+    (tmp_path / kb.SNAPSHOT_VECTORS_FILE).write_bytes(vectors)
+    groups = kb.load_snapshot(tmp_path)
+    assert {(g.embedding.model, g.matrix.shape) for g in groups} == {(GEMINI.model, (2, 4)), (WIDE.model, (2, 8))}
+    queries = []
+    context = kb.snapshot_context(groups, lambda config: _ModelEmbedder(config == WIDE, queries))
+    assert {h.text for h in context.search("visa", k=1)} <= {"visa visa visa", "flight", "hotel hotel hotel"}
+    assert len(queries) == 2
+
+    legacy = tmp_path / "legacy"
+    legacy.mkdir()
+    (legacy / kb.SNAPSHOT_FILE).write_text(json.dumps({
+        "embedding": GEMINI.model_dump(), "documents": {"d1": "guide.md"},
+        "passages": [{"document_id": "d1", "source": "s0", "text": "hotel"}],
+    }), encoding="utf-8")
+    np.save(legacy / kb.LEGACY_SNAPSHOT_VECTORS_FILE, np.asarray([_vector("hotel")], dtype=np.float32))
+    [group] = kb.load_snapshot(legacy)
+    assert group.embedding == GEMINI and group.entries == [("guide.md", "s0", "hotel")]
 
 
 def test_search_ignores_vectors_of_another_size():
