@@ -2,8 +2,8 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
 
 // The Knowledge library page: upload files (to the library only, from the centred upload
-// area), attach one file to several projects from the table, choose the default embedding
-// model and change one file's model, filter, follow a project link, and delete from the
+// area), attach one file to several projects from the table, change one file's embedding
+// model, filter, follow a project link, and delete from the
 // library — readable and accessible in both themes.
 const API = "http://127.0.0.1:8765";
 const TRAVEL = "Travel agent for finding cheap flights";
@@ -49,8 +49,7 @@ for (const scheme of ["light", "dark"]) {
     const area = await page.locator(".kadd").boundingBox();
     const drop = await page.locator(".kadd .dropzone").boundingBox();
     expect(Math.abs(area.x + area.width / 2 - (drop.x + drop.width / 2))).toBeLessThan(2);
-    const defaultModel = page.getByRole("combobox", { name: "New files use" });
-    await expect(defaultModel).toHaveValue("");
+    await expect(page.getByRole("combobox", { name: "New files use" })).toHaveCount(0);
 
     // One file is refused in the page.
     await page.getByLabel("Choose files to add").setInputFiles([file("policy.pdf"), file("deck.pptx"), file("scan.pdf")]);
@@ -61,7 +60,6 @@ for (const scheme of ["light", "dark"]) {
     await expect(rows).toHaveCount(3);
     await expect(rows.filter({ hasText: "policy.pdf" })).toContainText("Library only");
     await expect(rows.filter({ hasText: "budget.csv" })).toContainText("Library only");
-    await expect(defaultModel).toHaveValue(GEMINI);
     await expect(page.getByLabel("Embedding model for policy.pdf")).toHaveValue(GEMINI);
     await expect(rows.filter({ hasText: "scan.pdf" })).toContainText(/scanned PDFs need OCR/);
     await page.screenshot({ path: `e2e/screenshots/knowledge-workspace-indexing-${scheme}.png`, fullPage: true });
@@ -76,12 +74,6 @@ for (const scheme of ["light", "dark"]) {
     await page.getByRole("group", { name: "Attach budget.csv to" }).getByLabel(BUDGET).check();
     await expect(budget).toContainText(BUDGET);
     await page.keyboard.press("Escape");
-
-    // The default for new uploads changes without touching existing files.
-    await defaultModel.selectOption(TITAN);
-    await expect(defaultModel).toHaveValue(TITAN);
-    await expect(page.getByLabel("Embedding model for policy.pdf")).toHaveValue(GEMINI);
-    await expect(rows.filter({ hasText: "policy.pdf" }).locator(".badge")).toHaveText("Ready");
 
     // One file's model: asks first; Cancel puts it back; Re-index indexes it again.
     const policyModel = page.getByLabel("Embedding model for policy.pdf");

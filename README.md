@@ -169,7 +169,8 @@ browser. Set `VITE_API_BASE` to point the console at a different API.
    attach any file to any number of projects from its row, filter by name, project ("not
    attached" included) and status, and delete files. Each file has its own embedding
    model, shown in its row: pick another one there and confirm to re-index that file
-   (nothing is uploaded again). "New files use" sets the model for new uploads only.
+   (nothing is uploaded again). New uploads use the library's default model
+   (`PUT /knowledge/embedding`).
    File text and agents' search queries go to each file's embedding provider; the files
    themselves aren't stored, only the text passages taken from them.
 7. **Usage** (sidebar) — which models your projects used, how many tokens, and the

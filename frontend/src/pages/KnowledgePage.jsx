@@ -292,52 +292,8 @@ function FileRow({
   );
 }
 
-/** The model new uploads are indexed with. Changing it re-indexes nothing. */
-function DefaultEmbedding({ library, onChanged }) {
-  const change = useAction();
-  const options = library.embedding_options;
-  const current = library.default_embedding;
-
-  async function choose(key) {
-    const option = findEmbedding(options, key);
-    if (!option) return;
-    const body = await change.run(() => api.setLibraryEmbedding(option));
-    if (body) onChanged(body);
-  }
-
-  return (
-    <div className="kdefault">
-      <label className="kdefault__field">
-        <span className="kdefault__label">New files use</span>
-        <select
-          value={embeddingKey(current)}
-          onChange={(e) => choose(e.target.value)}
-          disabled={change.busy}
-        >
-          {!current && <option value="">Chosen with your first file</option>}
-          {options.map((o) => (
-            <option
-              key={embeddingKey(o)}
-              value={embeddingKey(o)}
-              disabled={!o.available}
-            >
-              {embeddingLabel(o)}
-              {o.dimensions ? ` · ${o.dimensions}-dim` : ""}
-              {o.available ? "" : " (no API key)"}
-            </option>
-          ))}
-        </select>
-      </label>
-      <span className="kdefault__hint">
-        Files already added keep their model; change one from its row.
-      </span>
-      <ErrorCallout error={change.error} />
-    </div>
-  );
-}
-
 /** The centred upload area. Files go to the library; attach them to projects from their rows. */
-function AddFiles({ library, onUploaded, onChanged }) {
+function AddFiles({ library, onUploaded }) {
   const {
     documents,
     limits,
@@ -373,7 +329,6 @@ function AddFiles({ library, onUploaded, onChanged }) {
           onFiles={addFiles}
           uploading={upload.busy}
         />
-        <DefaultEmbedding library={library} onChanged={onChanged} />
         <p className="kadd__note">
           Text from your files, and the questions agents search with, are sent
           to each file&apos;s embedding provider
@@ -516,7 +471,7 @@ export function KnowledgePage({ onCountChanged }) {
         <Stat label="Passages" value={totals.passages} />
       </div>
 
-      <AddFiles library={library} onUploaded={reload} onChanged={loaded} />
+      <AddFiles library={library} onUploaded={reload} />
 
       <div className="kmain">
         <Panel

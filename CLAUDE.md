@@ -480,8 +480,10 @@ whenever a change departs from or extends the contract above — don't silently 
     the runtime gets the key of every embedding provider its files use. Old one-model
     snapshots still load.
   - **Console:** the Knowledge page has no side panel. The upload area is centred above
-    the table and uploads to the library only; files are attached to projects from
-    their rows. Each row has a model select that confirms inline before re-indexing.
+    the table, with no card around it, and uploads to the library only; files are
+    attached to projects from their rows. Each row has a model select that confirms
+    inline before re-indexing. The page has no default-model control: the default is
+    set by the API (first upload, or `PUT /knowledge/embedding`).
 
 ## Working style — verify-and-retry, always
 
