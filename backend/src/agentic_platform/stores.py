@@ -795,7 +795,8 @@ class MongoKnowledgeStore:
 
 # ---------------------------------------------------------------------------- usage
 UsageKind = Literal[
-    "run", "deployed_run", "planner", "assistant", "embedding_index", "embedding_query", "bigquery_query"
+    "run", "deployed_run", "planner", "assistant", "embedding_index", "embedding_query", "bigquery_query",
+    "model_check",
 ]
 
 
@@ -1064,6 +1065,76 @@ class MongoDataSourceStore:
             self._ensure_ready()
             doc = self._sources.find_one({"service_account": service_account}, {"tenant_id": 1})
         return doc["tenant_id"] if doc else None
+
+
+# ---------------------------------------------------------------------------- model capabilities
+class ModelCapability(BaseModel):
+    """What the platform measured about a model. Platform-wide: a model's abilities are
+    the same for every user."""
+
+    key: str  # provider/model
+    tool_calling: bool
+    checked_at: datetime = Field(default_factory=_now)
+    source: Literal["probe", "run"] = "probe"
+
+
+class ModelCapabilityStore(Protocol):
+    def get(self, key: str) -> ModelCapability | None: ...
+
+    def set(self, capability: ModelCapability) -> None: ...
+
+    def all(self) -> list[ModelCapability]: ...
+
+
+class InMemoryModelCapabilityStore:
+    def __init__(self) -> None:
+        self._items: dict[str, ModelCapability] = {}
+
+    def get(self, key: str) -> ModelCapability | None:
+        item = self._items.get(key)
+        return item.model_copy() if item else None
+
+    def set(self, capability: ModelCapability) -> None:
+        self._items[capability.key] = capability.model_copy()
+
+    def all(self) -> list[ModelCapability]:
+        return [i.model_copy() for i in self._items.values()]
+
+
+class MongoModelCapabilityStore:
+    """`model_capabilities`, one document per model (`_id` = provider/model)."""
+
+    def __init__(self, db: "Database"):
+        self._items = db["model_capabilities"]
+
+    def get(self, key: str) -> ModelCapability | None:
+        with _mongo_errors():
+            doc = self._items.find_one({"_id": key})
+        if not doc:
+            return None
+        doc["key"] = doc.pop("_id")
+        return ModelCapability.model_validate(doc)
+
+    def set(self, capability: ModelCapability) -> None:
+        body = capability.model_dump()
+        key = body.pop("key")
+        with _mongo_errors():
+            self._items.replace_one({"_id": key}, body, upsert=True)
+
+    def all(self) -> list[ModelCapability]:
+        with _mongo_errors():
+            docs = list(self._items.find({}))
+        out = []
+        for d in docs:
+            d["key"] = d.pop("_id")
+            out.append(ModelCapability.model_validate(d))
+        return out
+
+
+def make_capability_store() -> ModelCapabilityStore:
+    if MONGODB_URI:
+        return MongoModelCapabilityStore(mongo_database(MONGODB_URI, MONGODB_DB))
+    return InMemoryModelCapabilityStore()
 
 
 def make_datasource_store() -> DataSourceStore:

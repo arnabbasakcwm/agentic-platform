@@ -31,6 +31,9 @@ from .config import PROVIDER_ENV_VARS
 from .errors import DeployError, MissingProviderKeyError, MissingToolKeyError
 from .knowledge import SNAPSHOT_FILE, SNAPSHOT_VECTORS_FILE
 from .datasources import DATASOURCES_FILE
+
+# Models in the plan that can't call tools (their agents answer by JSON): a JSON list.
+MODELS_FILE = "models.json"
 from .tools import TOOL_ENV_VARS, uses_data, uses_knowledge
 
 logger = logging.getLogger(__name__)
@@ -211,6 +214,7 @@ def build_package(
     dependencies: Callable[[], Path] | None = None,
     knowledge: tuple[bytes, bytes] | None = None,
     datasources: bytes | None = None,
+    models: bytes | None = None,
 ) -> dict[str, int]:
     """Write the deployment zip for `plan` to `out_path`; returns its sizes in bytes.
     `knowledge` is the knowledge-base snapshot (knowledge.build_snapshot), if any."""
@@ -228,6 +232,8 @@ def build_package(
             _add_file(zf, SNAPSHOT_VECTORS_FILE, knowledge[1])
         if datasources is not None:
             _add_file(zf, DATASOURCES_FILE, datasources)
+        if models is not None:
+            _add_file(zf, MODELS_FILE, models)
         unzipped = sum(i.file_size for i in zf.infolist())
     zipped = out_path.stat().st_size
     if zipped > MAX_ZIPPED_BYTES or unzipped > MAX_UNZIPPED_BYTES:
@@ -272,6 +278,7 @@ def run_deployment(
     knowledge_snapshot: Callable[[], tuple[bytes, bytes] | None] | None = None,
     knowledge_embeddings: list[EmbeddingConfig] | EmbeddingConfig | None = None,
     data_snapshot: Callable[[], bytes | None] | None = None,
+    models_snapshot: bytes | None = None,
 ) -> None:
     """The background job: package, upload, provision, wait. Progress and the outcome are
     written to the project's deployment record; this never raises. `knowledge_snapshot`
@@ -304,6 +311,8 @@ def run_deployment(
                 extras["knowledge"] = snapshot
             if datasources is not None:
                 extras["datasources"] = datasources
+            if models_snapshot is not None:
+                extras["models"] = models_snapshot
             packager(project.plan, package, **extras)
 
             update(status="uploading")

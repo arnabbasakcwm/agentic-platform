@@ -51,6 +51,7 @@ from .config import (
     JWT_EXPIRES_MINUTES,
     MAX_AGENTS,
 )
+from . import capabilities as caps
 from . import datasources as ds
 from .deploy import build_package, remove_deployment, run_deployment, runtime_environment, runtime_name
 from .errors import (
@@ -62,6 +63,7 @@ from .errors import (
     DeployInProgressError,
     DeployNotConfiguredError,
     DataSourceError,
+    ModelCannotCallToolsError,
     DataSourceNotFoundError,
     DataSourceUnavailableError,
     DocumentNotFoundError,
@@ -92,12 +94,14 @@ from .graph_builder import (
 from .meta_planner_prompt import plan_project, revise_plan
 from .stores import (
     DataSource,
+    ModelCapability,
     ChatMessage,
     Deployment,
     KnowledgeDocument,
     ProjectRecord,
     UsageRecord,
     UserRecord,
+    make_capability_store,
     make_datasource_store,
     make_stores,
 )
@@ -133,6 +137,7 @@ app.add_middleware(
 
 _store, _users, _knowledge, _usage = make_stores()
 _datasources = make_datasource_store()
+_capabilities = make_capability_store()
 logger = logging.getLogger(__name__)
 
 
@@ -309,7 +314,13 @@ def _compiled_graph(project: ProjectRecord) -> Any:
     cached = _COMPILED.get(project.id)
     if cached is not None and cached[0] == project.plan_version:
         return cached[1]
-    graph = compile_graph(project.plan, _knowledge_context(project), _data_context(project))
+    problems = _tool_problems(project.plan, project.tenant_id)
+    if problems:
+        raise ModelCannotCallToolsError("; ".join(problems))
+    graph = compile_graph(
+        project.plan, _knowledge_context(project), _data_context(project),
+        _json_models(project.plan, project.tenant_id),
+    )
     _COMPILED[project.id] = (project.plan_version, graph)
     return graph
 
@@ -328,6 +339,100 @@ def _knowledge_context(project: ProjectRecord) -> kb.KnowledgeContext | None:
     if not _knowledge.list_documents(project.tenant_id, project.id):
         return None
     return kb.store_context(_knowledge, project.tenant_id, project.id, _embedder_for)
+
+
+# --------------------------------------------------------------------------- tool calling
+# One lock per model, so concurrent requests check a model once.
+_CHECK_LOCKS: dict[str, threading.Lock] = {}
+_CHECK_LOCKS_GUARD = threading.Lock()
+
+
+def _stored_tool_calling(provider: str, model: str) -> bool | None:
+    """True/False from what's known; None if this model hasn't been checked (or the check
+    is older than CHECK_VALID_FOR)."""
+    if not caps.needs_check(provider):
+        return True
+    item = _capabilities.get(caps.model_key(provider, model))
+    if item is None or datetime.now(timezone.utc) - _aware(item.checked_at) > caps.CHECK_VALID_FOR:
+        return None
+    return item.tool_calling
+
+
+def _aware(moment: datetime) -> datetime:
+    return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+
+
+def _tool_calling(provider: str, model: str, tenant_id: str | None = None) -> bool | None:
+    """Whether the model can call tools, checking it once (one tiny call, counted to the
+    tenant who triggered it) if nobody has yet. None: the check was inconclusive."""
+    known = _stored_tool_calling(provider, model)
+    if known is not None:
+        return known
+    key = caps.model_key(provider, model)
+    with _CHECK_LOCKS_GUARD:
+        lock = _CHECK_LOCKS.setdefault(key, threading.Lock())
+    with lock:
+        known = _stored_tool_calling(provider, model)  # checked while we waited
+        if known is not None:
+            return known
+        collector = UsageCollector()
+        verdict = caps.probe_tool_calling(provider, model, collector)
+        if tenant_id is not None:
+            _record_usage(tenant_id, None, collector.entries(), run_id=uuid.uuid4().hex)
+        if verdict is not None:
+            _capabilities.set(ModelCapability(key=key, tool_calling=verdict, source="probe"))
+            _COMPILED.clear()
+        return verdict
+
+
+def _json_models(plan: AgentPlan, tenant_id: str | None = None) -> set[str]:
+    """The plan's models that can't call tools: their agents answer by JSON."""
+    out = set()
+    for agent in plan.agents:
+        if _tool_calling(agent.llm.provider, agent.llm.model, tenant_id) is False:
+            out.add(caps.model_key(agent.llm.provider, agent.llm.model))
+    return out
+
+
+def _tool_problems(plan: AgentPlan, tenant_id: str | None = None) -> list[str]:
+    """Agents given a job their model can't do: tools, or routing the team."""
+    problems = []
+    for agent in plan.agents:
+        needs = bool(agent.tools) or agent.id == plan.supervisor_id
+        if needs and _tool_calling(agent.llm.provider, agent.llm.model, tenant_id) is False:
+            job = "has tools" if agent.tools else "routes the team (supervisor)"
+            problems.append(
+                f"agent '{agent.id}' {job}, but {agent.llm.model} can't call tools; remove its tools "
+                "or choose a model that can call tools"
+            )
+    return problems
+
+
+def _flag_tools(llms: list[dict[str, Any]], tenant_id: str | None, check: bool) -> list[dict[str, Any]]:
+    """The planner's model options, marked (by the server, never the caller) where a model
+    can't call tools."""
+    out = []
+    for m in llms:
+        provider, model = str(m.get("provider")), str(m.get("model"))
+        verdict = _tool_calling(provider, model, tenant_id) if check else _stored_tool_calling(provider, model)
+        entry = {"provider": provider, "model": model}
+        if verdict is False:
+            entry["tools"] = False
+        out.append(entry)
+    return out
+
+
+def _learn_from_errors(project: ProjectRecord, errors: list[dict[str, Any]]) -> None:
+    """A run that failed because a model can't call tools records that, so it's disabled
+    for agents with tools from now on."""
+    agents = {a.id: a for a in project.plan.agents}
+    for e in errors or []:
+        agent = agents.get(e.get("agent_id"))
+        if agent and "ModelCannotCallToolsError" in str(e.get("error", "")) and caps.needs_check(agent.llm.provider):
+            _capabilities.set(ModelCapability(
+                key=caps.model_key(agent.llm.provider, agent.llm.model), tool_calling=False, source="run",
+            ))
+            _COMPILED.clear()
 
 
 # One BigQuery client per (service account, billing project) per process: each holds
@@ -461,6 +566,21 @@ def _reembed(tenant_id: str, document_id: str, config: EmbeddingConfig) -> None:
         )
     finally:
         _record_usage(tenant_id, None, collector.entries(), run_id=uuid.uuid4().hex)
+
+
+# --------------------------------------------------------------------------- model checks
+class ModelCheckRequest(BaseModel):
+    provider: str = Field(min_length=1, max_length=40)
+    model: str = Field(min_length=1, max_length=200)
+
+
+@app.post("/models/check")
+def check_model(req: ModelCheckRequest, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """Whether a model can call tools. A Bedrock model nobody has checked yet gets one tiny
+    test call (counted on your Usage page); the result is kept for everyone for 30 days."""
+    if not _model_allowed(req.provider, req.model):
+        raise KnowledgeError(f"not an available model: {req.provider}/{req.model}", status=422)
+    return {"provider": req.provider, "model": req.model, "tool_calling": _tool_calling(req.provider, req.model, user.id)}
 
 
 # --------------------------------------------------------------------------- data sources
@@ -801,9 +921,15 @@ def list_providers() -> dict[str, Any]:
         }
         for provider, model in DEFAULT_MODELS.items()
     ]
+    for p in providers:
+        p["tool_calling"] = _stored_tool_calling(p["provider"], p["model"])
     # Amazon Bedrock: whatever this AWS account can use, called with IAM credentials.
     if aws_credentials_available():
-        providers += [{**m, "available": True, "group": "Amazon Bedrock"} for m in bedrock_models()]
+        providers += [
+            {**m, "available": True, "group": "Amazon Bedrock",
+             "tool_calling": _stored_tool_calling("bedrock", m["model"])}
+            for m in bedrock_models()
+        ]
     return {"providers": providers}
 
 
@@ -846,6 +972,8 @@ def create_project(
     ]
     if unknown:
         raise KnowledgeError(f"not an available model: {', '.join(unknown)}", status=422)
+    # Check untested models now, so the planner knows which can't take tools.
+    available_llms = _flag_tools(available_llms, user.id, check=True)
     # Side-effecting tools (network egress, third-party APIs) are excluded by default;
     # a caller opts a project into one by naming it explicitly here.
     available_tools = req.available_tools if req.available_tools is not None else default_tool_names()
@@ -984,6 +1112,9 @@ def update_agent_settings(
     plan = AgentPlan.model_validate(plan.model_dump())  # same integrity checks as any plan
     if plan == project.plan:
         return _project_body(project)
+    tool_problems = _tool_problems(plan, user.id)
+    if tool_problems:
+        raise ModelCannotCallToolsError("; ".join(tool_problems))
     used_external = {t for a in plan.agents for t in a.tools} & SIDE_EFFECT_TOOLS
     enabled = sorted(set(project.side_effect_tools_enabled) | used_external)
     updated = _store.update_plan(project_id, plan, side_effect_tools_enabled=enabled)
@@ -1036,7 +1167,7 @@ def revise_project(
             request=req.message,
             history=[(m.role, m.content) for m in project.conversation],
             available_tools=allowed_tools,
-            available_llms=allowed_llms,
+            available_llms=_flag_tools(allowed_llms, user.id, check=False),
             usage=collector,
             data_tables=[t.id for s in _attached_sources(project) for t in s.tables],
         )
@@ -1085,6 +1216,7 @@ def run_project(
     finally:
         # Whatever was used up to a timeout is still spent.
         _record_usage(user.id, project_id, collector.entries(), run_id=uuid.uuid4().hex)
+    _learn_from_errors(project, result["errors"])
     return {
         "project_id": project_id,
         "outputs": result["outputs"],
@@ -1116,6 +1248,7 @@ def run_project_stream(
             for event, data in run_graph_events(graph, req.input, project.plan.bounds, collector):
                 if event in ("run_completed", "run_failed"):
                     data = {**data, "usage": usage_mod.summarize(collector.entries())}
+                    _learn_from_errors(project, data.get("errors") or [])
                 yield f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
         finally:
             # Also runs when the client disconnects mid-run: tokens used so far count.
@@ -1141,6 +1274,7 @@ def invoke_agent(
         result = run_single_agent(
             project.plan, agent_id, req.input, req.upstream_outputs, _knowledge_context(project),
             usage=collector, data=_data_context(project),
+            json_models=_json_models(project.plan, user.id),
         )
     except KeyError:
         return JSONResponse(
@@ -1653,8 +1787,10 @@ def deploy_project(
         usage_synced_until=previous.usage_synced_until if previous else None,
     )
     _store.set_deployment(project_id, deployment)
+    json_models = sorted(_json_models(project.plan, user.id))
     background.add_task(
-        run_deployment, project_id, _store, cloud, _package_builder, snapshot, embeddings, data_snapshot
+        run_deployment, project_id, _store, cloud, _package_builder, snapshot, embeddings, data_snapshot,
+        json.dumps(json_models).encode("utf-8") if json_models else None,
     )
     return {"deployment": _deployment_body(_get_project(project_id, user))}
 
@@ -1820,6 +1956,11 @@ def _handle_deploy(_req: Request, exc: DeployError):
 @app.exception_handler(KnowledgeError)
 def _handle_knowledge(_req: Request, exc: KnowledgeError):
     return _error_response(exc.status, "KnowledgeRejected", str(exc))
+
+
+@app.exception_handler(ModelCannotCallToolsError)
+def _handle_cannot_call_tools(_req: Request, exc: ModelCannotCallToolsError):
+    return _error_response(422, "ModelCannotCallTools", str(exc))
 
 
 @app.exception_handler(DataSourceError)

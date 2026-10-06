@@ -461,3 +461,16 @@ def test_data_sources_are_scoped_and_updatable(sources):
     assert sources.detach_project("u1", "p1") == 1 and sources.get("u1", "s1").project_ids == []
     assert sources.delete("u2", "s1") is False and sources.delete("u1", "s1") is True
     assert sources.list("u1") == []
+
+
+# ------------------------------------------------------------------ model capabilities
+def test_model_capabilities_round_trip(backend):
+    from agentic_platform.stores import InMemoryModelCapabilityStore, ModelCapability, MongoModelCapabilityStore
+
+    store = InMemoryModelCapabilityStore() if backend is None else MongoModelCapabilityStore(backend)
+    assert store.get("bedrock/google.gemma-3-12b-it") is None
+    store.set(ModelCapability(key="bedrock/google.gemma-3-12b-it", tool_calling=True))
+    store.set(ModelCapability(key="bedrock/google.gemma-3-12b-it", tool_calling=False, source="run"))
+    item = store.get("bedrock/google.gemma-3-12b-it")
+    assert (item.tool_calling, item.source) == (False, "run")
+    assert [i.key for i in store.all()] == ["bedrock/google.gemma-3-12b-it"]

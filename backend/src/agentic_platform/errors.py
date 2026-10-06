@@ -193,6 +193,14 @@ class QueryRefusedError(DataSourceError):
         super().__init__(message, status=422, error_type="QueryRefused")
 
 
+class ModelCannotCallToolsError(PlatformError):
+    """A model that can't call tools was given a job that needs it (tools, routing), or
+    returned no structured answer where tool calling was expected."""
+
+    def __init__(self, message: str):
+        super().__init__(message)
+
+
 class PlannerError(PlatformError):
     """Raised when the meta-planner cannot produce a valid AgentPlan within the retry ceiling."""
 

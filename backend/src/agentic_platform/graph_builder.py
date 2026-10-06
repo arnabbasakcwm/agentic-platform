@@ -9,6 +9,7 @@ uniform error surface.
 
 from __future__ import annotations
 
+import json
 import logging
 import operator
 import os
@@ -34,6 +35,7 @@ from pydantic import BaseModel, Field
 from .agent_schema import AgentOutput, AgentPlan, AgentSpec, EmbeddingConfig, LLMConfig, RunBounds
 from .config import BEDROCK_REGION, EMBEDDING_MODELS, MOONSHOT_BASE_URL, PROVIDER_ENV_VARS, embedding_option
 from .errors import (
+    ModelCannotCallToolsError,
     AgentExecutionError,
     MissingProviderKeyError,
     UnsupportedProviderError,
@@ -279,6 +281,7 @@ def _run_agent_once(
     knowledge: KnowledgeContext | None = None,
     usage: UsageCollector | None = None,
     data: DataContext | None = None,
+    json_answer: bool = False,
 ) -> AgentOutput:
     """One full attempt for an agent node: bounded tool loop, then structured output.
 
@@ -332,6 +335,10 @@ def _run_agent_once(
                     ToolMessage(content=str(result), tool_call_id=tc["id"])
                 )
 
+    if json_answer:
+        # The model can't call tools (capabilities.py), so it can't use structured output
+        # either: ask for the same schema as JSON, and validate it exactly as strictly.
+        return _json_answer(llm, messages, call_config)
     structured = llm.with_structured_output(AgentOutput)
     messages.append(
         HumanMessage(
@@ -343,6 +350,8 @@ def _run_agent_once(
         )
     )
     output = structured.invoke(messages, config=call_config)
+    if output is None:
+        raise ModelCannotCallToolsError(_no_tools_message(spec.llm))
     if _looks_flattened(output.content):
         # Models sometimes ignore the instruction and return the whole answer on one
         # line, which renders as a single paragraph. Say exactly what's wrong and ask
@@ -359,9 +368,45 @@ def _run_agent_once(
             )
         )
         retry = structured.invoke(messages, config=call_config)
-        if not _looks_flattened(retry.content):
+        if retry is not None and not _looks_flattened(retry.content):
             output = retry
     return output
+
+
+def _no_tools_message(llm: LLMConfig) -> str:
+    return (
+        f"model {llm.model} didn't return a structured answer: it can't call tools, which this "
+        "step needs. Choose a model that can call tools, or remove this agent's tools."
+    )
+
+
+_FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
+
+
+def _json_answer(llm: BaseChatModel, messages: list[AnyMessage], call_config: RunnableConfig) -> AgentOutput:
+    """The final answer from a model without tool calling: JSON matching AgentOutput,
+    validated by Pydantic. A ValidationError goes to the node's retry loop, which feeds
+    the exact error back to the agent."""
+    schema = json.dumps(AgentOutput.model_json_schema())
+    messages.append(
+        HumanMessage(
+            content=(
+                "Now give your final answer as ONLY a JSON object — no other text, no code fences — "
+                f"matching this JSON schema:\n{schema}\n"
+                "Write `content` as Markdown, with \\n line breaks between headings, list items "
+                "and paragraphs."
+            )
+        )
+    )
+    reply = llm.invoke(messages, config=call_config)
+    text = reply.content if isinstance(reply.content, str) else "".join(
+        part.get("text", "") if isinstance(part, dict) else str(part) for part in reply.content
+    )
+    text = _FENCE.sub("", text.strip())
+    start, end = text.find("{"), text.rfind("}")
+    if start != -1 and end > start:
+        text = text[start:end + 1]
+    return AgentOutput.model_validate_json(text)
 
 
 # Block-level Markdown that should start a line: headings, bullets, numbered items.
@@ -399,7 +444,10 @@ def _make_node(
     include_all_outputs: bool = False,
     knowledge: KnowledgeContext | None = None,
     data: DataContext | None = None,
+    json_models: frozenset[str] = frozenset(),
 ):
+    json_answer = f"{spec.llm.provider}/{spec.llm.model}" in json_models
+
     def node(state: GraphState, config: Optional[RunnableConfig] = None) -> dict[str, Any]:
         emit = _emitter(config)
         usage = _usage(config)
@@ -446,7 +494,7 @@ def _make_node(
                     )
                 )
             try:
-                output = _run_agent_once(llm, spec, attempt_messages, bounds, knowledge, usage, data)
+                output = _run_agent_once(llm, spec, attempt_messages, bounds, knowledge, usage, data, json_answer)
                 dumped = output.model_dump()
                 emit("node_completed", node=spec.id, duration_ms=elapsed_ms(),
                      attempts=attempt, output=dumped,
@@ -504,7 +552,12 @@ class _SupervisorDecision(BaseModel):
     reason: str = Field(default="", description="brief justification for the choice")
 
 
-def compile_graph(plan: AgentPlan, knowledge: KnowledgeContext | None = None, data: DataContext | None = None):
+def compile_graph(
+    plan: AgentPlan,
+    knowledge: KnowledgeContext | None = None,
+    data: DataContext | None = None,
+    json_models: set[str] | frozenset[str] | None = None,
+):
     """Compile a validated AgentPlan into a runnable LangGraph graph.
 
     Dispatches on orchestration pattern. All three share the same node implementation,
@@ -522,23 +575,39 @@ def compile_graph(plan: AgentPlan, knowledge: KnowledgeContext | None = None, da
     # discovering it mid-run.
     for spec in plan.agents:
         get_tools(spec.tools, knowledge, data)
+    # Models that can't call tools answer by JSON; they can't be given tools or routing.
+    json_models = frozenset(json_models or ())
+    for spec in plan.agents:
+        if f"{spec.llm.provider}/{spec.llm.model}" in json_models and (
+            spec.tools or spec.id == plan.supervisor_id
+        ):
+            job = "has tools" if spec.tools else "is the supervisor"
+            raise ModelCannotCallToolsError(
+                f"agent '{spec.id}' {job}, but its model {spec.llm.model} can't call tools; "
+                "remove its tools or choose a model that can call tools"
+            )
 
     if plan.orchestration_pattern == "sequential":
-        return _compile_sequential(plan, knowledge, data)
+        return _compile_sequential(plan, knowledge, data, json_models)
     if plan.orchestration_pattern == "parallel":
-        return _compile_parallel(plan, knowledge, data)
+        return _compile_parallel(plan, knowledge, data, json_models)
     if plan.orchestration_pattern == "supervisor":
-        return _compile_supervisor(plan, knowledge, data)
+        return _compile_supervisor(plan, knowledge, data, json_models)
     raise NotImplementedError(
         f"orchestration pattern '{plan.orchestration_pattern}' is not supported"
     )
 
 
-def _compile_sequential(plan: AgentPlan, knowledge: KnowledgeContext | None = None, data: DataContext | None = None):
+def _compile_sequential(
+    plan: AgentPlan,
+    knowledge: KnowledgeContext | None = None,
+    data: DataContext | None = None,
+    json_models: frozenset[str] = frozenset(),
+):
     ordered = _topological_order(plan.agents)
     builder = StateGraph(GraphState)
     for spec in ordered:
-        builder.add_node(spec.id, _make_node(spec, plan.bounds, knowledge=knowledge, data=data))
+        builder.add_node(spec.id, _make_node(spec, plan.bounds, knowledge=knowledge, data=data, json_models=json_models))
 
     builder.add_edge(START, ordered[0].id)
     for i, spec in enumerate(ordered):
@@ -555,7 +624,12 @@ def _compile_sequential(plan: AgentPlan, knowledge: KnowledgeContext | None = No
     return builder.compile()
 
 
-def _compile_parallel(plan: AgentPlan, knowledge: KnowledgeContext | None = None, data: DataContext | None = None):
+def _compile_parallel(
+    plan: AgentPlan,
+    knowledge: KnowledgeContext | None = None,
+    data: DataContext | None = None,
+    json_models: frozenset[str] = frozenset(),
+):
     """Wire the dependency DAG directly: agents with no deps fan out from START and run
     concurrently; agents with deps run once their deps complete (the merge/synthesis
     step). Failure isolation is per-branch via the node's dependency gating, not a global
@@ -566,7 +640,7 @@ def _compile_parallel(plan: AgentPlan, knowledge: KnowledgeContext | None = None
 
     builder = StateGraph(GraphState)
     for spec in plan.agents:
-        builder.add_node(spec.id, _make_node(spec, plan.bounds, knowledge=knowledge, data=data))
+        builder.add_node(spec.id, _make_node(spec, plan.bounds, knowledge=knowledge, data=data, json_models=json_models))
 
     for spec in plan.agents:
         if not spec.depends_on:
@@ -618,6 +692,8 @@ def _make_supervisor(sup_spec: AgentSpec, worker_ids: list[str], cap: int):
                 else {}
             )
             decision = llm.with_structured_output(_SupervisorDecision).invoke(messages, config=call_config)
+            if decision is None:
+                raise ModelCannotCallToolsError(_no_tools_message(sup_spec.llm))
             nxt = decision.next_agent.strip()
             if nxt not in worker_ids and nxt != "FINISH":
                 nxt = "FINISH"  # invalid routing target -> finish safely rather than loop
@@ -636,7 +712,12 @@ def _make_supervisor(sup_spec: AgentSpec, worker_ids: list[str], cap: int):
     return node
 
 
-def _compile_supervisor(plan: AgentPlan, knowledge: KnowledgeContext | None = None, data: DataContext | None = None):
+def _compile_supervisor(
+    plan: AgentPlan,
+    knowledge: KnowledgeContext | None = None,
+    data: DataContext | None = None,
+    json_models: frozenset[str] = frozenset(),
+):
     workers = [a for a in plan.agents if a.id != plan.supervisor_id]
     worker_ids = [w.id for w in workers]
     sup_spec = next(a for a in plan.agents if a.id == plan.supervisor_id)
@@ -646,7 +727,7 @@ def _compile_supervisor(plan: AgentPlan, knowledge: KnowledgeContext | None = No
     builder.add_node(sup_spec.id, _make_supervisor(sup_spec, worker_ids, cap))
     for w in workers:
         # Supervisor workers see all accumulated outputs (they carry no depends_on wiring).
-        builder.add_node(w.id, _make_node(w, plan.bounds, include_all_outputs=True, knowledge=knowledge, data=data))
+        builder.add_node(w.id, _make_node(w, plan.bounds, include_all_outputs=True, knowledge=knowledge, data=data, json_models=json_models))
         builder.add_edge(w.id, sup_spec.id)  # control returns to the router after each worker
 
     builder.add_edge(START, sup_spec.id)
@@ -681,6 +762,7 @@ def run_single_agent(
     knowledge: KnowledgeContext | None = None,
     usage: UsageCollector | None = None,
     data: DataContext | None = None,
+    json_models: set[str] | frozenset[str] | None = None,
 ) -> dict[str, Any]:
     """Run one agent node in isolation (the per-agent endpoint path).
 
@@ -690,7 +772,7 @@ def run_single_agent(
     spec = next((a for a in plan.agents if a.id == agent_id), None)
     if spec is None:
         raise KeyError(agent_id)
-    node = _make_node(spec, plan.bounds, knowledge=knowledge, data=data)
+    node = _make_node(spec, plan.bounds, knowledge=knowledge, data=data, json_models=frozenset(json_models or ()))
     state = initial_state(task_input)
     state["outputs"] = dict(upstream_outputs or {})
     usage = usage if usage is not None else UsageCollector()

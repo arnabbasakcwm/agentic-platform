@@ -401,7 +401,7 @@ def test_the_runtime_builds_a_data_context_from_its_snapshot(monkeypatch, tmp_pa
     (tmp_path / ds.DATASOURCES_FILE).write_bytes(ds.snapshot([_config()]))
     captured = {}
 
-    def fake_compile(plan, knowledge=None, data=None):
+    def fake_compile(plan, knowledge=None, data=None, json_models=None):
         captured["data"] = data
         return object()
 

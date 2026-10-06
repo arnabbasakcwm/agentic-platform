@@ -103,7 +103,12 @@ def _options_block(available_tools: list[str], available_llms: list[dict[str, An
             parts.append(f"  - {name}: {TOOL_SUMMARIES[name]}")
     parts.append("\nAVAILABLE LLM OPTIONS (choose provider+model from these only):")
     for opt in available_llms:
-        parts.append(f"  - provider={opt['provider']}, model={opt['model']}")
+        note = (
+            " (CANNOT CALL TOOLS: agents on this model get no tools and can't be the supervisor)"
+            if opt.get("tools") is False
+            else ""
+        )
+        parts.append(f"  - provider={opt['provider']}, model={opt['model']}{note}")
     return parts
 
 
@@ -208,6 +213,8 @@ def _semantic_check(
         )
     tool_set = set(available_tools)
     allowed_llms = {(o["provider"], o["model"]) for o in available_llms}
+    # Set by the server from measured capabilities (capabilities.py), never by the caller.
+    no_tools = {(o["provider"], o["model"]) for o in available_llms if o.get("tools") is False}
     for agent in plan.agents:
         unknown_tools = [t for t in agent.tools if t not in tool_set]
         if unknown_tools:
@@ -220,6 +227,12 @@ def _semantic_check(
             raise ValueError(
                 f"agent '{agent.id}' uses llm {choice} which is not an available option. "
                 f"Allowed: {sorted(allowed_llms)}"
+            )
+        if choice in no_tools and (agent.tools or agent.id == plan.supervisor_id):
+            job = "has tools" if agent.tools else "is the supervisor"
+            raise ValueError(
+                f"agent '{agent.id}' {job} but its model {choice[1]} can't call tools; give it no "
+                "tools (and don't make it the supervisor), or choose a model that can call tools"
             )
 
 

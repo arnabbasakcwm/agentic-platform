@@ -78,6 +78,14 @@ def _snapshot_context(directory: Path | None) -> KnowledgeContext | None:
     return snapshot_context(groups, cached_embedders(lambda config: get_embeddings(config)))
 
 
+def _json_models(directory: Path | None) -> set[str]:
+    """Models in this plan that can't call tools (written at deploy time)."""
+    path = directory / "models.json" if directory is not None else None
+    if path is None or not path.exists():
+        return set()
+    return set(json.loads(path.read_text(encoding="utf-8")))
+
+
 def create_app(plan_data: dict[str, Any], knowledge_dir: Path | None = None) -> FastAPI:
     """Build the runtime app for one plan. The plan is validated and compiled here, at
     startup, so a broken deployment fails its health check instead of its first call.
@@ -86,7 +94,8 @@ def create_app(plan_data: dict[str, Any], knowledge_dir: Path | None = None) -> 
     knowledge = _snapshot_context(knowledge_dir)
     sources = ds.load_snapshot(knowledge_dir) if knowledge_dir is not None else None
     data = ds.config_context(sources) if sources else None
-    graph = compile_graph(plan, knowledge, data)
+    json_models = _json_models(knowledge_dir)
+    graph = compile_graph(plan, knowledge, data, json_models)
     started = int(time.time())
 
     app = FastAPI(title="Agentic Platform runtime", docs_url=None, redoc_url=None)
@@ -109,7 +118,8 @@ def create_app(plan_data: dict[str, Any], knowledge_dir: Path | None = None) -> 
         if req.agent_id is not None:
             try:
                 result = run_single_agent(
-                    plan, req.agent_id, req.input, req.upstream_outputs, knowledge, usage=usage, data=data
+                    plan, req.agent_id, req.input, req.upstream_outputs, knowledge, usage=usage, data=data,
+                    json_models=json_models,
                 )
             except KeyError:
                 return _error(404, "AgentNotFound", f"agent '{req.agent_id}' is not in this plan")
