@@ -162,6 +162,17 @@ class AgentCoreCloud:
                     "Condition": {"StringEquals": {"cloudwatch:namespace": "bedrock-agentcore"}},
                 },
                 {
+                    # Agents and embeddings on Amazon Bedrock run as this role. Cross-region
+                    # inference profiles (global./apac.) route to other regions' models.
+                    "Sid": "InvokeBedrockModels",
+                    "Effect": "Allow",
+                    "Action": ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
+                    "Resource": [
+                        "arn:aws:bedrock:*::foundation-model/*",
+                        f"arn:aws:bedrock:*:{account}:inference-profile/*",
+                    ],
+                },
+                {
                     "Sid": "GetAgentAccessToken",
                     "Effect": "Allow",
                     "Action": [

@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { Icon } from "../../components/icons.jsx";
+import { ModelOptions } from "../../components/ModelOptions.jsx";
 import { ActionBar, Button, Callout, ErrorCallout, LinkButton, MetaList, Panel, Pill } from "../../components/ui.jsx";
 import { api } from "../../lib/api.js";
 import { fullDate } from "../../lib/format.js";
@@ -90,12 +91,7 @@ function AgentSettings({ project, tools, providers, onSaved, savedVersion }) {
           disabled={save.busy}
         >
           <option value="">Use one model for all…</option>
-          {options.map((o) => (
-            <option key={o.key} value={o.key} disabled={o.available === false}>
-              {providerLabel(o.provider)} · {o.model}
-              {o.available === false ? " (no API key)" : ""}
-            </option>
-          ))}
+          <ModelOptions options={options} isDisabled={(o) => o.available === false} />
         </select>
       }
       flush
@@ -114,12 +110,10 @@ function AgentSettings({ project, tools, providers, onSaved, savedVersion }) {
               <label className="agentset__model">
                 <span className="sr-only">Model for {agent.id}</span>
                 <select value={d.model} onChange={(e) => setAgent(agent.id, { model: e.target.value })} disabled={save.busy}>
-                  {options.map((o) => (
-                    <option key={o.key} value={o.key} disabled={o.available === false && o.key !== d.model}>
-                      {providerLabel(o.provider)} · {o.model}
-                      {o.available === false ? " (no API key)" : ""}
-                    </option>
-                  ))}
+                  <ModelOptions
+                    options={options}
+                    isDisabled={(o) => o.available === false && o.key !== d.model}
+                  />
                 </select>
               </label>
               {isRouter ? (

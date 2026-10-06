@@ -102,8 +102,15 @@ for (const scheme of ["light", "dark"]) {
     await expect(tools.getByRole("button", { name: "wikipedia" })).toHaveAttribute("aria-pressed", "true");
     await expect(editor.getByText("External access")).toBeVisible();
     await expect(editor).toContainText("1 agent changed — saving makes plan v3");
+
     await page.screenshot({ path: `e2e/screenshots/brief-editor-${scheme}.png`, fullPage: true });
     expect(await axeProblems(page, "brief editor")).toEqual([]);
+
+    // Amazon Bedrock models sit in their own group in the menu.
+    const select = editor.getByLabel("Model for travel_advisor");
+    await expect(select.locator('optgroup[label="Amazon Bedrock"] option')).toHaveCount(3);
+    await select.selectOption("bedrock/in.anthropic.claude-haiku-4-5-20251001-v1:0");
+    await expect(editor).toContainText("2 agents changed");
 
     // Reset discards; then save for real.
     await editor.getByRole("button", { name: "Reset" }).click();

@@ -40,7 +40,9 @@ from .config import (
     DEFAULT_MODELS,
     DEFAULT_PROVIDER,
     EMBEDDING_MODELS,
+    EMBEDDING_OPTIONS,
     PROVIDER_ENV_VARS,
+    embedding_option,
     JWT_EXPIRES_MINUTES,
     MAX_AGENTS,
 )
@@ -68,7 +70,9 @@ from .errors import (
     UnknownToolError,
     UnsupportedProviderError,
 )
+from .bedrock_catalog import bedrock_models, is_bedrock_model, recommended_bedrock_models
 from .graph_builder import (
+    aws_credentials_available,
     compile_graph,
     embedding_available,
     get_embeddings,
@@ -317,9 +321,17 @@ def _offered_tools(project: ProjectRecord) -> list[str]:
 
 def _embedding_options() -> list[dict[str, Any]]:
     return [
-        {"provider": p, "model": m, "available": embedding_available(p)}
-        for p, m in EMBEDDING_MODELS.items()
+        {**o, "available": embedding_available(str(o["provider"]))}
+        for o in EMBEDDING_OPTIONS
     ]
+
+
+def _model_allowed(provider: str, model: str) -> bool:
+    """A model the platform offers: a provider's default, or a Bedrock model this AWS
+    account can use (checked live — never trusted from the client)."""
+    if provider == "bedrock":
+        return is_bedrock_model(model)
+    return DEFAULT_MODELS.get(provider) == model
 
 
 def _default_embedding(project: ProjectRecord | None) -> EmbeddingConfig:
@@ -485,18 +497,20 @@ def list_tools() -> dict[str, Any]:
 def list_providers() -> dict[str, Any]:
     """Selectable provider/model pairs, with the platform default marked, and whether
     this server has the provider's API key (a model without one can't run)."""
-    return {
-        "providers": [
-            {
-                "provider": provider,
-                "model": model,
-                "default": provider == DEFAULT_PROVIDER,
-                "available": provider not in PROVIDER_ENV_VARS
-                or any(os.environ.get(v) for v in PROVIDER_ENV_VARS[provider]),
-            }
-            for provider, model in DEFAULT_MODELS.items()
-        ]
-    }
+    providers = [
+        {
+            "provider": provider,
+            "model": model,
+            "default": provider == DEFAULT_PROVIDER,
+            "available": provider not in PROVIDER_ENV_VARS
+            or any(os.environ.get(v) for v in PROVIDER_ENV_VARS[provider]),
+        }
+        for provider, model in DEFAULT_MODELS.items()
+    ]
+    # Amazon Bedrock: whatever this AWS account can use, called with IAM credentials.
+    if aws_credentials_available():
+        providers += [{**m, "available": True, "group": "Amazon Bedrock"} for m in bedrock_models()]
+    return {"providers": providers}
 
 
 @app.post("/auth/register", status_code=201)
@@ -532,6 +546,12 @@ def create_project(
     available_llms = req.available_llms or [
         {"provider": DEFAULT_PROVIDER, "model": DEFAULT_MODELS[DEFAULT_PROVIDER]}
     ]
+    unknown = [
+        f"{m.get('provider')}/{m.get('model')}" for m in available_llms
+        if not _model_allowed(str(m.get("provider")), str(m.get("model")))
+    ]
+    if unknown:
+        raise KnowledgeError(f"not an available model: {', '.join(unknown)}", status=422)
     # Side-effecting tools (network egress, third-party APIs) are excluded by default;
     # a caller opts a project into one by naming it explicitly here.
     available_tools = req.available_tools if req.available_tools is not None else default_tool_names()
@@ -630,9 +650,7 @@ def update_agent_settings(
     version, which has to be compiled again."""
     project = _get_project(project_id, user)
     agents = {a.id: a for a in project.plan.agents}
-    allowed_models = {(p, m) for p, m in DEFAULT_MODELS.items()} | {
-        (a.llm.provider, a.llm.model) for a in project.plan.agents
-    }
+    current_models = {(a.llm.provider, a.llm.model) for a in project.plan.agents}
     has_knowledge = bool(_knowledge.list_documents(user.id, project_id))
     problems: list[str] = []
     updates: dict[str, Any] = {}
@@ -641,7 +659,7 @@ def update_agent_settings(
         if agent is None:
             problems.append(f"no agent '{change.id}' in this plan")
             continue
-        if (change.provider, change.model) not in allowed_models:
+        if (change.provider, change.model) not in current_models and not _model_allowed(change.provider, change.model):
             problems.append(f"{change.provider}/{change.model} isn't one of the available models")
         unknown = [t for t in change.tools if t not in TOOL_REGISTRY]
         if unknown:
@@ -698,6 +716,7 @@ def revise_project(
     # already opted into them — a chat message is not an opt-in.
     allowed_tools = _offered_tools(project)
     allowed_llms = [{"provider": p, "model": m} for p, m in DEFAULT_MODELS.items()]
+    allowed_llms += [{"provider": "bedrock", "model": m["model"]} for m in recommended_bedrock_models()]
     for agent in project.plan.agents:
         current = {"provider": agent.llm.provider, "model": agent.llm.model}
         if current not in allowed_llms:
@@ -1096,7 +1115,7 @@ def set_embedding(
 ) -> dict[str, Any]:
     """Change your library's embedding model. Every stored passage is re-embedded in the
     background (202); no file needs uploading again."""
-    if EMBEDDING_MODELS.get(config.provider) != config.model:
+    if embedding_option(config.provider, config.model) is None:
         raise KnowledgeError(
             f"unknown embedding model; choose one of {_embedding_options()}", status=422
         )

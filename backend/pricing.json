@@ -48,11 +48,25 @@
       "source_url": "https://console.groq.com/docs/models",
       "checked_on": "2026-10-06",
       "notes": "Groq on-demand pricing."
+    },
+    "bedrock/moonshotai.kimi-k2.5": {
+      "input_per_1m": 0.72,
+      "output_per_1m": 3.6,
+      "source_url": "https://aws.amazon.com/bedrock/pricing/",
+      "checked_on": "2026-10-06",
+      "notes": "Amazon Bedrock on-demand, Asia Pacific (Mumbai)."
     }
   },
   "unpriced": {
     "google_genai/gemini-embedding-001": "Not listed on the Gemini API pricing page on 2026-10-05 (it lists Gemini Embedding 2 instead); add its price here once confirmed.",
     "moonshot/kimi-k3": "Not checked; add from Moonshot's pricing page before relying on cost.",
-    "groq/llama-3.3-70b-versatile": "Enterprise-only on Groq since at least 2026-10-06 (pricing 'contact sales'); standard keys get model_not_found."
+    "groq/llama-3.3-70b-versatile": "Enterprise-only on Groq since at least 2026-10-06 (pricing 'contact sales'); standard keys get model_not_found.",
+    "bedrock/global.anthropic.claude-sonnet-4-6": "Bedrock price for Asia Pacific (Mumbai) not confirmed on aws.amazon.com/bedrock/pricing on 2026-10-06 (the page only partly loaded); add it from the AWS pricing calculator.",
+    "bedrock/in.anthropic.claude-haiku-4-5-20251001-v1:0": "Bedrock price for Asia Pacific (Mumbai) not confirmed on aws.amazon.com/bedrock/pricing on 2026-10-06 (the page only partly loaded); add it from the AWS pricing calculator.",
+    "bedrock/apac.amazon.nova-pro-v1:0": "Bedrock price for Asia Pacific (Mumbai) not confirmed on aws.amazon.com/bedrock/pricing on 2026-10-06 (the page only partly loaded); add it from the AWS pricing calculator.",
+    "bedrock/apac.amazon.nova-lite-v1:0": "Bedrock price for Asia Pacific (Mumbai) not confirmed on aws.amazon.com/bedrock/pricing on 2026-10-06 (the page only partly loaded); add it from the AWS pricing calculator.",
+    "bedrock/openai.gpt-oss-120b-1:0": "Bedrock price for Asia Pacific (Mumbai) not confirmed on aws.amazon.com/bedrock/pricing on 2026-10-06 (the page only partly loaded); add it from the AWS pricing calculator.",
+    "bedrock/amazon.titan-embed-text-v2:0": "Bedrock price for Asia Pacific (Mumbai) not confirmed on aws.amazon.com/bedrock/pricing on 2026-10-06 (the page only partly loaded); add it from the AWS pricing calculator.",
+    "bedrock/global.cohere.embed-v4:0": "Bedrock price for Asia Pacific (Mumbai) not confirmed on aws.amazon.com/bedrock/pricing on 2026-10-06 (the page only partly loaded); add it from the AWS pricing calculator."
   }
 }

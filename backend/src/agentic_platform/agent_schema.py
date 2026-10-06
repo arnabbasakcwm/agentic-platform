@@ -15,7 +15,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-ProviderName = Literal["openai", "anthropic", "google_genai", "groq", "moonshot", "ollama"]
+ProviderName = Literal["openai", "anthropic", "google_genai", "groq", "moonshot", "ollama", "bedrock"]
 OrchestrationPattern = Literal["sequential", "parallel", "supervisor"]
 
 _BR_TAG = re.compile(r"<br\s*/?>", re.IGNORECASE)

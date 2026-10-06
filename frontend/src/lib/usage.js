@@ -46,10 +46,16 @@ const PROVIDERS = {
   groq: "Groq",
   moonshot: "Moonshot",
   ollama: "Ollama",
+  bedrock: "Amazon Bedrock",
 };
 
 export function providerLabel(provider) {
   return PROVIDERS[provider] ?? provider;
+}
+
+/** A model's name for menus: the catalog's label (Bedrock), else "Provider · model". */
+export function modelLabel(option) {
+  return option.label ?? `${providerLabel(option.provider)} · ${option.model}`;
 }
 
 /** One line for a run's usage: "12.3K tokens · ~$0.04" (or "· price not set"). */

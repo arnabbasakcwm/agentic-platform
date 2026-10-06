@@ -266,8 +266,10 @@ const LIMITS = {
   file_types: [".csv", ".docx", ".markdown", ".md", ".pdf", ".txt"],
 };
 const EMBEDDING_OPTIONS = [
-  { provider: "google_genai", model: "gemini-embedding-001", available: true },
-  { provider: "openai", model: "text-embedding-3-small", available: false },
+  { provider: "google_genai", model: "gemini-embedding-001", dimensions: 768, available: true },
+  { provider: "openai", model: "text-embedding-3-small", dimensions: 768, available: false },
+  { provider: "bedrock", model: "amazon.titan-embed-text-v2:0", dimensions: 1024, available: true },
+  { provider: "bedrock", model: "global.cohere.embed-v4:0", dimensions: 1024, available: true },
 ];
 
 // A second project, so the library page has a choice of projects to attach to.
@@ -411,6 +413,9 @@ const server = http.createServer(async (req, res) => {
         { provider: "google_genai", model: "gemini-3.1-pro-preview", default: true, available: true },
         { provider: "openai", model: "gpt-4o-mini", default: false, available: true },
         { provider: "anthropic", model: "claude-sonnet-4-6", default: false, available: false },
+        { provider: "bedrock", model: "global.anthropic.claude-sonnet-4-6", label: "Global Claude Sonnet 4.6 (global)", recommended: true, default: false, available: true, group: "Amazon Bedrock" },
+        { provider: "bedrock", model: "in.anthropic.claude-haiku-4-5-20251001-v1:0", label: "IN Claude Haiku 4.5 (in)", recommended: true, default: false, available: true, group: "Amazon Bedrock" },
+        { provider: "bedrock", model: "openai.gpt-oss-120b-1:0", label: "OpenAI · gpt-oss-120b", recommended: true, default: false, available: true, group: "Amazon Bedrock" },
       ],
     });
   }

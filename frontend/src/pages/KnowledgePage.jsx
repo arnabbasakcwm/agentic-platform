@@ -252,13 +252,17 @@ function AddFilesPanel({ library, onUploaded }) {
 function EmbeddingPanel({ library, onChanged }) {
   const current = library.embedding;
   const options = library.embedding_options;
-  const [choice, setChoice] = useState(current?.provider ?? "");
+  // Options are identified by provider and model: one provider can offer several
+  // embedding models (Amazon Bedrock has Titan and Cohere).
+  const keyOf = (o) => (o ? `${o.provider}/${o.model}` : "");
+  const [choice, setChoice] = useState(keyOf(current));
   const change = useAction();
-  const changed = current && choice && choice !== current.provider;
+  const changed = current && choice && choice !== keyOf(current);
+  const chosen = options.find((o) => keyOf(o) === choice);
   const busy = isIndexing(library.documents);
 
   async function apply() {
-    const option = options.find((o) => o.provider === choice);
+    const option = chosen;
     const res = await change.run(() => api.setLibraryEmbedding(option));
     if (res) onChanged(res);
   }
@@ -273,8 +277,9 @@ function EmbeddingPanel({ library, onChanged }) {
           >
             <select value={choice} onChange={(e) => setChoice(e.target.value)} disabled={change.busy}>
               {options.map((o) => (
-                <option key={o.provider} value={o.provider} disabled={!o.available}>
+                <option key={keyOf(o)} value={keyOf(o)} disabled={!o.available}>
                   {providerName(o.provider)} · {o.model}
+                  {o.dimensions ? ` · ${o.dimensions}-dim` : ""}
                   {o.available ? "" : " (no API key)"}
                 </option>
               ))}
@@ -283,9 +288,9 @@ function EmbeddingPanel({ library, onChanged }) {
           {changed && (
             <div className="row">
               <Button variant="primary" onClick={apply} loading={change.busy} disabled={busy}>
-                Re-index with {providerName(choice)}
+                Re-index with {chosen ? `${providerName(chosen.provider)} · ${chosen.model}` : "the new model"}
               </Button>
-              <Button onClick={() => setChoice(current.provider)} disabled={change.busy}>
+              <Button onClick={() => setChoice(keyOf(current))} disabled={change.busy}>
                 Cancel
               </Button>
             </div>
@@ -494,7 +499,11 @@ export function KnowledgePage({ onCountChanged }) {
 
         <aside className="split__aside stack">
           <AddFilesPanel library={library} onUploaded={reload} />
-          <EmbeddingPanel key={library.embedding?.provider ?? "none"} library={library} onChanged={loaded} />
+          <EmbeddingPanel
+            key={library.embedding ? `${library.embedding.provider}/${library.embedding.model}` : "none"}
+            library={library}
+            onChanged={loaded}
+          />
         </aside>
       </div>
     </div>

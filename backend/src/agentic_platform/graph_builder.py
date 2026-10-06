@@ -32,7 +32,7 @@ from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
 
 from .agent_schema import AgentOutput, AgentPlan, AgentSpec, EmbeddingConfig, LLMConfig, RunBounds
-from .config import EMBEDDING_DIMENSIONS, EMBEDDING_MODELS, MOONSHOT_BASE_URL, PROVIDER_ENV_VARS
+from .config import BEDROCK_REGION, EMBEDDING_MODELS, MOONSHOT_BASE_URL, PROVIDER_ENV_VARS, embedding_option
 from .errors import (
     AgentExecutionError,
     MissingProviderKeyError,
@@ -104,6 +104,20 @@ def get_llm(config: LLMConfig) -> BaseChatModel:
             **config.extra_params,
         )
 
+    if provider == "bedrock":
+        # Amazon Bedrock through the Converse API: tool calls and structured output for every
+        # model that supports them. No API key — the AWS credential chain (the user's IAM
+        # keys locally, a deployment's execution role in AgentCore). `model` is a model id
+        # or an inference-profile id (Claude is only reachable through a profile).
+        from langchain_aws import ChatBedrockConverse
+
+        return ChatBedrockConverse(
+            model=config.model,
+            region_name=BEDROCK_REGION,
+            temperature=config.temperature,
+            **config.extra_params,
+        )
+
     if provider in _NATIVE_PROVIDERS:
         from langchain.chat_models import init_chat_model
 
@@ -136,14 +150,29 @@ class Embedder:
         self.model = model
 
 
+def aws_credentials_available() -> bool:
+    """Whether boto3 finds AWS credentials (what Bedrock calls authenticate with)."""
+    import boto3
+
+    return boto3.Session(region_name=BEDROCK_REGION).get_credentials() is not None
+
+
 def embedding_available(provider: str) -> bool:
-    """Whether this provider has an embedding model and its API key is configured."""
-    return provider in EMBEDDING_MODELS and any(os.environ.get(v) for v in PROVIDER_ENV_VARS[provider])
+    """Whether this provider has an embedding model and its credentials are configured."""
+    if provider not in EMBEDDING_MODELS:
+        return False
+    if provider == "bedrock":
+        return aws_credentials_available()
+    return any(os.environ.get(v) for v in PROVIDER_ENV_VARS[provider])
 
 
 def get_embeddings(config: EmbeddingConfig) -> Embedder:
     """The embedding counterpart of get_llm(): the only place an embedding provider is chosen."""
     provider = config.provider
+    option = embedding_option(provider, config.model)
+    if option is None:
+        raise UnsupportedProviderError(f"{provider}/{config.model}")
+    dimensions = int(option["dimensions"])
     if provider == "google_genai":
         from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
@@ -152,10 +181,10 @@ def get_embeddings(config: EmbeddingConfig) -> Embedder:
         )
         return Embedder(
             lambda texts: model.embed_documents(
-                texts, task_type="RETRIEVAL_DOCUMENT", output_dimensionality=EMBEDDING_DIMENSIONS
+                texts, task_type="RETRIEVAL_DOCUMENT", output_dimensionality=dimensions
             ),
             lambda text: model.embed_query(
-                text, task_type="RETRIEVAL_QUERY", output_dimensionality=EMBEDDING_DIMENSIONS
+                text, task_type="RETRIEVAL_QUERY", output_dimensionality=dimensions
             ),
             provider,
             config.model,
@@ -164,7 +193,16 @@ def get_embeddings(config: EmbeddingConfig) -> Embedder:
         from langchain_openai import OpenAIEmbeddings
 
         model = OpenAIEmbeddings(
-            model=config.model, dimensions=EMBEDDING_DIMENSIONS, api_key=_require_key(provider)
+            model=config.model, dimensions=dimensions, api_key=_require_key(provider)
+        )
+        return Embedder(model.embed_documents, model.embed_query, provider, config.model)
+    if provider == "bedrock":
+        # Titan v2 and Cohere v4 via langchain-aws: it sends Cohere's search_document /
+        # search_query input types and each model's own dimensions parameter.
+        from langchain_aws import BedrockEmbeddings
+
+        model = BedrockEmbeddings(
+            model_id=config.model, region_name=BEDROCK_REGION, dimensions=dimensions, normalize=True
         )
         return Embedder(model.embed_documents, model.embed_query, provider, config.model)
     raise UnsupportedProviderError(provider)

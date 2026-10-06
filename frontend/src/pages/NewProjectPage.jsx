@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Icon } from "../components/icons.jsx";
+import { ModelOptions } from "../components/ModelOptions.jsx";
 import { ErrorCallout, LinkButton, Pill, StatusBadge, Switch } from "../components/ui.jsx";
 import { api } from "../lib/api.js";
 import { batches, checkFiles, documentBadge, formatBytes } from "../lib/knowledge.js";
@@ -214,11 +215,7 @@ function SettingsTray({ settings, onChange, tools, providers, disabled }) {
             aria-label="Model"
           >
             <option value="">Platform default{defaultModel ? ` (${defaultModel.model})` : ""}</option>
-            {providers.map((p) => (
-              <option key={`${p.provider}/${p.model}`} value={`${p.provider}/${p.model}`}>
-                {p.provider} · {p.model}
-              </option>
-            ))}
+            <ModelOptions options={providers} isDisabled={(p) => p.available === false} />
           </select>
         </div>
       </div>

@@ -1,7 +1,7 @@
 // Pure helpers for the Knowledge page: checking files before upload, and how a
 // document's indexing status is shown.
 
-const PROVIDER_NAMES = { google_genai: "Google Gemini", openai: "OpenAI" };
+const PROVIDER_NAMES = { google_genai: "Google Gemini", openai: "OpenAI", bedrock: "Amazon Bedrock" };
 
 export function providerName(provider) {
   return PROVIDER_NAMES[provider] ?? provider;

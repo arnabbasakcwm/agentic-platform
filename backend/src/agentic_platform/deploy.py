@@ -52,7 +52,6 @@ PLATFORM_ONLY_PACKAGES = (
     "pyjwt",
     "email-validator",
     "pymongo",
-    "boto3",
     # Documents are parsed on the platform; a runtime only searches the snapshot.
     "pypdf",
     "python-docx",
@@ -97,6 +96,8 @@ def runtime_environment(plan: AgentPlan, embedding: EmbeddingConfig | None = Non
     for provider in sorted(providers):
         if provider == "ollama":
             raise DeployError("ollama models run on your own machine and can't be deployed")
+        if provider == "bedrock":
+            continue  # called as the runtime's execution role: no key to pass
         names = PROVIDER_ENV_VARS[provider]
         found = next((n for n in names if os.environ.get(n)), None)
         if found is None:

@@ -65,9 +65,24 @@ MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1"
 
 # Embedding model per provider, for project knowledge bases. Only these providers offer
 # one; a project on another provider uses the first of these whose key is configured.
-EMBEDDING_MODELS: dict[str, str] = {
-    "google_genai": "gemini-embedding-001",
-    "openai": "text-embedding-3-small",
-}
-# Both models can shorten their vectors; one size keeps storage and search uniform.
-EMBEDDING_DIMENSIONS = 768
+# Every embedding model a knowledge library can use, with the vector size it's asked for.
+# A library uses one model at a time (changing it re-embeds every passage), so vectors of
+# different sizes are never compared. Bedrock models need no API key: IAM credentials.
+EMBEDDING_OPTIONS: list[dict[str, object]] = [
+    {"provider": "google_genai", "model": "gemini-embedding-001", "dimensions": 768},
+    {"provider": "openai", "model": "text-embedding-3-small", "dimensions": 768},
+    {"provider": "bedrock", "model": "amazon.titan-embed-text-v2:0", "dimensions": 1024},
+    {"provider": "bedrock", "model": "global.cohere.embed-v4:0", "dimensions": 1024},
+]
+# The default embedding model per provider (its first option).
+EMBEDDING_MODELS: dict[str, str] = {}
+for _option in EMBEDDING_OPTIONS:
+    EMBEDDING_MODELS.setdefault(str(_option["provider"]), str(_option["model"]))
+
+
+def embedding_option(provider: str, model: str) -> dict[str, object] | None:
+    return next((o for o in EMBEDDING_OPTIONS if o["provider"] == provider and o["model"] == model), None)
+
+
+# Region for Amazon Bedrock model calls (chat and embeddings).
+BEDROCK_REGION: str = os.environ.get("BEDROCK_REGION") or os.environ.get("AGENTCORE_REGION") or "ap-south-1"

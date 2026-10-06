@@ -539,6 +539,9 @@ def build_snapshot(
         "documents": filenames,
         "passages": [{"document_id": c.document_id, "source": c.source, "text": c.text} for c in chunks],
     }
+    sizes = {len(c.embedding) for c in chunks}
+    if len(sizes) != 1:
+        raise KnowledgeError("the knowledge files have vectors of different sizes; re-index them with one embedding model before deploying")
     vectors = io.BytesIO()
     np.save(vectors, np.asarray([c.embedding for c in chunks], dtype=np.float32), allow_pickle=False)
     return json.dumps(meta, ensure_ascii=False).encode("utf-8"), vectors.getvalue()
