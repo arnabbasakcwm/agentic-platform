@@ -581,7 +581,10 @@ const server = http.createServer(async (req, res) => {
       if (d) d.project_ids = [...new Set([...d.project_ids, id])];
     }
     await sleep(300);
-    return send(res, 201, { project_id: id, plan: { ...plan, agents: plan.agents.slice(0, 2) }, side_effect_tools_enabled: [] });
+    // Like the real planner: agents use the model the caller allowed, if one was given.
+    const llm = body.available_llms?.[0];
+    const agents = plan.agents.slice(0, 2).map((a) => (llm ? { ...a, llm: { ...a.llm, ...llm } } : a));
+    return send(res, 201, { project_id: id, plan: { ...plan, agents }, side_effect_tools_enabled: [] });
   }
   if (path === "/__last_create") return send(res, 200, created.last ?? {});
   const agentsPut = path.match(/^\/projects\/([^/]+)\/agents$/);

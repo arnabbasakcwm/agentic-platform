@@ -1,3 +1,4 @@
+import { pickerLabel } from "../lib/models.js";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Icon } from "../components/icons.jsx";
 import { ModelPicker } from "../components/ModelPicker.jsx";
@@ -407,7 +408,41 @@ function AssistantAvatar() {
   );
 }
 
-function PlanReply({ project }) {
+/** An agent's model as the menus name it ("Claude Haiku 4.5 · Anthropic on Bedrock"). */
+function agentModel(agent, providers) {
+  const option = providers.find(
+    (p) => p.provider === agent.llm.provider && p.model === agent.llm.model,
+  );
+  return option
+    ? pickerLabel(option)
+    : `${agent.llm.provider} · ${agent.llm.model}`;
+}
+
+// The composer's settings survive leaving the page (e.g. to connect a data source) for
+// the rest of this tab. A per-viewer convenience: without storage they reset, as before.
+const SETTINGS_KEY = "agentic-platform.new-project-settings";
+const DEFAULT_SETTINGS = { agentCount: null, model: "", tools: null };
+
+function readSettings() {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(SETTINGS_KEY) ?? "null");
+    return saved && typeof saved === "object"
+      ? { ...DEFAULT_SETTINGS, ...saved }
+      : DEFAULT_SETTINGS;
+  } catch {
+    return DEFAULT_SETTINGS;
+  }
+}
+
+function saveSettings(settings) {
+  try {
+    sessionStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  } catch {
+    // Not remembered; the choice still applies on this page.
+  }
+}
+
+function PlanReply({ project, providers }) {
   const { plan } = project;
   const n = plan.agents.length;
   return (
@@ -427,6 +462,9 @@ function PlanReply({ project }) {
           <li key={agent.id}>
             <span className="mono">{agent.id}</span>
             <span className="muted">{agent.role}</span>
+            <span className="msg__model mono">
+              {agentModel(agent, providers)}
+            </span>
             {agent.id === plan.supervisor_id && (
               <Pill tone="accent">router</Pill>
             )}
@@ -450,7 +488,7 @@ function PlanReply({ project }) {
   );
 }
 
-function Message({ message, onRetry, busy }) {
+function Message({ message, onRetry, busy, providers }) {
   if (message.role === "user") {
     return (
       <div className="msg msg--user">
@@ -488,7 +526,9 @@ function Message({ message, onRetry, busy }) {
             Designing your agent team. This can take a minute or so.
           </div>
         )}
-        {message.status === "done" && <PlanReply project={message.project} />}
+        {message.status === "done" && (
+          <PlanReply project={message.project} providers={providers} />
+        )}
         {message.status === "error" && (
           <>
             <p className="msg__error-title">
@@ -524,11 +564,7 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
   // Data sources for the next project.
   const [sources, setSources] = useState([]);
   // agentCount null = the planner decides. tools null = follow the platform default.
-  const [settings, setSettings] = useState({
-    agentCount: null,
-    model: "",
-    tools: null,
-  });
+  const [settings, setSettings] = useState(readSettings);
   const textareaRef = useRef(null);
   const endRef = useRef(null);
 
@@ -552,13 +588,35 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
   }, [messages]);
 
   function updateSettings(patch) {
-    setSettings((s) => ({ ...s, ...patch }));
+    setSettings((s) => {
+      const next = { ...s, ...patch };
+      saveSettings(next);
+      return next;
+    });
   }
 
   async function plan(request, replyId) {
     const chosen = providers.find(
       (p) => `${p.provider}/${p.model}` === request.model,
     );
+    if (request.model && !chosen) {
+      // Never fall back to the platform default without saying so.
+      setMessages((all) =>
+        all.map((m) =>
+          m.id === replyId
+            ? {
+                ...m,
+                status: "error",
+                error: {
+                  errorType: "ModelUnavailable",
+                  message: `The model you chose (${request.model}) isn't in the list of available models right now. Choose a model in the settings and send again.`,
+                },
+              }
+            : m,
+        ),
+      );
+      return;
+    }
     try {
       const project = await api.createProject({
         brief: request.brief,
@@ -668,6 +726,7 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
               key={message.id}
               message={message}
               busy={busy}
+              providers={providers}
               onRetry={() => retry(message)}
             />
           ))

@@ -4503,3 +4503,9 @@ code {
 .dagent + .dagent::before {
   content: ", ";
 }
+
+/* new project reply: each agent's model */
+.msg__model {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
