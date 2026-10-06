@@ -212,7 +212,7 @@ def dashboard(
 
     def bucket() -> dict[str, Any]:
         return {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cost": 0.0, "unpriced_tokens": 0,
-                "bytes_billed": 0}
+                "bytes_billed": 0, "unpriced_bytes": 0}
 
     def add(target: dict[str, Any], r: dict[str, Any]) -> None:
         target["calls"] += r["calls"]
@@ -221,6 +221,7 @@ def dashboard(
         target["bytes_billed"] += r.get("bytes_billed", 0)
         if r["cost"] is None:
             target["unpriced_tokens"] += r["input_tokens"] + r["output_tokens"]
+            target["unpriced_bytes"] += r.get("bytes_billed", 0)
         else:
             target["cost"] += r["cost"]
 
@@ -270,8 +271,12 @@ def dashboard(
             run["via"] = run["via"] or r.get("via")
             run["at"] = min(run["at"], r["at"])
             add(run, r)
-            run["agents"].append({k: r[k] for k in (
-                "agent_id", "kind", "provider", "model", "calls", "input_tokens", "output_tokens", "cost", "estimated")})
+            run["agents"].append({
+                **{k: r[k] for k in (
+                    "agent_id", "kind", "provider", "model", "calls", "input_tokens", "output_tokens", "cost",
+                    "estimated")},
+                "bytes_billed": r.get("bytes_billed", 0),
+            })
             run_ids_by_project.setdefault(r["project_id"], set()).add(run_id)
 
     totals["runs"] = len(runs)

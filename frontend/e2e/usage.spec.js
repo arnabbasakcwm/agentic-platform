@@ -28,6 +28,11 @@ for (const scheme of ["light", "dark"]) {
 
     const stats = page.locator(".kstats");
     await expect(stats.locator(".kstat", { hasText: "Estimated cost" })).toContainText("~$");
+    // BigQuery is measured in bytes billed, not tokens.
+    await expect(stats.locator(".kstat", { hasText: "BigQuery billed" })).toContainText("23.1 MB");
+    await expect(page.locator("tr", { hasText: "Google BigQuery" }).first()).toContainText("23.1 MB billed");
+    await expect(page.locator("tr", { hasText: "Data queries (BigQuery)" })).toContainText("23.1 MB billed");
+    await expect(page.locator("tr", { hasText: "Data queries (BigQuery)" })).toContainText("Price not set");
     await expect(stats.locator(".kstat", { hasText: "Runs" })).toContainText("2");
     await expect(page.getByText("Some models have no price yet")).toBeVisible();
     await expect(page.getByText("google_genai/gemini-embedding-001").first()).toBeVisible();

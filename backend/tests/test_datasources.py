@@ -481,3 +481,22 @@ def test_the_planner_sees_table_names_only():
     message = _build_user_message("analyse bikes", None, ["sql_query"], [], None, None, [TRIPS])
     assert f"DATA TABLES attached to this project (BigQuery, read-only): `{TRIPS}`" in message
     assert "DATA TABLES" not in _build_user_message("x", None, [], [], None, None, None)
+
+
+def test_the_usage_dashboard_counts_billed_bytes():
+    from datetime import date, datetime, timezone
+
+    at = datetime(2026, 10, 6, 11, tzinfo=timezone.utc)
+    base = {"project_id": "p1", "at": at, "run_id": "r1", "agent_id": "analyst", "estimated": False, "via": None,
+            "calls": 1, "output_tokens": 0}
+    records = [
+        {**base, "kind": "run", "provider": "google_genai", "model": "gemini", "input_tokens": 100, "cost": 0.01},
+        {**base, "kind": "bigquery_query", "provider": "bigquery", "model": "on-demand", "input_tokens": 0,
+         "bytes_billed": 23_068_672, "cost": None},
+    ]
+    body = usage_mod.dashboard(records, start=date(2026, 10, 6), days=1, project_names={"p1": "Bikes"})
+    assert body["totals"]["bytes_billed"] == 23_068_672 and body["totals"]["unpriced_bytes"] == 23_068_672
+    (bq,) = [m for m in body["by_model"] if m["provider"] == "bigquery"]
+    assert bq["bytes_billed"] == 23_068_672 and bq["priced"] is False
+    (run,) = body["recent_runs"]
+    assert [a["bytes_billed"] for a in run["agents"]] == [0, 23_068_672]

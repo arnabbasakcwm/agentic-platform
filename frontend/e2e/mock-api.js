@@ -179,6 +179,7 @@ function usageBody(days, projectId) {
   const agents = [
     { agent_id: "flight_searcher", kind: "run", provider: "google_genai", model: "gemini-3.1-pro-preview", calls: 4, input_tokens: 28100, output_tokens: 6200, cost: 0.1306, estimated: false },
     { agent_id: "flight_searcher", kind: "embedding_query", provider: "google_genai", model: "gemini-embedding-001", calls: 2, input_tokens: 14, output_tokens: 0, cost: null, estimated: true },
+    { agent_id: "flight_searcher", kind: "bigquery_query", provider: "bigquery", model: "on-demand", calls: 1, input_tokens: 0, output_tokens: 0, bytes_billed: 23068672, cost: null, estimated: false },
     { agent_id: "travel_advisor", kind: "run", provider: "google_genai", model: "gemini-3.1-pro-preview", calls: 1, input_tokens: 13100, output_tokens: 3450, cost: 0.0676, estimated: false },
   ];
   const run = (id, hoursAgo, deployed) => ({
@@ -209,11 +210,13 @@ function usageBody(days, projectId) {
       unpriced_tokens: sum("unpriced_tokens"),
       runs: 2,
       estimated_tokens: 14,
+      bytes_billed: 23068672,
     },
     by_day: byDay,
     by_model: [
       { provider: "google_genai", model: "gemini-3.1-pro-preview", priced: true, estimated: false, calls: sum("calls") - 2, input_tokens: sum("input_tokens") - 14, output_tokens: sum("output_tokens"), cost: totalCost, unpriced_tokens: 0 },
       { provider: "google_genai", model: "gemini-embedding-001", priced: false, estimated: true, calls: 2, input_tokens: 14, output_tokens: 0, cost: 0, unpriced_tokens: 14 },
+      { provider: "bigquery", model: "on-demand", priced: false, estimated: false, calls: 1, input_tokens: 0, output_tokens: 0, bytes_billed: 23068672, cost: 0, unpriced_tokens: 0 },
     ],
     by_project: projectId ? projects.filter((x) => x.project_id === projectId) : projects,
     by_kind: [
@@ -221,6 +224,7 @@ function usageBody(days, projectId) {
       { kind: "planner", calls: 2, input_tokens: 6000, output_tokens: 1500, cost: 0.03, unpriced_tokens: 0 },
       { kind: "assistant", calls: 2, input_tokens: 3000, output_tokens: 500, cost: 0.02, unpriced_tokens: 0 },
       { kind: "embedding_query", calls: 2, input_tokens: 14, output_tokens: 0, cost: 0, unpriced_tokens: 14 },
+      { kind: "bigquery_query", calls: 1, input_tokens: 0, output_tokens: 0, bytes_billed: 23068672, cost: 0, unpriced_tokens: 0, unpriced_bytes: 23068672 },
     ],
     recent_runs: [run("run-local", 2, false), run("run-deployed", 26, true), { ...run("run-direct", 30, true), via: "direct" }],
     deployments: [

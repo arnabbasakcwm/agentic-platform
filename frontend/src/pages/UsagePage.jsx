@@ -1,11 +1,36 @@
 import { useEffect, useState } from "react";
 import { CostChart } from "../components/CostChart.jsx";
 import { Icon } from "../components/icons.jsx";
-import { Button, Callout, Empty, ErrorCallout, PageHeader, Panel, Pill, Skeleton } from "../components/ui.jsx";
+import {
+  Button,
+  Callout,
+  Empty,
+  ErrorCallout,
+  PageHeader,
+  Panel,
+  Pill,
+  Skeleton,
+} from "../components/ui.jsx";
 import { api } from "../lib/api.js";
 import { fullDate, projectTitle, timeAgo } from "../lib/format.js";
 import { paths } from "../lib/router.js";
-import { formatCost, formatCount, formatTokens, kindLabel, providerLabel } from "../lib/usage.js";
+import { formatBytes } from "../lib/datasources.js";
+import {
+  formatCost,
+  formatCount,
+  formatTokens,
+  kindLabel,
+  providerLabel,
+} from "../lib/usage.js";
+
+// Data queries are measured in bytes billed, not tokens.
+const isData = (row) => (row.bytes_billed ?? 0) > 0;
+const inputCell = (row) =>
+  isData(row)
+    ? `${formatBytes(row.bytes_billed)} billed`
+    : formatCount(row.input_tokens);
+const outputCell = (row) =>
+  isData(row) ? "—" : formatCount(row.output_tokens);
 import { useAction } from "../lib/useAction.js";
 
 const RANGES = [7, 30, 90];
@@ -22,12 +47,16 @@ function Stat({ label, value, hint }) {
 
 // Nothing priced at all (cost 0 but unpriced tokens) reads as "price not set", not "$0.00".
 const costCell = (row, currency) =>
-  row.cost === null || row.cost === undefined || (row.cost === 0 && row.unpriced_tokens > 0) ? (
+  row.cost === null ||
+  row.cost === undefined ||
+  (row.cost === 0 && (row.unpriced_tokens > 0 || row.unpriced_bytes > 0)) ? (
     <span className="muted">Price not set</span>
   ) : (
     <>
       ~{formatCost(row.cost, currency)}
-      {row.unpriced_tokens > 0 && <span className="muted"> + unpriced</span>}
+      {(row.unpriced_tokens > 0 || row.unpriced_bytes > 0) && (
+        <span className="muted"> + unpriced</span>
+      )}
     </>
   );
 
@@ -54,9 +83,15 @@ function ModelsTable({ rows, currency }) {
               </span>
             </td>
             <td className="table__num">{formatCount(m.calls)}</td>
-            <td className="table__num">{formatCount(m.input_tokens)}</td>
-            <td className="table__num">{formatCount(m.output_tokens)}</td>
-            <td className="table__num">{m.priced ? costCell(m, currency) : <Pill tone="warn">Price not set</Pill>}</td>
+            <td className="table__num">{inputCell(m)}</td>
+            <td className="table__num">{outputCell(m)}</td>
+            <td className="table__num">
+              {m.priced ? (
+                costCell(m, currency)
+              ) : (
+                <Pill tone="warn">Price not set</Pill>
+              )}
+            </td>
           </tr>
         ))}
       </tbody>
@@ -80,7 +115,11 @@ function KindsTable({ rows, currency }) {
           <tr key={k.kind}>
             <td>{kindLabel(k.kind)}</td>
             <td className="table__num">{formatCount(k.calls)}</td>
-            <td className="table__num">{formatCount(k.input_tokens + k.output_tokens)}</td>
+            <td className="table__num">
+              {isData(k)
+                ? `${formatBytes(k.bytes_billed)} billed`
+                : formatCount(k.input_tokens + k.output_tokens)}
+            </td>
             <td className="table__num">{costCell(k, currency)}</td>
           </tr>
         ))}
@@ -105,7 +144,10 @@ function ProjectsTable({ rows, currency }) {
           <tr key={p.project_id ?? "none"}>
             <td>
               {p.exists ? (
-                <a className="table__title" href={paths.project(p.project_id, "run")}>
+                <a
+                  className="table__title"
+                  href={paths.project(p.project_id, "run")}
+                >
                   {projectTitle(p.name, 60)}
                 </a>
               ) : (
@@ -113,7 +155,9 @@ function ProjectsTable({ rows, currency }) {
               )}
             </td>
             <td className="table__num">{formatCount(p.runs)}</td>
-            <td className="table__num">{formatCount(p.input_tokens + p.output_tokens)}</td>
+            <td className="table__num">
+              {formatCount(p.input_tokens + p.output_tokens)}
+            </td>
             <td className="table__num">{costCell(p, currency)}</td>
           </tr>
         ))}
@@ -134,7 +178,10 @@ function RunRow({ run, currency }) {
         aria-controls={detailId}
         onClick={() => setOpen((o) => !o)}
       >
-        <span className={`urun__chevron${open ? " urun__chevron--open" : ""}`} aria-hidden="true">
+        <span
+          className={`urun__chevron${open ? " urun__chevron--open" : ""}`}
+          aria-hidden="true"
+        >
           <Icon name="chevronRight" size={14} />
         </span>
         <span className="urun__main">
@@ -144,11 +191,15 @@ function RunRow({ run, currency }) {
           </span>
         </span>
         {run.deployed ? (
-          <Pill tone="accent">{run.via === "direct" ? "AgentCore · direct" : "AgentCore"}</Pill>
+          <Pill tone="accent">
+            {run.via === "direct" ? "AgentCore · direct" : "AgentCore"}
+          </Pill>
         ) : (
           <Pill>Local</Pill>
         )}
-        <span className="urun__tokens mono">{formatTokens(run.input_tokens + run.output_tokens)} tokens</span>
+        <span className="urun__tokens mono">
+          {formatTokens(run.input_tokens + run.output_tokens)} tokens
+        </span>
         <span className="urun__cost mono">{costCell(run, currency)}</span>
       </button>
       {open && (
@@ -169,7 +220,12 @@ function RunRow({ run, currency }) {
                 <tr key={i}>
                   <td className="mono">
                     {a.agent_id ?? "—"}
-                    {a.kind === "embedding_query" && <span className="table__sub">knowledge search</span>}
+                    {a.kind === "embedding_query" && (
+                      <span className="table__sub">knowledge search</span>
+                    )}
+                    {a.kind === "bigquery_query" && (
+                      <span className="table__sub">data query</span>
+                    )}
                   </td>
                   <td>
                     <span className="mono">{a.model}</span>
@@ -179,8 +235,8 @@ function RunRow({ run, currency }) {
                     </span>
                   </td>
                   <td className="table__num">{formatCount(a.calls)}</td>
-                  <td className="table__num">{formatCount(a.input_tokens)}</td>
-                  <td className="table__num">{formatCount(a.output_tokens)}</td>
+                  <td className="table__num">{inputCell(a)}</td>
+                  <td className="table__num">{outputCell(a)}</td>
                   <td className="table__num">{costCell(a, currency)}</td>
                 </tr>
               ))}
@@ -201,7 +257,10 @@ function DeployedSync({ deployments, available, onSynced }) {
   if (!deployments?.length) return null;
   const notReporting = deployments.filter((d) => !d.reports_usage);
   const failed = deployments.filter((d) => d.last_sync?.status === "failed");
-  const synced = deployments.map((d) => d.synced_until).filter(Boolean).sort();
+  const synced = deployments
+    .map((d) => d.synced_until)
+    .filter(Boolean)
+    .sort();
   const oldest = synced[0];
 
   async function syncNow() {
@@ -221,24 +280,35 @@ function DeployedSync({ deployments, available, onSynced }) {
           )}
           .
         </span>
-        <Button size="sm" onClick={syncNow} loading={sync.busy} disabled={!available}>
+        <Button
+          size="sm"
+          onClick={syncNow}
+          loading={sync.busy}
+          disabled={!available}
+        >
           Sync now
         </Button>
       </div>
       {!available && (
         <Callout tone="warn" title="Can't read deployed usage">
-          This server has no AWS credentials, so direct AWS calls to your deployments can&apos;t be counted.
+          This server has no AWS credentials, so direct AWS calls to your
+          deployments can&apos;t be counted.
         </Callout>
       )}
       {notReporting.length > 0 && (
         <Callout tone="warn" title="Redeploy to count direct AWS calls">
           {notReporting.map((d) => projectTitle(d.name, 50)).join(", ")}{" "}
-          {notReporting.length === 1 ? "was" : "were"} deployed before runtimes reported their usage. Runs made
-          through this platform are counted; calls straight through AWS aren&apos;t until you redeploy.
+          {notReporting.length === 1 ? "was" : "were"} deployed before runtimes
+          reported their usage. Runs made through this platform are counted;
+          calls straight through AWS aren&apos;t until you redeploy.
         </Callout>
       )}
       {failed.map((d) => (
-        <Callout key={d.project_id} tone="danger" title={`Couldn't read usage for ${projectTitle(d.name, 40)}`}>
+        <Callout
+          key={d.project_id}
+          tone="danger"
+          title={`Couldn't read usage for ${projectTitle(d.name, 40)}`}
+        >
           {d.last_sync.detail}
         </Callout>
       ))}
@@ -258,11 +328,16 @@ export function UsagePage({ projects }) {
   const { run: runLoad } = load;
 
   useEffect(() => {
-    runLoad(() => api.usage(days, projectId || undefined)).then((body) => body && setData(body));
+    runLoad(() => api.usage(days, projectId || undefined)).then(
+      (body) => body && setData(body),
+    );
   }, [days, projectId, runLoad, reload]);
 
   useEffect(() => {
-    api.usagePricing().then(setPricing).catch(() => {});
+    api
+      .usagePricing()
+      .then(setPricing)
+      .catch(() => {});
   }, []);
 
   const currency = data?.currency ?? "USD";
@@ -289,7 +364,11 @@ export function UsagePage({ projects }) {
             </button>
           ))}
         </div>
-        <select value={projectId} onChange={(e) => setProjectId(e.target.value)} aria-label="Filter by project">
+        <select
+          value={projectId}
+          onChange={(e) => setProjectId(e.target.value)}
+          aria-label="Filter by project"
+        >
           <option value="">All projects</option>
           {(projects ?? []).map((p) => (
             <option key={p.project_id} value={p.project_id}>
@@ -301,7 +380,13 @@ export function UsagePage({ projects }) {
       </div>
 
       {!data ? (
-        <Panel>{load.error ? <ErrorCallout error={load.error} /> : <Skeleton lines={5} />}</Panel>
+        <Panel>
+          {load.error ? (
+            <ErrorCallout error={load.error} />
+          ) : (
+            <Skeleton lines={5} />
+          )}
+        </Panel>
       ) : (
         <>
           <ErrorCallout error={load.error} />
@@ -311,37 +396,64 @@ export function UsagePage({ projects }) {
             onSynced={() => setReload((n) => n + 1)}
           />
           <div className="kstats" aria-label="Totals for the period">
-            <Stat label="Estimated cost" value={`~${formatCost(totals.cost, currency)}`} hint={currency} />
-            <Stat label="Input tokens" value={formatTokens(totals.input_tokens)} />
-            <Stat label="Output tokens" value={formatTokens(totals.output_tokens)} />
+            <Stat
+              label="Estimated cost"
+              value={`~${formatCost(totals.cost, currency)}`}
+              hint={currency}
+            />
+            <Stat
+              label="Input tokens"
+              value={formatTokens(totals.input_tokens)}
+            />
+            <Stat
+              label="Output tokens"
+              value={formatTokens(totals.output_tokens)}
+            />
             <Stat label="Runs" value={formatCount(totals.runs)} />
             <Stat label="Model calls" value={formatCount(totals.calls)} />
+            {isData(totals) && (
+              <Stat
+                label="BigQuery billed"
+                value={formatBytes(totals.bytes_billed)}
+                hint="price not set"
+              />
+            )}
           </div>
 
           {totals.calls === 0 ? (
             <Panel>
               <Empty title="No usage in this period">
-                Plan a project, run it, or add knowledge files — every model call is counted here.
+                Plan a project, run it, or add knowledge files — every model
+                call is counted here.
               </Empty>
             </Panel>
           ) : (
             <div className="stack">
-              {(totals.unpriced_tokens > 0 || pricing?.unpriced?.length > 0) && (
+              {(totals.unpriced_tokens > 0 ||
+                pricing?.unpriced?.length > 0) && (
                 <Callout tone="warn" title="Some models have no price yet">
-                  {formatCount(totals.unpriced_tokens)} tokens in this period aren&apos;t included in the
-                  cost
+                  {formatCount(totals.unpriced_tokens)} tokens in this period
+                  aren&apos;t included in the cost
                   {pricing?.unpriced?.length > 0 && (
                     <>
                       {" "}
-                      (<span className="mono">{pricing.unpriced.join(", ")}</span>)
+                      (
+                      <span className="mono">
+                        {pricing.unpriced.join(", ")}
+                      </span>
+                      )
                     </>
                   )}
-                  . Add their prices to <code>{pricing?.file ?? "backend/pricing.json"}</code> and restart
-                  the API.
+                  . Add their prices to{" "}
+                  <code>{pricing?.file ?? "backend/pricing.json"}</code> and
+                  restart the API.
                 </Callout>
               )}
 
-              <Panel title="Estimated cost per day" subtitle={`Last ${days} days`}>
+              <Panel
+                title="Estimated cost per day"
+                subtitle={`Last ${days} days`}
+              >
                 <CostChart days={data.by_day} currency={currency} />
               </Panel>
 
@@ -361,7 +473,11 @@ export function UsagePage({ projects }) {
 
               <Panel
                 title="Recent runs"
-                subtitle={data.recent_runs.length ? "Open a run to see each agent's model and tokens." : undefined}
+                subtitle={
+                  data.recent_runs.length
+                    ? "Open a run to see each agent's model and tokens."
+                    : undefined
+                }
                 flush
               >
                 {data.recent_runs.length === 0 ? (
@@ -380,11 +496,14 @@ export function UsagePage({ projects }) {
           )}
 
           <p className="unotes muted">
-            Costs are estimates from list prices in <code>backend/pricing.json</code> (with each price&apos;s
-            source and date), recorded at the time of use. Token counts are what the provider reported;
-            embedding tokens are estimated (~4 characters per token). Gemini&apos;s thinking tokens count as
-            output. Deployed runs called straight through AWS are counted from the runtime&apos;s logs after a
-            sync (runtimes deployed before this was added need a redeploy).
+            Costs are estimates from list prices in{" "}
+            <code>backend/pricing.json</code> (with each price&apos;s source and
+            date), recorded at the time of use. Token counts are what the
+            provider reported; embedding tokens are estimated (~4 characters per
+            token). Gemini&apos;s thinking tokens count as output. Deployed runs
+            called straight through AWS are counted from the runtime&apos;s logs
+            after a sync (runtimes deployed before this was added need a
+            redeploy).
           </p>
         </>
       )}
