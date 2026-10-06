@@ -474,3 +474,46 @@ def test_model_capabilities_round_trip(backend):
     item = store.get("bedrock/google.gemma-3-12b-it")
     assert (item.tool_calling, item.source) == (False, "run")
     assert [i.key for i in store.all()] == ["bedrock/google.gemma-3-12b-it"]
+
+
+# ------------------------------------------------------------------ runs
+@pytest.fixture
+def runs(backend):
+    from agentic_platform.stores import InMemoryRunStore, MongoRunStore
+
+    return InMemoryRunStore() if backend is None else MongoRunStore(backend)
+
+
+def test_runs_record_events_keep_the_newest_and_stay_private(runs):
+    from datetime import datetime, timedelta, timezone
+
+    from agentic_platform.stores import RunRecord
+
+    start = datetime(2026, 10, 6, 12, tzinfo=timezone.utc)
+    for i in range(7):
+        runs.create(RunRecord(id=f"r{i}", tenant_id="u1", project_id="p1", started_at=start + timedelta(minutes=i)))
+    runs.create(RunRecord(id="d1", tenant_id="u1", project_id="p1", kind="deployed"))
+    runs.update("u1", "r6", new_events=[{"event": "run_started"}])
+    runs.update("u1", "r6", new_events=[{"event": "node_started", "node": "a"}], outputs={"a": {"content": "x"}})
+    runs.update("u2", "r6", status="failed")  # another tenant: ignored
+    run = runs.get("u1", "p1", "r6")
+    assert [e["event"] for e in run.events] == ["run_started", "node_started"]
+    assert run.outputs == {"a": {"content": "x"}} and run.status == "running"
+    assert runs.get("u2", "p1", "r6") is None and runs.get("u1", "p2", "r6") is None
+
+    assert runs.prune("u1", "p1", "local") == 2
+    assert [r.id for r in runs.list("u1", "p1", "local")] == ["r6", "r5", "r4", "r3", "r2"]
+    assert [r.id for r in runs.list("u1", "p1", "deployed")] == ["d1"]  # kept separately
+    assert runs.delete_for_project("u1", "p1") == 6
+    assert runs.list("u1", "p1", "local") == []
+
+
+def test_a_run_left_running_past_its_limit_reads_as_interrupted():
+    from datetime import datetime, timedelta, timezone
+
+    from agentic_platform.stores import RunRecord
+
+    now = datetime(2026, 10, 6, 12, tzinfo=timezone.utc)
+    run = RunRecord(id="r", tenant_id="u", project_id="p", timeout_s=300, updated_at=now - timedelta(seconds=500))
+    assert run.effective(now).status == "failed" and run.effective(now).error["error_type"] == "RunInterrupted"
+    assert run.effective(now - timedelta(seconds=200)).status == "running"

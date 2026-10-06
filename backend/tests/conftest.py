@@ -30,3 +30,26 @@ def _no_live_bigquery(monkeypatch):
     app_module._BQ_CLIENTS.clear()
     yield
     app_module._BQ_CLIENTS.clear()
+
+
+@pytest.fixture(autouse=True)
+def _runs_in_memory(monkeypatch):
+    """Saved runs never reach a real database from the offline suite (.env may point at
+    one): every test gets its own in-memory run store."""
+    import agentic_platform.app as app_module
+    from agentic_platform.stores import InMemoryRunStore
+
+    monkeypatch.setattr(app_module, "_runs", InMemoryRunStore())
+
+
+@pytest.fixture(autouse=True)
+def _no_live_model_checks(monkeypatch):
+    """Tool-calling checks call the real model and are stored platform-wide: the offline
+    suite gets an in-memory store and a check that can't tell (tests that need a verdict
+    install their own)."""
+    import agentic_platform.app as app_module
+    import agentic_platform.capabilities as caps
+    from agentic_platform.stores import InMemoryModelCapabilityStore
+
+    monkeypatch.setattr(app_module, "_capabilities", InMemoryModelCapabilityStore())
+    monkeypatch.setattr(caps, "probe_tool_calling", lambda provider, model, usage=None: None)

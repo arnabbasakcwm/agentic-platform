@@ -17,7 +17,7 @@ import threading
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Callable, Literal
 
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import BackgroundTasks, Depends, FastAPI, Request, Response
@@ -64,6 +64,7 @@ from .errors import (
     DeployNotConfiguredError,
     DataSourceError,
     ModelCannotCallToolsError,
+    RunNotFoundError,
     DataSourceNotFoundError,
     DataSourceUnavailableError,
     DocumentNotFoundError,
@@ -95,6 +96,7 @@ from .meta_planner_prompt import plan_project, revise_plan
 from .stores import (
     DataSource,
     ModelCapability,
+    RunRecord,
     ChatMessage,
     Deployment,
     KnowledgeDocument,
@@ -102,6 +104,7 @@ from .stores import (
     UsageRecord,
     UserRecord,
     make_capability_store,
+    make_run_store,
     make_datasource_store,
     make_stores,
 )
@@ -138,6 +141,7 @@ app.add_middleware(
 _store, _users, _knowledge, _usage = make_stores()
 _datasources = make_datasource_store()
 _capabilities = make_capability_store()
+_runs = make_run_store()
 logger = logging.getLogger(__name__)
 
 
@@ -566,6 +570,294 @@ def _reembed(tenant_id: str, document_id: str, config: EmbeddingConfig) -> None:
         )
     finally:
         _record_usage(tenant_id, None, collector.entries(), run_id=uuid.uuid4().hex)
+
+
+# --------------------------------------------------------------------------- saved runs
+# Every run is saved as it happens (RunRecord), so leaving the page, refreshing or another
+# browser never loses it; the last RUNS_KEPT per project and kind are kept. Known
+# deviation: background runs are in-process threads until the job queue exists.
+FLUSH_EVERY_S = 0.5
+
+
+def _stored_event(event: str, data: dict[str, Any]) -> dict[str, Any]:
+    """An event as saved: a node's output is kept once, in the run's `outputs`."""
+    body = {"event": event, **{k: v for k, v in data.items() if not (event == "node_completed" and k == "output")}}
+    return json.loads(json.dumps(body, default=str))
+
+
+class _RunRecorder:
+    """Writes one run's events to the store, batched, and its outcome when it ends."""
+
+    def __init__(self, run: RunRecord):
+        self.run = run
+        self.outputs: dict[str, Any] = {}
+        self.buffer: list[dict[str, Any]] = []
+        self.flushed_at = time.monotonic()
+
+    def event(self, event: str, data: dict[str, Any]) -> None:
+        if event == "node_completed" and data.get("node"):
+            self.outputs[data["node"]] = data.get("output")
+        self.buffer.append(_stored_event(event, data))
+        if time.monotonic() - self.flushed_at >= FLUSH_EVERY_S:
+            self.flush()
+
+    def flush(self, **changes: Any) -> None:
+        events, self.buffer = self.buffer, []
+        try:
+            _runs.update(self.run.tenant_id, self.run.id, new_events=events,
+                         outputs=json.loads(json.dumps(self.outputs, default=str)), **changes)
+        except Exception:  # noqa: BLE001 — saving a run never fails the run itself
+            logger.exception("saving run %s failed", self.run.id)
+        self.flushed_at = time.monotonic()
+
+    def finish(self, *, outputs: dict[str, Any] | None = None, errors: list[dict[str, Any]] | None = None,
+               halted: bool = False, error: dict[str, Any] | None = None, usage: dict[str, Any] | None = None) -> None:
+        if outputs is not None:
+            self.outputs = dict(outputs)
+        self.flush(
+            status="failed" if error else "completed",
+            errors=json.loads(json.dumps(errors or [], default=str)),
+            halted=bool(halted), error=error, usage=usage, finished_at=datetime.now(timezone.utc),
+        )
+
+
+def _new_run(project: ProjectRecord, *, kind: str, mode: str, task_input: dict[str, Any],
+             agent_id: str | None = None, plan_version: int | None = None) -> RunRecord:
+    run = RunRecord(
+        id=uuid.uuid4().hex, tenant_id=project.tenant_id, project_id=project.id, kind=kind, mode=mode,
+        agent_id=agent_id, plan_version=plan_version if plan_version is not None else project.plan_version,
+        input=task_input, timeout_s=max(project.plan.bounds.timeout_s, RunBounds().timeout_s),
+    )
+    try:
+        _runs.create(run)
+        _runs.prune(project.tenant_id, project.id, kind)
+    except Exception:  # noqa: BLE001 — saving a run never stops it
+        logger.exception("saving run for project %s failed", project.id)
+    return run
+
+
+def _graph_events(project: ProjectRecord, graph: Any, task_input: dict[str, Any], collector: UsageCollector,
+                  recorder: _RunRecorder):
+    """Run the graph, saving every event; yields them for a live stream. The run is saved
+    as completed or failed when it ends, and usage is recorded whatever happens."""
+    terminal: tuple[str, dict[str, Any]] | None = None
+    try:
+        for event, data in run_graph_events(graph, task_input, project.plan.bounds, collector):
+            if event in ("run_completed", "run_failed"):
+                data = {**data, "usage": usage_mod.summarize(collector.entries())}
+                terminal = (event, data)
+                if event == "run_completed":
+                    _learn_from_errors(project, data.get("errors") or [])
+            recorder.event(event, data)
+            yield event, data
+    finally:
+        if terminal is None:
+            recorder.finish(error={"error_type": "RunInterrupted", "message": "the run stopped before it finished"},
+                            usage=usage_mod.summarize(collector.entries()))
+        elif terminal[0] == "run_completed":
+            d = terminal[1]
+            recorder.finish(outputs=d.get("outputs"), errors=d.get("errors"), halted=d.get("halted", False),
+                            usage=d.get("usage"))
+        else:
+            d = terminal[1]
+            recorder.finish(error={"error_type": d.get("error_type"), "message": d.get("message")},
+                            usage=d.get("usage"))
+        _record_usage(project.tenant_id, project.id, collector.entries(), run_id=recorder.run.id)
+
+
+def _agent_run(project: ProjectRecord, agent_id: str, task_input: dict[str, Any],
+               upstream: dict[str, Any], collector: UsageCollector, recorder: _RunRecorder) -> dict[str, Any]:
+    """One agent on its own, saved like any run."""
+    started = time.time()
+    recorder.event("run_started", {"at": started, "timeout_s": project.plan.bounds.timeout_s})
+    try:
+        result = run_single_agent(
+            project.plan, agent_id, task_input, upstream, _knowledge_context(project),
+            usage=collector, data=_data_context(project), json_models=_json_models(project.plan, project.tenant_id),
+        )
+    except Exception as e:
+        recorder.finish(error={"error_type": type(e).__name__, "message": str(e) or "the agent failed"},
+                        usage=usage_mod.summarize(collector.entries()))
+        _record_usage(project.tenant_id, project.id, collector.entries(), run_id=recorder.run.id)
+        raise
+    summary = usage_mod.summarize(collector.entries())
+    recorder.event("run_completed", {"at": time.time(), "duration_ms": int((time.time() - started) * 1000),
+                                     "outputs": result.get("outputs", {}), "errors": result.get("errors", []),
+                                     "halted": bool(result.get("halted", False)), "usage": summary})
+    recorder.finish(outputs=result.get("outputs", {}), errors=result.get("errors", []),
+                    halted=bool(result.get("halted", False)), usage=summary)
+    _record_usage(project.tenant_id, project.id, collector.entries(), run_id=recorder.run.id)
+    _learn_from_errors(project, result.get("errors") or [])
+    return result
+
+
+def _deployed_run(project: ProjectRecord, payload: dict[str, Any], recorder: _RunRecorder) -> dict[str, Any]:
+    """Invoke the deployment, saving the outcome as a `deployed` run."""
+    cloud = _make_cloud()
+    deployment = project.deployment
+    try:
+        if deployment is None or not deployment.live:
+            raise NotDeployedError()
+        if cloud is None:
+            raise DeployNotConfiguredError()
+        timeout_s = max(project.plan.bounds.timeout_s, RunBounds().timeout_s)
+        result = cloud.invoke(deployment.runtime_arn, {**payload, "run_id": recorder.run.id}, timeout_s)
+    except Exception as e:
+        recorder.finish(error={"error_type": type(e).__name__, "message": str(e) or "the deployed run failed"})
+        raise
+    entries = [e for e in result.get("usage") or [] if isinstance(e, dict) and "model" in e]
+    _record_usage(project.tenant_id, project.id, entries, run_id=recorder.run.id, deployed=True, via="platform")
+    summary = usage_mod.summarize(entries)
+    if result.get("error_type"):  # the runtime's own typed error (e.g. RunTimeout)
+        recorder.finish(error={"error_type": result["error_type"], "message": result.get("message", "")}, usage=summary)
+    else:
+        recorder.finish(outputs=result.get("outputs", {}), errors=result.get("errors", []),
+                        halted=bool(result.get("halted", False)), usage=summary)
+    return {**result, "usage_summary": summary}
+
+
+def _in_background(target: Callable[[], Any], name: str) -> None:
+    def work() -> None:
+        try:
+            target()
+        except Exception:  # noqa: BLE001 — the run record already says what failed
+            logger.info("background %s ended with an error (recorded on the run)", name)
+
+    threading.Thread(target=work, daemon=True, name=name).start()
+
+
+def _get_run(project_id: str, run_id: str, user: UserRecord) -> RunRecord:
+    _get_project(project_id, user)
+    run = _runs.get(user.id, project_id, run_id)
+    if run is None:
+        raise RunNotFoundError(run_id)
+    return run.effective()
+
+
+def _run_body(run: RunRecord) -> dict[str, Any]:
+    return run.effective().model_dump(exclude={"tenant_id"})
+
+
+class StartRunRequest(BaseModel):
+    input: dict[str, Any] = Field(default_factory=dict)
+    mode: Literal["graph", "agent"] = "graph"
+    agent_id: str | None = Field(default=None, max_length=100)
+    upstream_outputs: dict[str, Any] = Field(default_factory=dict)
+
+
+@app.post("/projects/{project_id}/runs", status_code=202)
+def start_run(project_id: str, req: StartRunRequest, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """Start a run in the background and save it as it happens. Returns at once; follow it
+    with GET …/runs/{id}/stream (or poll GET …/runs/{id}). It keeps running if you leave."""
+    project = _get_project(project_id, user)
+    if req.mode == "agent":
+        if not any(a.id == req.agent_id for a in project.plan.agents):
+            return JSONResponse(status_code=404, content={
+                "error_type": "AgentNotFound", "message": f"agent '{req.agent_id}' not in project '{project_id}'",
+                "details": None})
+        run = _new_run(project, kind="local", mode="agent", task_input=req.input, agent_id=req.agent_id)
+        recorder = _RunRecorder(run)
+        _in_background(lambda: _agent_run(project, req.agent_id, req.input, req.upstream_outputs,
+                                          UsageCollector(), recorder), f"agent-run-{run.id}")
+        return {"run": _run_body(run)}
+    if not project.is_compiled:
+        raise NotCompiledError(project_id)
+    graph = _compiled_graph(project)  # compile errors are this request's errors
+    run = _new_run(project, kind="local", mode="graph", task_input=req.input)
+    recorder = _RunRecorder(run)
+
+    def drive() -> None:
+        for _ in _graph_events(project, graph, req.input, UsageCollector(), recorder):
+            pass
+
+    _in_background(drive, f"graph-run-{run.id}")
+    return {"run": _run_body(run)}
+
+
+@app.get("/projects/{project_id}/runs")
+def list_runs(
+    project_id: str, kind: Literal["local", "deployed"] = "local", user: UserRecord = Depends(current_user)
+) -> dict[str, Any]:
+    """The project's last saved runs of one kind (local or deployed), newest first."""
+    _get_project(project_id, user)
+    return {"runs": [r.summary() for r in _runs.list(user.id, project_id, kind)]}
+
+
+@app.get("/projects/{project_id}/runs/{run_id}")
+def get_run(project_id: str, run_id: str, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """One saved run in full: input, events, outputs, errors and usage."""
+    return {"run": _run_body(_get_run(project_id, run_id, user))}
+
+
+@app.get("/projects/{project_id}/runs/{run_id}/stream")
+def stream_saved_run(
+    project_id: str, run_id: str, after: int = 0, user: UserRecord = Depends(current_user)
+) -> StreamingResponse:
+    """A saved run's events as Server-Sent Events: replayed from index `after`, then
+    followed live until the run ends. Reconnect with the number of events received to
+    resume. Same events as /run/stream."""
+    _get_run(project_id, run_id, user)  # 404 before streaming
+
+    def stream():
+        index = max(after, 0)
+        idle = 0.0
+        while True:
+            run = _runs.get(user.id, project_id, run_id)
+            if run is None:
+                return
+            run = run.effective()
+            for i in range(index, len(run.events)):
+                event = dict(run.events[i])
+                name = event.pop("event")
+                if name == "node_completed":
+                    event["output"] = run.outputs.get(event.get("node"))
+                yield f"id: {i + 1}\nevent: {name}\ndata: {json.dumps(event, default=str)}\n\n"
+                idle = 0.0
+            index = len(run.events)
+            if run.status != "running":
+                ended = any(e.get("event") in ("run_completed", "run_failed") for e in run.events)
+                if not ended:  # interrupted: say so, the way a live stream would
+                    data = {**(run.error or {"error_type": "RunInterrupted", "message": "the run stopped"}),
+                            "at": time.time()}
+                    yield f"event: run_failed\ndata: {json.dumps(data, default=str)}\n\n"
+                return
+            time.sleep(0.5)
+            idle += 0.5
+            if idle >= 15:
+                yield ": keep-alive\n\n"
+                idle = 0.0
+
+    return StreamingResponse(stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+class StartDeployedRunRequest(BaseModel):
+    input: dict[str, Any] = Field(default_factory=dict)
+    agent_id: str | None = Field(default=None, max_length=100)
+    upstream_outputs: dict[str, Any] = Field(default_factory=dict)
+
+
+@app.post("/projects/{project_id}/deployment/runs", status_code=202)
+def start_deployed_run(
+    project_id: str, req: StartDeployedRunRequest, user: UserRecord = Depends(current_user)
+) -> dict[str, Any]:
+    """Run the deployed flow in the background and save the result (the console's Try it).
+    Returns at once; poll GET …/runs/{id}."""
+    project = _get_project(project_id, user)
+    deployment = project.deployment
+    if deployment is None or not deployment.live:
+        raise NotDeployedError()
+    if _make_cloud() is None:
+        raise DeployNotConfiguredError()
+    payload: dict[str, Any] = {"input": req.input}
+    if req.agent_id is not None:
+        payload["agent_id"] = req.agent_id
+        payload["upstream_outputs"] = req.upstream_outputs
+    run = _new_run(project, kind="deployed", mode="agent" if req.agent_id else "graph", task_input=req.input,
+                   agent_id=req.agent_id, plan_version=deployment.live_plan_version)
+    recorder = _RunRecorder(run)
+    _in_background(lambda: _deployed_run(project, payload, recorder), f"deployed-run-{run.id}")
+    return {"run": _run_body(run)}
 
 
 # --------------------------------------------------------------------------- model checks
@@ -1067,6 +1359,7 @@ def delete_project(project_id: str, user: UserRecord = Depends(current_user)) ->
     _COMPILED.pop(project_id, None)
     detached = _knowledge.detach_project(user.id, project_id)
     _datasources.detach_project(user.id, project_id)
+    _runs.delete_for_project(user.id, project_id)
     return {"deleted": project_id, "knowledge_documents_detached": detached}
 
 
@@ -1209,13 +1502,20 @@ def run_project(
     if not project.is_compiled:
         raise NotCompiledError(project_id)
     collector = UsageCollector()
+    graph = _compiled_graph(project)
+    recorder = _RunRecorder(_new_run(project, kind="local", mode="graph", task_input=req.input))
     try:
-        result = run_graph(_compiled_graph(project), req.input, project.plan.bounds, collector)
+        result = run_graph(graph, req.input, project.plan.bounds, collector)
     except TimeoutError:
+        recorder.finish(error={"error_type": "RunTimeout",
+                               "message": f"the run exceeded its {project.plan.bounds.timeout_s:g}s time limit"},
+                        usage=usage_mod.summarize(collector.entries()))
         raise RunTimeoutError(project.plan.bounds.timeout_s) from None
     finally:
         # Whatever was used up to a timeout is still spent.
-        _record_usage(user.id, project_id, collector.entries(), run_id=uuid.uuid4().hex)
+        _record_usage(user.id, project_id, collector.entries(), run_id=recorder.run.id)
+    recorder.finish(outputs=result["outputs"], errors=result["errors"], halted=result["halted"],
+                    usage=usage_mod.summarize(collector.entries()))
     _learn_from_errors(project, result["errors"])
     return {
         "project_id": project_id,
@@ -1242,17 +1542,13 @@ def run_project_stream(
         raise NotCompiledError(project_id)
     graph = _compiled_graph(project)
 
+    recorder = _RunRecorder(_new_run(project, kind="local", mode="graph", task_input=req.input))
+
     def stream():
-        collector = UsageCollector()
-        try:
-            for event, data in run_graph_events(graph, req.input, project.plan.bounds, collector):
-                if event in ("run_completed", "run_failed"):
-                    data = {**data, "usage": usage_mod.summarize(collector.entries())}
-                    _learn_from_errors(project, data.get("errors") or [])
-                yield f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
-        finally:
-            # Also runs when the client disconnects mid-run: tokens used so far count.
-            _record_usage(user.id, project_id, collector.entries(), run_id=uuid.uuid4().hex)
+        # Saved as it streams; a client disconnect still records usage so far (and the run
+        # as interrupted).
+        for event, data in _graph_events(project, graph, req.input, UsageCollector(), recorder):
+            yield f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
 
     return StreamingResponse(
         stream(),
@@ -1269,24 +1565,15 @@ def invoke_agent(
     user: UserRecord = Depends(current_user),
 ) -> dict[str, Any]:
     project = _get_project(project_id, user)
-    collector = UsageCollector()
-    try:
-        result = run_single_agent(
-            project.plan, agent_id, req.input, req.upstream_outputs, _knowledge_context(project),
-            usage=collector, data=_data_context(project),
-            json_models=_json_models(project.plan, user.id),
-        )
-    except KeyError:
+    if not any(a.id == agent_id for a in project.plan.agents):
         return JSONResponse(
             status_code=404,
-            content={
-                "error_type": "AgentNotFound",
-                "message": f"agent '{agent_id}' not in project '{project_id}'",
-                "details": None,
-            },
+            content={"error_type": "AgentNotFound", "message": f"agent '{agent_id}' not in project '{project_id}'",
+                     "details": None},
         )
-    finally:
-        _record_usage(user.id, project_id, collector.entries(), run_id=uuid.uuid4().hex)
+    collector = UsageCollector()
+    recorder = _RunRecorder(_new_run(project, kind="local", mode="agent", task_input=req.input, agent_id=agent_id))
+    result = _agent_run(project, agent_id, req.input, req.upstream_outputs, collector, recorder)
     return {
         "project_id": project_id,
         "agent_id": agent_id,
@@ -1807,25 +2094,24 @@ def invoke_deployment(
     cloud = _make_cloud()
     if cloud is None:
         raise DeployNotConfiguredError()
-    run_id = uuid.uuid4().hex
-    payload: dict[str, Any] = {"input": req.input, "run_id": run_id}
+    payload: dict[str, Any] = {"input": req.input}
     if req.agent_id is not None:
         payload["agent_id"] = req.agent_id
         payload["upstream_outputs"] = req.upstream_outputs
-    # The live runtime may serve an older plan version than the project's current one;
-    # wait for whichever of the two allows the longer run.
-    timeout_s = max(project.plan.bounds.timeout_s, RunBounds().timeout_s)
-    result = cloud.invoke(deployment.runtime_arn, payload, timeout_s)
-    # The runtime reports its own usage; runtimes deployed before usage reporting don't.
-    entries = [e for e in result.get("usage") or [] if isinstance(e, dict) and "model" in e]
-    _record_usage(user.id, project_id, entries, run_id=run_id, deployed=True, via="platform")
+    # Saved as a deployed run too; the runtime reports its own usage (runtimes deployed
+    # before usage reporting don't), recorded against the run's id.
+    recorder = _RunRecorder(_new_run(
+        project, kind="deployed", mode="agent" if req.agent_id else "graph", task_input=req.input,
+        agent_id=req.agent_id, plan_version=deployment.live_plan_version,
+    ))
+    result = _deployed_run(project, payload, recorder)
     return {
         "project_id": project_id,
         "plan_version": deployment.live_plan_version,
         "outputs": result.get("outputs", {}),
         "errors": result.get("errors", []),
         "halted": bool(result.get("halted", False)),
-        "usage": usage_mod.summarize(entries),
+        "usage": result["usage_summary"],
     }
 
 
@@ -1956,6 +2242,11 @@ def _handle_deploy(_req: Request, exc: DeployError):
 @app.exception_handler(KnowledgeError)
 def _handle_knowledge(_req: Request, exc: KnowledgeError):
     return _error_response(exc.status, "KnowledgeRejected", str(exc))
+
+
+@app.exception_handler(RunNotFoundError)
+def _handle_run_not_found(_req: Request, exc: RunNotFoundError):
+    return _error_response(404, "RunNotFound", str(exc))
 
 
 @app.exception_handler(ModelCannotCallToolsError)

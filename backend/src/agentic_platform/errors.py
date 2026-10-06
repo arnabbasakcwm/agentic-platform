@@ -193,6 +193,11 @@ class QueryRefusedError(DataSourceError):
         super().__init__(message, status=422, error_type="QueryRefused")
 
 
+class RunNotFoundError(PlatformError):
+    def __init__(self, run_id: str):
+        super().__init__(f"run not found: {run_id}")
+
+
 class ModelCannotCallToolsError(PlatformError):
     """A model that can't call tools was given a job that needs it (tools, routing), or
     returned no structured answer where tool calling was expected."""

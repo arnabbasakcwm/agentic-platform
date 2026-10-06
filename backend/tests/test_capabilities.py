@@ -23,6 +23,8 @@ from agentic_platform.stores import (
 )
 from agentic_platform.usage import UsageCollector
 
+# The real check, taken before the suite-wide fixture stubs it (these tests give it fake models).
+REAL_PROBE = caps.probe_tool_calling
 GEMMA = "google.gemma-3-12b-it"
 HAIKU = "in.anthropic.claude-haiku-4-5-20251001-v1:0"
 
@@ -79,7 +81,7 @@ class FakeModel:
 def test_the_check_asks_for_one_tool_call(monkeypatch, model, verdict):
     monkeypatch.setattr(gb, "get_llm", lambda cfg: model)
     collector = UsageCollector()
-    assert caps.probe_tool_calling("bedrock", GEMMA, collector) is verdict
+    assert REAL_PROBE("bedrock", GEMMA, collector) is verdict
     # The check's tokens are counted, labelled as a model check.
     (callback,) = model.config["callbacks"]
     assert callback._labels["kind"] == "model_check" and callback._labels["model"] == GEMMA

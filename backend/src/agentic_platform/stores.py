@@ -11,6 +11,7 @@ its own memory.
 
 from __future__ import annotations
 
+import threading
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Iterator, Literal, Protocol
@@ -1065,6 +1066,195 @@ class MongoDataSourceStore:
             self._ensure_ready()
             doc = self._sources.find_one({"service_account": service_account}, {"tenant_id": 1})
         return doc["tenant_id"] if doc else None
+
+
+# ---------------------------------------------------------------------------- runs
+RUNS_KEPT = 5  # per project and kind
+
+
+class RunRecord(BaseModel):
+    """One run of a project — on this server ("local") or on its deployment ("deployed") —
+    saved as it happens, so leaving the page, refreshing or switching browsers never loses
+    it. Events are what the run stream sends, without each node's output (kept once, in
+    `outputs`, and put back on replay)."""
+
+    id: str
+    tenant_id: str
+    project_id: str
+    kind: Literal["local", "deployed"] = "local"
+    mode: Literal["graph", "agent"] = "graph"
+    agent_id: str | None = None
+    plan_version: int | None = None
+    status: Literal["running", "completed", "failed"] = "running"
+    input: dict[str, Any] = Field(default_factory=dict)
+    events: list[dict[str, Any]] = Field(default_factory=list)
+    outputs: dict[str, Any] = Field(default_factory=dict)
+    errors: list[dict[str, Any]] = Field(default_factory=list)
+    halted: bool = False
+    error: dict[str, Any] | None = None  # why the whole run failed (timeout, not deployed, …)
+    usage: dict[str, Any] | None = None
+    timeout_s: float = 300
+    started_at: datetime = Field(default_factory=_now)
+    finished_at: datetime | None = None
+    updated_at: datetime = Field(default_factory=_now)
+
+    def effective(self, now: datetime | None = None) -> "RunRecord":
+        """A run still marked running long after its time limit was cut off (the server
+        restarted mid-run): reported as failed, not running forever."""
+        now = now or datetime.now(timezone.utc)
+        updated = self.updated_at if self.updated_at.tzinfo else self.updated_at.replace(tzinfo=timezone.utc)
+        if self.status == "running" and (now - updated).total_seconds() > self.timeout_s + 120:
+            return self.model_copy(update={
+                "status": "failed",
+                "error": {"error_type": "RunInterrupted",
+                          "message": "Interrupted: the server stopped before this run finished. Run it again."},
+            })
+        return self
+
+    def summary(self) -> dict[str, Any]:
+        run = self.effective()
+        body = run.model_dump(exclude={"tenant_id", "events", "outputs", "input"})
+        body["agents_done"] = len(run.outputs)
+        return body
+
+
+class RunStore(Protocol):
+    """Saved runs, scoped by tenant and project."""
+
+    def create(self, run: RunRecord) -> None: ...
+
+    def update(self, tenant_id: str, run_id: str, *, new_events: list[dict[str, Any]] | None = None,
+               **changes: Any) -> None:
+        """Append events (in order) and set fields."""
+        ...
+
+    def get(self, tenant_id: str, project_id: str, run_id: str) -> RunRecord | None: ...
+
+    def list(self, tenant_id: str, project_id: str, kind: str, limit: int = RUNS_KEPT) -> list[RunRecord]:
+        """Newest first."""
+        ...
+
+    def prune(self, tenant_id: str, project_id: str, kind: str, keep: int = RUNS_KEPT) -> int: ...
+
+    def delete_for_project(self, tenant_id: str, project_id: str) -> int: ...
+
+
+class InMemoryRunStore:
+    def __init__(self) -> None:
+        self._runs: dict[str, RunRecord] = {}
+        self._lock = threading.Lock()
+
+    def create(self, run: RunRecord) -> None:
+        with self._lock:
+            self._runs[run.id] = run.model_copy(deep=True)
+
+    def update(self, tenant_id: str, run_id: str, *, new_events: list[dict[str, Any]] | None = None,
+               **changes: Any) -> None:
+        with self._lock:
+            run = self._runs.get(run_id)
+            if run is None or run.tenant_id != tenant_id:
+                return
+            fields = {**changes, "updated_at": _now()}
+            if new_events:
+                fields["events"] = [*run.events, *new_events]
+            self._runs[run_id] = run.model_copy(update=fields, deep=True)
+
+    def get(self, tenant_id: str, project_id: str, run_id: str) -> RunRecord | None:
+        with self._lock:
+            run = self._runs.get(run_id)
+            ok = run is not None and run.tenant_id == tenant_id and run.project_id == project_id
+            return run.model_copy(deep=True) if ok else None
+
+    def list(self, tenant_id: str, project_id: str, kind: str, limit: int = RUNS_KEPT) -> list[RunRecord]:
+        with self._lock:
+            found = [r for r in self._runs.values()
+                     if r.tenant_id == tenant_id and r.project_id == project_id and r.kind == kind]
+            found.sort(key=lambda r: r.started_at, reverse=True)
+            return [r.model_copy(deep=True) for r in found[:limit]]
+
+    def prune(self, tenant_id: str, project_id: str, kind: str, keep: int = RUNS_KEPT) -> int:
+        with self._lock:
+            found = sorted(
+                (r for r in self._runs.values()
+                 if r.tenant_id == tenant_id and r.project_id == project_id and r.kind == kind),
+                key=lambda r: r.started_at, reverse=True,
+            )
+            for r in found[keep:]:
+                del self._runs[r.id]
+            return max(len(found) - keep, 0)
+
+    def delete_for_project(self, tenant_id: str, project_id: str) -> int:
+        with self._lock:
+            ids = [i for i, r in self._runs.items() if r.tenant_id == tenant_id and r.project_id == project_id]
+            for i in ids:
+                del self._runs[i]
+            return len(ids)
+
+
+class MongoRunStore:
+    """`runs`, one document per run (`_id` = run id), indexed by tenant, project, kind, time."""
+
+    def __init__(self, db: "Database"):
+        self._runs = db["runs"]
+        self._ready = False
+
+    def _ensure_ready(self) -> None:
+        if not self._ready:
+            self._runs.create_index([("tenant_id", 1), ("project_id", 1), ("kind", 1), ("started_at", -1)])
+            self._ready = True
+
+    @staticmethod
+    def _out(doc: dict[str, Any]) -> RunRecord:
+        doc = dict(doc)
+        doc["id"] = doc.pop("_id")
+        return RunRecord.model_validate(doc)
+
+    def create(self, run: RunRecord) -> None:
+        body = run.model_dump()
+        body["_id"] = body.pop("id")
+        with _mongo_errors():
+            self._ensure_ready()
+            self._runs.insert_one(body)
+
+    def update(self, tenant_id: str, run_id: str, *, new_events: list[dict[str, Any]] | None = None,
+               **changes: Any) -> None:
+        operation: dict[str, Any] = {"$set": {**changes, "updated_at": _now()}}
+        if new_events:
+            operation["$push"] = {"events": {"$each": list(new_events)}}
+        with _mongo_errors():
+            self._runs.update_one({"_id": run_id, "tenant_id": tenant_id}, operation)
+
+    def get(self, tenant_id: str, project_id: str, run_id: str) -> RunRecord | None:
+        with _mongo_errors():
+            self._ensure_ready()
+            doc = self._runs.find_one({"_id": run_id, "tenant_id": tenant_id, "project_id": project_id})
+        return self._out(doc) if doc else None
+
+    def list(self, tenant_id: str, project_id: str, kind: str, limit: int = RUNS_KEPT) -> list[RunRecord]:
+        with _mongo_errors():
+            self._ensure_ready()
+            docs = list(self._runs.find({"tenant_id": tenant_id, "project_id": project_id, "kind": kind})
+                        .sort("started_at", -1).limit(limit))
+        return [self._out(d) for d in docs]
+
+    def prune(self, tenant_id: str, project_id: str, kind: str, keep: int = RUNS_KEPT) -> int:
+        query = {"tenant_id": tenant_id, "project_id": project_id, "kind": kind}
+        with _mongo_errors():
+            self._ensure_ready()
+            old = [d["_id"] for d in self._runs.find(query, {"_id": 1}).sort("started_at", -1).skip(keep)]
+            if not old:
+                return 0
+            return self._runs.delete_many({"_id": {"$in": old}, "tenant_id": tenant_id}).deleted_count
+
+    def delete_for_project(self, tenant_id: str, project_id: str) -> int:
+        with _mongo_errors():
+            return self._runs.delete_many({"tenant_id": tenant_id, "project_id": project_id}).deleted_count
+
+
+def make_run_store() -> RunStore:
+    if MONGODB_URI:
+        return MongoRunStore(mongo_database(MONGODB_URI, MONGODB_DB))
+    return InMemoryRunStore()
 
 
 # ---------------------------------------------------------------------------- model capabilities
