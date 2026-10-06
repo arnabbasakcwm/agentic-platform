@@ -44,7 +44,8 @@ DEFAULT_MODELS: dict[str, str] = {
     "openai": "gpt-4o-mini",
     "anthropic": "claude-sonnet-4-6",
     "google_genai": "gemini-3.1-pro-preview",
-    "groq": "llama-3.3-70b-versatile",
+    # llama-3.3-70b-versatile became Enterprise-only on Groq (no access for standard keys).
+    "groq": "openai/gpt-oss-120b",
     "ollama": "llama3.1",
 }
 

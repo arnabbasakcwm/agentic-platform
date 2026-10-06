@@ -5,7 +5,11 @@
     "google_genai/gemini-3.1-pro-preview": {
       "input_per_1m": 2.0,
       "output_per_1m": 12.0,
-      "long_context": {"above_prompt_tokens": 200000, "input_per_1m": 4.0, "output_per_1m": 18.0},
+      "long_context": {
+        "above_prompt_tokens": 200000,
+        "input_per_1m": 4.0,
+        "output_per_1m": 18.0
+      },
       "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
       "checked_on": "2026-10-05",
       "notes": "Paid tier, standard. Higher rate for prompts over 200k tokens."
@@ -30,11 +34,25 @@
       "source_url": "https://claude.com/pricing",
       "checked_on": "2026-10-05",
       "notes": "Base input rate (no prompt caching)."
+    },
+    "groq/openai/gpt-oss-120b": {
+      "input_per_1m": 0.15,
+      "output_per_1m": 0.6,
+      "source_url": "https://console.groq.com/docs/models",
+      "checked_on": "2026-10-06",
+      "notes": "Groq on-demand pricing."
+    },
+    "groq/qwen/qwen3.8-27b": {
+      "input_per_1m": 0.8,
+      "output_per_1m": 4.0,
+      "source_url": "https://console.groq.com/docs/models",
+      "checked_on": "2026-10-06",
+      "notes": "Groq on-demand pricing."
     }
   },
   "unpriced": {
     "google_genai/gemini-embedding-001": "Not listed on the Gemini API pricing page on 2026-10-05 (it lists Gemini Embedding 2 instead); add its price here once confirmed.",
-    "groq/llama-3.3-70b-versatile": "Groq's pricing page did not show token prices on 2026-10-05.",
-    "moonshot/kimi-k3": "Not checked; add from Moonshot's pricing page before relying on cost."
+    "moonshot/kimi-k3": "Not checked; add from Moonshot's pricing page before relying on cost.",
+    "groq/llama-3.3-70b-versatile": "Enterprise-only on Groq since at least 2026-10-06 (pricing 'contact sales'); standard keys get model_not_found."
   }
 }

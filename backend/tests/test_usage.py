@@ -339,12 +339,12 @@ def test_pricing_endpoint_lists_unpriced_models_seen(api, monkeypatch):
     h = api.login("ada@example.com")
     pid = api.post("/projects", json={"brief": "x"}, headers=h).json()["project_id"]
     plan = AgentPlan(agents=[AgentSpec(id="a", role="r", system_prompt="p",
-                                       llm=LLMConfig(provider="groq", model="llama-3.3-70b-versatile"))],
+                                       llm=LLMConfig(provider="groq", model="some-unpriced-model"))],
                      orchestration_pattern="sequential")
     api.patch(f"/projects/{pid}/plan", json=plan.model_dump(), headers=h)
     monkeypatch.setenv("GROQ_API_KEY", "test")
     api.post(f"/projects/{pid}/compile", headers=h)
     api.post(f"/projects/{pid}/run", json={"input": {"q": "x"}}, headers=h)
     body = api.get("/usage/pricing", headers=h).json()
-    assert body["unpriced"] == ["groq/llama-3.3-70b-versatile"]
+    assert body["unpriced"] == ["groq/some-unpriced-model"]
     assert "google_genai/gemini-pro" in body["models"]
