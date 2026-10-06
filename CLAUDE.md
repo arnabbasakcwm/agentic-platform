@@ -144,6 +144,7 @@ backend/
     deploy.py               # Packaging (arm64 zip) + background deploy/remove jobs
     agentcore.py            # AWS wrapper: S3, IAM role, AgentCore runtime create/update/invoke
     bedrock_catalog.py      # Live, cached list of the account's Bedrock chat models / inference profiles
+    datasources.py          # BigQuery data sources: federation sign-in, SQL guardrails, sql_schema/sql_query context
     app.py                  # FastAPI serving layer
   tests/                    # Offline, fully mocked suite
   scripts/                  # Real-API smoke checks
@@ -491,6 +492,46 @@ whenever a change departs from or extends the contract above — don't silently 
     attached to projects from their rows. Each row has a model select that confirms
     inline before re-indexing. The page has no default-model control: the default is
     set by the API (first upload, or `PUT /knowledge/embedding`).
+
+### 2026-10-06 — Agents may query BigQuery with SQL they write
+- **Why:** the user wants agents to answer from live data in BigQuery, not only from
+  uploaded files. Fixed, pre-written queries couldn't answer open questions.
+- **Rule:** this is a deliberate, bounded exception to principle 1 ("never execute
+  LLM-generated code"). Model-written SQL runs only through `datasources.DataContext.query`,
+  and every guardrail below is enforced by the platform, never left to the model:
+  - **Read-only access:** the service account has `roles/bigquery.dataViewer` on shared
+    datasets and `roles/bigquery.jobUser`, nothing else.
+  - **The check (`check_sql`):** `sqlglot` (BigQuery dialect) accepts exactly one
+    `SELECT` (CTEs and set operations allowed). It rejects DML, DDL, `MERGE`, `CALL`,
+    `EXPORT`, scripting and `INFORMATION_SCHEMA`. Every table must resolve to the source's
+    allow-list (`project.dataset.table`, public datasets allowed). Refused SQL never
+    reaches Google, and the refusal goes back to the agent as the tool result, so it can
+    fix its own query.
+  - **Cost:** a free dry run must estimate ≤ `BIGQUERY_MAX_BYTES` (1 GB), and the real job
+    carries `maximumBytesBilled` at the same cap, so BigQuery refuses anything larger too.
+    Results are capped at `BIGQUERY_MAX_ROWS` (200) rows and 12,000 characters, fenced as
+    data, not instructions; a job that runs past the timeout is cancelled.
+  - **Credentials:** Workload Identity Federation from AWS, so no Google key exists. Google
+    trusts the platform's IAM user locally and the AgentCore execution role when deployed.
+    `gcp_credentials` feeds boto3's credentials to google-auth through a custom
+    `AwsSecurityCredentialsSupplier`, because google-auth's own AWS source only reads env
+    vars and EC2 metadata. Setup: `docs/bigquery_setup.md`.
+  - **Opt-in:** `sql_schema` / `sql_query` are never default tools. Attaching a source to a
+    project on the Data sources page is that project's opt-in to sending query results
+    to its agents' model provider; only then are the tools offered (planner, assistant,
+    Brief editor).
+  - **Usage:** each query records `kind="bigquery_query"` with `bytes_billed`. Cost uses a
+    `per_tib` price from `pricing.json`, which stays unset until confirmed on Google's
+    pricing page.
+  - **Deploys:** the package carries `datasources.json` (the attached sources' non-secret
+    config), and the runtime gets `GCP_WIF_AUDIENCE`.
+  - **Tests:** the offline suite can't reach Google: `tests/conftest.py` replaces
+    `gcp_credentials` for every test.
+  - **Known deviation:** federation trusts the platform's AWS identity, not the user, so
+    any platform user who registers a service account that trusts the pool could query
+    as it. Mitigation now: a service account belongs to one tenant (409 if already
+    claimed). Before multi-tenant use, move to a per-tenant AWS role (or a per-tenant
+    pool) so Google can tell tenants apart.
 
 ## Working style — verify-and-retry, always
 

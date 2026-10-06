@@ -7,7 +7,10 @@ import { readEventStream } from "./sse.js";
 const BASE = import.meta.env.VITE_API_BASE ?? "/api";
 
 // The API's absolute URL, for snippets shown to users.
-export const API_URL = new URL(BASE, window.location.origin).href.replace(/\/$/, "");
+export const API_URL = new URL(BASE, window.location.origin).href.replace(
+  /\/$/,
+  "",
+);
 
 export class ApiError extends Error {
   constructor({ status, errorType, message, details }) {
@@ -94,7 +97,8 @@ async function failure(response) {
   return new ApiError({
     status: response.status,
     errorType: payload?.error_type ?? "HttpError",
-    message: payload?.message ?? `Request failed with status ${response.status}`,
+    message:
+      payload?.message ?? `Request failed with status ${response.status}`,
     details: payload?.details ?? null,
   });
 }
@@ -129,7 +133,13 @@ export const api = {
     request("/auth/login", { method: "POST", body: { email, password } }),
   me: () => request("/auth/me"),
 
-  createProject: ({ brief, agentCount, availableTools, availableLlms, documentIds }) =>
+  createProject: ({
+    brief,
+    agentCount,
+    availableTools,
+    availableLlms,
+    documentIds,
+  }) =>
     request("/projects", {
       method: "POST",
       body: {
@@ -143,28 +153,38 @@ export const api = {
       },
     }),
   // Change agents' model and tools: [{ id, provider, model, tools }]. Makes a new plan version.
-  updateAgents: (id, agents) => request(`/projects/${id}/agents`, { method: "PUT", body: { agents } }),
+  updateAgents: (id, agents) =>
+    request(`/projects/${id}/agents`, { method: "PUT", body: { agents } }),
 
   listProjects: () => request("/projects"),
   getProject: (id) => request(`/projects/${id}`),
   // Deletes the project with its plan, conversation and knowledge-base files.
   deleteProject: (id) => request(`/projects/${id}`, { method: "DELETE" }),
-  updatePlan: (id, plan) => request(`/projects/${id}/plan`, { method: "PATCH", body: plan }),
+  updatePlan: (id, plan) =>
+    request(`/projects/${id}/plan`, { method: "PATCH", body: plan }),
   getDeployment: (id) => request(`/projects/${id}/deployment`),
   deploy: (id) => request(`/projects/${id}/deploy`, { method: "POST" }),
   invokeDeployment: (id, input) =>
-    request(`/projects/${id}/deployment/invoke`, { method: "POST", body: { input } }),
-  removeDeployment: (id) => request(`/projects/${id}/deployment`, { method: "DELETE" }),
+    request(`/projects/${id}/deployment/invoke`, {
+      method: "POST",
+      body: { input },
+    }),
+  removeDeployment: (id) =>
+    request(`/projects/${id}/deployment`, { method: "DELETE" }),
   // ---- usage: models, tokens and estimated cost.
   usage: (days = 30, projectId) =>
-    request(`/usage?days=${days}${projectId ? `&project_id=${encodeURIComponent(projectId)}` : ""}`),
+    request(
+      `/usage?days=${days}${projectId ? `&project_id=${encodeURIComponent(projectId)}` : ""}`,
+    ),
   usagePricing: () => request("/usage/pricing"),
   // Read deployed runtimes' usage logs now (counts runs invoked straight through AWS).
   syncUsage: () => request("/usage/sync", { method: "POST" }),
   // ---- knowledge library: files belong to the user, attached to any number of projects.
   knowledgeOverview: () => request("/knowledge"),
-  uploadToLibrary: (files) => request("/knowledge/documents", { method: "POST", form: filesForm(files) }),
-  deleteFromLibrary: (documentId) => request(`/knowledge/documents/${documentId}`, { method: "DELETE" }),
+  uploadToLibrary: (files) =>
+    request("/knowledge/documents", { method: "POST", form: filesForm(files) }),
+  deleteFromLibrary: (documentId) =>
+    request(`/knowledge/documents/${documentId}`, { method: "DELETE" }),
   setAttachments: (documentId, projectIds) =>
     request(`/knowledge/documents/${documentId}/projects`, {
       method: "PUT",
@@ -172,26 +192,57 @@ export const api = {
     }),
   // The model new uploads use; files already in the library keep theirs.
   setLibraryEmbedding: ({ provider, model }) =>
-    request("/knowledge/embedding", { method: "PUT", body: { provider, model } }),
+    request("/knowledge/embedding", {
+      method: "PUT",
+      body: { provider, model },
+    }),
   // Re-index one file with another model (in the background).
   setDocumentEmbedding: (documentId, { provider, model }) =>
-    request(`/knowledge/documents/${documentId}/embedding`, { method: "PUT", body: { provider, model } }),
+    request(`/knowledge/documents/${documentId}/embedding`, {
+      method: "PUT",
+      body: { provider, model },
+    }),
+  // ---- data sources (BigQuery)
+  dataSources: () => request("/datasources"),
+  createDataSource: (body) => request("/datasources", { method: "POST", body }),
+  browseDataSource: (id) => request(`/datasources/${id}/browse`),
+  setDataSourceTables: (id, tables) =>
+    request(`/datasources/${id}/tables`, { method: "PUT", body: { tables } }),
+  setDataSourceProjects: (id, projectIds) =>
+    request(`/datasources/${id}/projects`, {
+      method: "PUT",
+      body: { project_ids: projectIds },
+    }),
+  queryDataSource: (id, sql) =>
+    request(`/datasources/${id}/query`, { method: "POST", body: { sql } }),
+  deleteDataSource: (id) => request(`/datasources/${id}`, { method: "DELETE" }),
   // ---- one project's view: the files attached to it.
   getKnowledge: (id) => request(`/projects/${id}/knowledge`),
   // Adds the files to the library and attaches them to the project.
   uploadDocuments: (id, files) =>
-    request(`/projects/${id}/knowledge/documents`, { method: "POST", form: filesForm(files) }),
+    request(`/projects/${id}/knowledge/documents`, {
+      method: "POST",
+      form: filesForm(files),
+    }),
   attachDocument: (id, documentId) =>
-    request(`/projects/${id}/knowledge/documents/${documentId}`, { method: "POST" }),
+    request(`/projects/${id}/knowledge/documents/${documentId}`, {
+      method: "POST",
+    }),
   // Detaches only: the file stays in the library.
   detachDocument: (id, documentId) =>
-    request(`/projects/${id}/knowledge/documents/${documentId}`, { method: "DELETE" }),
+    request(`/projects/${id}/knowledge/documents/${documentId}`, {
+      method: "DELETE",
+    }),
   searchKnowledge: (id, query, k = 5) =>
-    request(`/projects/${id}/knowledge/search`, { method: "POST", body: { query, k } }),
+    request(`/projects/${id}/knowledge/search`, {
+      method: "POST",
+      body: { query, k },
+    }),
   reviseProject: (id, message) =>
     request(`/projects/${id}/revise`, { method: "POST", body: { message } }),
   compile: (id) => request(`/projects/${id}/compile`, { method: "POST" }),
-  run: (id, input) => request(`/projects/${id}/run`, { method: "POST", body: { input } }),
+  run: (id, input) =>
+    request(`/projects/${id}/run`, { method: "POST", body: { input } }),
   // Same input as run(); onEvent receives { event, data } as each agent progresses.
   runStream: (id, input, onEvent, signal) =>
     stream(`/projects/${id}/run/stream`, { input }, onEvent, signal),

@@ -4325,3 +4325,135 @@ code {
   color: var(--text-muted);
   text-align: center;
 }
+
+/* ================================================================ data sources */
+.dsteps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.dsteps li {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.dsteps__ok svg {
+  color: var(--success);
+}
+
+.dsteps__fail svg {
+  color: var(--danger);
+}
+
+.dsteps__error {
+  display: block;
+  color: var(--danger);
+  font-size: var(--text-xs);
+}
+
+.dsection {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.dsection__hint {
+  margin: -4px 0 8px;
+  font-size: var(--text-xs);
+}
+
+.dtables {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.dtables li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.dtables__project {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.dpicker__dataset {
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  display: grid;
+  gap: 4px;
+}
+
+.dpicker__dataset legend {
+  padding: 0 4px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.dpicker__table {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.dpicker__add input {
+  flex: 1;
+  min-width: 0;
+}
+
+.dprojects {
+  margin: 0;
+  padding: 0;
+  border: none;
+  display: grid;
+  gap: 6px;
+}
+
+.dprojects__option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.dquery__sql {
+  font-size: 12.5px;
+}
+
+.dresult__meta {
+  font-size: var(--text-xs);
+  margin-bottom: 6px;
+}
+
+.dresult__scroll {
+  max-height: 360px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.dresult__table {
+  font-size: 12.5px;
+}
+
+.dresult__table td {
+  white-space: nowrap;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

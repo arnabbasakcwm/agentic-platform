@@ -8,6 +8,7 @@ import { projectTitle } from "./lib/format.js";
 import { navigate, paths, useRoute } from "./lib/router.js";
 import { ThemeContext, useThemeState } from "./lib/theme.js";
 import { useAction } from "./lib/useAction.js";
+import { DataSourcesPage } from "./pages/DataSourcesPage.jsx";
 import { KnowledgePage } from "./pages/KnowledgePage.jsx";
 import { NewProjectPage } from "./pages/NewProjectPage.jsx";
 import { ProjectWorkspace } from "./pages/ProjectWorkspace.jsx";
@@ -38,6 +39,7 @@ function crumbsFor(route, projects) {
   const root = { label: "Projects", href: paths.projects };
   if (route.page === "new") return [root, { label: "New project" }];
   if (route.page === "knowledge") return [{ label: "Knowledge" }];
+  if (route.page === "data") return [{ label: "Data sources" }];
   if (route.page === "usage") return [{ label: "Usage" }];
   if (route.page === "project") {
     const known = projects?.find((p) => p.project_id === route.id);
@@ -78,7 +80,10 @@ function Console() {
       .health()
       .then(() => setHealth("online"))
       .catch(() => setHealth("offline"));
-    api.tools().then(setTools).catch(() => {});
+    api
+      .tools()
+      .then(setTools)
+      .catch(() => {});
     api
       .providers()
       .then((r) => setProviders(r.providers))
@@ -199,7 +204,8 @@ function Console() {
         <TopBar crumbs={crumbsFor(route, projects)} health={health} />
         {health === "offline" && (
           <div className="banner" role="alert">
-            The API is unreachable. Start the backend on port 8000, then reload this page.
+            The API is unreachable. Start the backend on port 8000, then reload
+            this page.
           </div>
         )}
 
@@ -215,7 +221,10 @@ function Console() {
               }}
             />
           )}
-          {route.page === "knowledge" && <KnowledgePage onCountChanged={setKnowledgeCount} />}
+          {route.page === "knowledge" && (
+            <KnowledgePage onCountChanged={setKnowledgeCount} />
+          )}
+          {route.page === "data" && <DataSourcesPage />}
           {route.page === "usage" && <UsagePage projects={projects} />}
           {route.page === "new" && (
             <NewProjectPage

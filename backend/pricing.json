@@ -67,6 +67,7 @@
     "bedrock/apac.amazon.nova-lite-v1:0": "Bedrock price for Asia Pacific (Mumbai) not confirmed on aws.amazon.com/bedrock/pricing on 2026-10-06 (the page only partly loaded); add it from the AWS pricing calculator.",
     "bedrock/openai.gpt-oss-120b-1:0": "Bedrock price for Asia Pacific (Mumbai) not confirmed on aws.amazon.com/bedrock/pricing on 2026-10-06 (the page only partly loaded); add it from the AWS pricing calculator.",
     "bedrock/amazon.titan-embed-text-v2:0": "Bedrock price for Asia Pacific (Mumbai) not confirmed on aws.amazon.com/bedrock/pricing on 2026-10-06 (the page only partly loaded); add it from the AWS pricing calculator.",
-    "bedrock/global.cohere.embed-v4:0": "Bedrock price for Asia Pacific (Mumbai) not confirmed on aws.amazon.com/bedrock/pricing on 2026-10-06 (the page only partly loaded); add it from the AWS pricing calculator."
+    "bedrock/global.cohere.embed-v4:0": "Bedrock price for Asia Pacific (Mumbai) not confirmed on aws.amazon.com/bedrock/pricing on 2026-10-06 (the page only partly loaded); add it from the AWS pricing calculator.",
+    "bigquery/on-demand": "BigQuery on-demand price per TiB not confirmed on cloud.google.com/bigquery/pricing on 2026-10-06 (the page only partly loaded). Add it as {\"per_tib\": <USD>} with source_url and checked_on. The project is in the BigQuery sandbox, where queries are free within its limits."
   }
 }

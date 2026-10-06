@@ -5,7 +5,15 @@ import { Icon } from "./icons.jsx";
 const RECENT_LIMIT = 5;
 const API_DOCS_URL = "http://127.0.0.1:8000/docs";
 
-function NavItem({ href, icon, label, active, trail, className = "", ...props }) {
+function NavItem({
+  href,
+  icon,
+  label,
+  active,
+  trail,
+  className = "",
+  ...props
+}) {
   return (
     <a
       href={href}
@@ -21,7 +29,15 @@ function NavItem({ href, icon, label, active, trail, className = "", ...props })
   );
 }
 
-export function Sidebar({ route, projects, knowledgeCount, user, collapsed, onToggle, onSignOut }) {
+export function Sidebar({
+  route,
+  projects,
+  knowledgeCount,
+  user,
+  collapsed,
+  onToggle,
+  onSignOut,
+}) {
   const recent = (projects ?? []).slice(0, RECENT_LIMIT);
 
   return (
@@ -72,9 +88,24 @@ export function Sidebar({ route, projects, knowledgeCount, user, collapsed, onTo
           icon="book"
           label="Knowledge"
           active={route.page === "knowledge"}
-          trail={knowledgeCount > 0 ? <span className="navitem__count">{knowledgeCount}</span> : null}
+          trail={
+            knowledgeCount > 0 ? (
+              <span className="navitem__count">{knowledgeCount}</span>
+            ) : null
+          }
         />
-        <NavItem href={paths.usage} icon="chart" label="Usage" active={route.page === "usage"} />
+        <NavItem
+          href={paths.data}
+          icon="database"
+          label="Data sources"
+          active={route.page === "data"}
+        />
+        <NavItem
+          href={paths.usage}
+          icon="chart"
+          label="Usage"
+          active={route.page === "usage"}
+        />
 
         {recent.length > 0 && (
           <div className="sidebar__recent">

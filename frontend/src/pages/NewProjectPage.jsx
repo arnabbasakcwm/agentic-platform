@@ -203,7 +203,10 @@ function FilesTray({ selected, onChange, disabled }) {
 
 // ------------------------------------------------------------------ settings tray
 function SettingsTray({ settings, onChange, tools, providers, disabled }) {
-  const allTools = tools.tools ?? [];
+  // SQL tools need a data source attached, which only an existing project can have.
+  const allTools = (tools.tools ?? []).filter(
+    (t) => t.name !== "sql_schema" && t.name !== "sql_query",
+  );
   const defaultModel = providers.find((p) => p.default);
   const auto = settings.agentCount === null;
 

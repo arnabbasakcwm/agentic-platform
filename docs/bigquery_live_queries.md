@@ -1,6 +1,6 @@
 # Plan: Agents query BigQuery directly (option B), signed in through AWS identity federation
 
-Status: **planned, not started** (saved 2026-10-06). Part 1 (access setup) is for the user to run; nothing in the code has changed yet.
+Status: **built** (2026-10-06). The Google Cloud setup that was actually run, with its fixes (provider ID `aws-provider`, auto-detected project, sample dataset), is in [bigquery_setup.md](bigquery_setup.md); the rules are in the CLAUDE.md decision log, "Agents may query BigQuery with SQL they write".
 
 ## Context
 
@@ -25,55 +25,9 @@ Facts checked (read-only):
 
 ---
 
-## Part 1 — Set up access (the user runs this; Cloud Shell or local gcloud)
+## Part 1 — Set up access
 
-```bash
-PROJECT_ID=<your-gcp-project>          # holds the data and pays for queries
-PROJECT_NUMBER=$(gcloud projects describe $PROJECT_ID --format='value(projectNumber)')
-AWS_ACCOUNT=451058046921
-gcloud config set project $PROJECT_ID
-gcloud services enable bigquery.googleapis.com iam.googleapis.com iamcredentials.googleapis.com sts.googleapis.com
-
-# 1. A pool that trusts this AWS account
-gcloud iam workload-identity-pools create agentic-platform --location=global --display-name="Agentic Platform"
-gcloud iam workload-identity-pools providers create-aws aws --location=global \
-  --workload-identity-pool=agentic-platform --account-id=$AWS_ACCOUNT
-
-# 2. A read-only service account: may run jobs (billed to PROJECT_ID), reads only what you share
-gcloud iam service-accounts create agentic-bq-reader --display-name="Agentic Platform BigQuery reader"
-SA=agentic-bq-reader@$PROJECT_ID.iam.gserviceaccount.com
-gcloud projects add-iam-policy-binding $PROJECT_ID --member=serviceAccount:$SA --role=roles/bigquery.jobUser
-
-# 3. Let the two AWS identities act as that service account (nothing else can)
-POOL=projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/agentic-platform
-gcloud iam service-accounts add-iam-policy-binding $SA --role=roles/iam.workloadIdentityUser \
-  --member="principal://iam.googleapis.com/$POOL/subject/arn:aws:iam::$AWS_ACCOUNT:user/arnab-test"
-gcloud iam service-accounts add-iam-policy-binding $SA --role=roles/iam.workloadIdentityUser \
-  --member="principalSet://iam.googleapis.com/$POOL/attribute.aws_role/arn:aws:sts::$AWS_ACCOUNT:assumed-role/AmazonBedrockAgentCoreAgenticPlatform-ap-south-1"
-```
-
-4. **Share each dataset agents may read (read-only).** Run this in the BigQuery SQL editor,
-   once per dataset:
-   ```sql
-   GRANT `roles/bigquery.dataViewer` ON SCHEMA `<PROJECT_ID>.<DATASET>`
-   TO "serviceAccount:agentic-bq-reader@<PROJECT_ID>.iam.gserviceaccount.com";
-   ```
-   Or use the console: dataset → Share → Manage permissions → add the service account as
-   *BigQuery Data Viewer*. Datasets in other projects work the same way; jobs are still
-   billed to PROJECT_ID.
-
-5. **Add to `backend/.env`.** These are identifiers, not secrets:
-   ```
-   GCP_WIF_AUDIENCE=//iam.googleapis.com/projects/<PROJECT_NUMBER>/locations/global/workloadIdentityPools/agentic-platform/providers/aws
-   GCP_SERVICE_ACCOUNT=agentic-bq-reader@<PROJECT_ID>.iam.gserviceaccount.com
-   BIGQUERY_PROJECT=<PROJECT_ID>
-   ```
-
-6. **Optional backstop:** in IAM → Quotas, set a *Query usage per day per user* quota for
-   the service account.
-
-**Nothing changes on the AWS side.** Federation signs an `sts:GetCallerIdentity` request,
-which every AWS identity may call.
+Done; see [bigquery_setup.md](bigquery_setup.md) for the exact commands.
 
 ---
 

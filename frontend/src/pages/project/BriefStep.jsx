@@ -17,6 +17,8 @@ import { paths } from "../../lib/router.js";
 import { providerLabel } from "../../lib/usage.js";
 import { useAction } from "../../lib/useAction.js";
 
+// Need a data source attached to the project (Data sources page).
+const SQL_TOOLS = new Set(["sql_schema", "sql_query"]);
 const unique = (values) => [...new Set(values)];
 const modelKey = (llm) => `${llm.provider}/${llm.model}`;
 
@@ -58,10 +60,13 @@ function AgentSettings({ project, tools, providers, onSaved, savedVersion }) {
     () => modelOptions(providers, plan),
     [providers, plan],
   );
+  const hasData = (project.data_sources?.sources ?? 0) > 0;
   const hasKnowledge = (project.knowledge?.documents ?? 0) > 0;
   // knowledge_search only makes sense with files attached (the server checks too).
   const toolList = (tools.tools ?? []).filter(
-    (t) => t.name !== "knowledge_search" || hasKnowledge,
+    (t) =>
+      (t.name !== "knowledge_search" || hasKnowledge) &&
+      (!SQL_TOOLS.has(t.name) || hasData),
   );
   const enabledExternal = new Set(project.side_effect_tools_enabled ?? []);
   const external = new Set(

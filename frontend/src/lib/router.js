@@ -4,20 +4,36 @@
 //   #/projects                 the project list
 //   #/new                      define a new project
 //   #/knowledge                every knowledge-base file across projects
+//   #/data                     data sources (BigQuery) agents may query
 //   #/usage                    models, tokens and cost
 //   #/projects/<id>/<step>     one project, at a step of its workflow
 
 import { useEffect, useState } from "react";
 
-export const PROJECT_STEPS = ["brief", "knowledge", "plan", "compile", "run", "deploy"];
+export const PROJECT_STEPS = [
+  "brief",
+  "knowledge",
+  "plan",
+  "compile",
+  "run",
+  "deploy",
+];
 
 export function parseRoute(hash) {
-  const [first, id, step] = hash.replace(/^#\/?/, "").split("/").filter(Boolean);
+  const [first, id, step] = hash
+    .replace(/^#\/?/, "")
+    .split("/")
+    .filter(Boolean);
   if (first === "new") return { page: "new" };
   if (first === "knowledge") return { page: "knowledge" };
+  if (first === "data") return { page: "data" };
   if (first === "usage") return { page: "usage" };
   if (first === "projects" && id) {
-    return { page: "project", id, step: PROJECT_STEPS.includes(step) ? step : "plan" };
+    return {
+      page: "project",
+      id,
+      step: PROJECT_STEPS.includes(step) ? step : "plan",
+    };
   }
   if (first === "projects") return { page: "projects" };
   // No (or an unknown) route: the New project page is the console's landing page.
@@ -42,6 +58,7 @@ export const paths = {
   projects: "#/projects",
   newProject: "#/new",
   knowledge: "#/knowledge",
+  data: "#/data",
   usage: "#/usage",
   project: (id, step = "plan") => `#/projects/${id}/${step}`,
 };

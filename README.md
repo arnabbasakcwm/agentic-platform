@@ -284,6 +284,13 @@ signed-in user's projects. Interactive docs: http://127.0.0.1:8000/docs.
 | `PUT /knowledge/embedding` | Set the embedding model new uploads use (existing files keep theirs) |
 | `PUT /knowledge/documents/{doc_id}/embedding` | Re-index one file with another embedding model (202; in the background) |
 | `POST /knowledge/search` | Search the whole library |
+| `GET /datasources` | Your BigQuery data sources, the projects you can attach them to, defaults and per-query limits |
+| `POST /datasources` | Connect BigQuery (checks sign-in and lists datasets first) |
+| `GET /datasources/{id}/browse` | Datasets and tables the service account can see |
+| `PUT /datasources/{id}/tables` | Set which tables agents may query (`project.dataset.table`) |
+| `PUT /datasources/{id}/projects` | Set which projects may query the source (the opt-in) |
+| `POST /datasources/{id}/query` | Test a query with the same checks and limits as `sql_query` |
+| `DELETE /datasources/{id}` | Remove a data source |
 | `GET /usage?days=30&project_id=` | Models, tokens and estimated cost: totals, per day, per model, per project, per activity, recent runs |
 | `POST /usage/sync` | Read deployed runtimes' usage logs now, counting runs invoked straight through AWS |
 | `GET /usage/pricing` | The price table in use, and models you've used that have no price |
@@ -323,6 +330,32 @@ plus `bedrock:ListFoundationModels`, `bedrock:ListInferenceProfiles` and
 invoke are listed: a model whose agreement hasn't been accepted (Bedrock → Model access)
 is left out. Set `BEDROCK_REGION` to use a region other than the AgentCore one (default
 ap-south-1).
+
+## BigQuery data sources (agents query your tables)
+
+Agents can answer from live BigQuery data with two tools: `sql_schema` (which tables and
+columns exist) and `sql_query` (run a query). The platform signs in to Google with your
+AWS identity (Workload Identity Federation), so there's no Google key file. The one-time
+Google Cloud setup is in [docs/bigquery_setup.md](docs/bigquery_setup.md); it ends with
+three lines for `backend/.env` (`GCP_WIF_AUDIENCE`, `GCP_SERVICE_ACCOUNT`,
+`BIGQUERY_PROJECT`).
+
+Then, in the console's **Data sources** page:
+1. **Connect:** the connection is checked step by step.
+2. **Choose tables:** browse the project's datasets, or add any table by full name,
+   public datasets included.
+3. **Attach the source to projects.** Query results are sent to those projects' agents'
+   model provider, so attaching is the opt-in.
+4. **Test a query.**
+
+Give an agent `sql_schema` and `sql_query` on the Brief page.
+
+Every query is checked by the platform before Google sees it:
+- one `SELECT`, over your chosen tables only; no writes or scripts;
+- at most 1 GB scanned (a free dry run first, and BigQuery enforces the cap too);
+- at most 200 rows returned.
+
+Check the connection from a terminal with `uv run python scripts/bigquery_check.py`.
 
 ## Deploying to AWS (AgentCore)
 

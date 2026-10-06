@@ -37,6 +37,7 @@ const project = {
   conversation: [],
   deployment: null,
   knowledge: { documents: 0, ready: 0, embedding: null },
+  data_sources: { sources: 0, tables: 0 },
   created_at: "2026-10-01T06:00:00Z",
   updated_at: "2026-10-01T06:09:54Z",
 };
@@ -243,6 +244,98 @@ const usageSync = { at: null, last: null };
 // so the other specs see the original.
 const PRISTINE = structuredClone(project);
 
+// ---- data sources: one BigQuery project with a "mydata" dataset.
+const BQ = { project: "agenticdb-510807", sa: "agentic-bq-reader@agenticdb-510807.iam.gserviceaccount.com" };
+const dataSources = { list: [] };
+
+function dataSummary() {
+  const attached = dataSources.list.filter((s) => s.project_ids.includes(PROJECT_ID));
+  project.data_sources = { sources: attached.length, tables: attached.reduce((n, s) => n + s.tables.length, 0) };
+}
+
+function dataBody() {
+  return {
+    configured: true,
+    defaults: { billing_project: BQ.project, service_account: BQ.sa },
+    limits: { max_bytes: 1_000_000_000, max_rows: 200 },
+    sources: dataSources.list,
+    projects: [
+      ...(project.deleted ? [] : [{ project_id: PROJECT_ID, brief: project.brief, used_by: usedByData() }]),
+      { project_id: SECOND_PROJECT.project_id, brief: SECOND_PROJECT.brief, used_by: [] },
+    ],
+  };
+}
+
+const usedByData = () => plan.agents.filter((a) => a.tools.includes("sql_query")).map((a) => a.id);
+
+async function dataRoute(req, res, path) {
+  if (path === "/datasources" && req.method === "GET") return send(res, 200, dataBody());
+  if (path === "/datasources" && req.method === "POST") {
+    const body = await readBody(req);
+    if (body.service_account && !body.service_account.endsWith(".iam.gserviceaccount.com")) {
+      return send(res, 422, {
+        error_type: "DataSourceConnectionFailed",
+        message: "couldn't connect: Permission 'iam.serviceAccounts.getAccessToken' denied",
+        details: { steps: [{ step: "act as the service account (roles/iam.workloadIdentityUser)", ok: false, error: "Permission denied" }] },
+      });
+    }
+    await sleep(200);
+    const source = {
+      id: `ds${Date.now()}`, kind: "bigquery", name: body.name, billing_project: body.billing_project || BQ.project,
+      service_account: body.service_account || BQ.sa, tables: [], project_ids: [],
+      created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+    };
+    dataSources.list.unshift(source);
+    return send(res, 201, {
+      source,
+      check: { ok: true, datasets: ["mydata"], steps: [
+        { step: "sign in to Google with the platform's AWS identity", ok: true },
+        { step: `list datasets in ${source.billing_project}`, ok: true, count: 1 },
+      ] },
+    });
+  }
+  const m = path.match(/^\/datasources\/([^/]+)(?:\/(browse|tables|projects|query))?$/);
+  if (!m) return false;
+  const source = dataSources.list.find((s) => s.id === m[1]);
+  if (!source) return send(res, 404, { error_type: "DataSourceNotFound", message: "data source not found", details: null });
+  const action = m[2];
+  if (!action && req.method === "DELETE") {
+    dataSources.list = dataSources.list.filter((s) => s !== source);
+    dataSummary();
+    return send(res, 200, { deleted: source.id });
+  }
+  if (action === "browse") {
+    return send(res, 200, { project: source.billing_project, datasets: [{ id: "mydata", tables: ["stations", "trips"] }] });
+  }
+  if (action === "tables") {
+    const body = await readBody(req);
+    const bad = body.tables.find((t) => t.split(".").length < 3);
+    if (bad) return send(res, 422, { error_type: "DataSourceError", message: `'${bad}' isn't a full table name (project.dataset.table)`, details: null });
+    source.tables = body.tables.map((id) => ({ id, location: id.startsWith("bigquery-public-data") ? "US" : "US", description: null }));
+    dataSummary();
+    return send(res, 200, { source });
+  }
+  if (action === "projects") {
+    const body = await readBody(req);
+    source.project_ids = [...new Set(body.project_ids)];
+    dataSummary();
+    return send(res, 200, { source });
+  }
+  if (action === "query") {
+    const body = await readBody(req);
+    if (!/^\s*(select|with)\b/i.test(body.sql)) {
+      return send(res, 422, { error_type: "QueryRefused", message: "only SELECT queries are allowed (got DELETE); the data is read-only", details: null });
+    }
+    await sleep(200);
+    return send(res, 200, {
+      columns: ["start_station_name", "trips"],
+      rows: [["21st & Speedway @PCL", 18342], ["Dean Keeton & Speedway", 15221], ["Rainey St & Cummings", 11873]],
+      truncated: false, bytes_processed: 23_047_180, bytes_billed: 24_117_248,
+    });
+  }
+  return false;
+}
+
 function reset() {
   delete project.deleted;
   Object.assign(project, structuredClone(PRISTINE));
@@ -250,6 +343,7 @@ function reset() {
   project.plan = plan;
   knowledge.embedding = null;
   knowledge.documents = [];
+  dataSources.list = [];
   Object.assign(deploys, { available: false, current: null, count: 0 });
   created.last = null;
 }
@@ -403,6 +497,8 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, {
       tools: [
         { name: "knowledge_search", side_effect: false, description: "Search the project's knowledge files" },
+        { name: "sql_schema", side_effect: false, description: "List the tables of this project's data sources" },
+        { name: "sql_query", side_effect: false, description: "Run a read-only SQL query on this project's data sources" },
         { name: "lookup", side_effect: false, description: "Small built-in reference table" },
         { name: "calculator", side_effect: false, description: "Arithmetic" },
         { name: "web_search", side_effect: true, description: "Live web search (Tavily)" },
@@ -490,6 +586,10 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, project);
   }
   // Library
+  if (path.startsWith("/datasources")) {
+    const handled = await dataRoute(req, res, path);
+    if (handled !== false) return handled;
+  }
   if (path === "/knowledge" && req.method === "GET") return send(res, 200, libraryBody());
   if (path === "/usage" && req.method === "GET") {
     const params = new URL(req.url, "http://x").searchParams;

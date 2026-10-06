@@ -425,6 +425,35 @@ KnowledgeStore.replace_chunks ──► status=ready (chunk_count) | failed (err
 
 ---
 
+### 6.2 Data sources: BigQuery (`datasources.py`)
+
+The one place model-written code runs (decision log: "Agents may query BigQuery with SQL
+they write"). This module has no database access, so the deployed runtime imports it too.
+
+```
+sql_query(sql) ─► DataContext.query
+    check_sql (sqlglot): one SELECT, allowed tables only, no INFORMATION_SCHEMA
+    ─► dry run: estimate ≤ BIGQUERY_MAX_BYTES ─► jobs.query (maximumBytesBilled = cap,
+    maxResults = 201, timeoutMs, labels) ─► rows capped at 200 / 12k chars, fenced
+    ─► usage: bigquery_query, bytes_billed
+```
+
+- **Credentials:** `gcp_credentials(service_account)` builds
+  `google.auth.aws.Credentials` (audience `GCP_WIF_AUDIENCE`, impersonating the service
+  account), with an `AwsSecurityCredentialsSupplier` that reads boto3's credentials:
+  the IAM user locally, the execution role on AgentCore.
+- **Client:** `BigQueryClient` calls the BigQuery REST API through an `AuthorizedSession`
+  (no `google-cloud-bigquery` dependency). It lists datasets and tables, reads a table's
+  metadata and runs queries.
+- **Context:** `DataContext` reads the project's attached sources at call time.
+  - A query must read tables of one source and one location.
+  - Schemas (columns, types, descriptions, partitioning) are cached for 10 minutes.
+- **Storage:** `DataSource` (in `stores.py`, the `data_sources` collection) extends
+  `DataSourceConfig` with the tenant, the attached projects and timestamps. Every store
+  method is scoped by tenant.
+- **Deploys:** the package carries `datasources.json`, and `runtime_app` builds a
+  `config_context` from it.
+
 ## 7. Errors (`errors.py`) and how they surface
 
 All typed errors extend `PlatformError`, letting the API map each to a stable JSON shape
