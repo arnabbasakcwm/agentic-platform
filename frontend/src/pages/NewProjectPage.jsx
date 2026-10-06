@@ -1,9 +1,20 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Icon } from "../components/icons.jsx";
-import { ModelOptions } from "../components/ModelOptions.jsx";
-import { ErrorCallout, LinkButton, Pill, StatusBadge, Switch } from "../components/ui.jsx";
+import { ModelPicker } from "../components/ModelPicker.jsx";
+import {
+  ErrorCallout,
+  LinkButton,
+  Pill,
+  StatusBadge,
+  Switch,
+} from "../components/ui.jsx";
 import { api } from "../lib/api.js";
-import { batches, checkFiles, documentBadge, formatBytes } from "../lib/knowledge.js";
+import {
+  batches,
+  checkFiles,
+  documentBadge,
+  formatBytes,
+} from "../lib/knowledge.js";
 import { paths } from "../lib/router.js";
 import { useAction } from "../lib/useAction.js";
 
@@ -39,9 +50,13 @@ const PATTERN_PHRASE = {
 let nextMessageId = 0;
 
 function describeSettings(settings, tools, providers) {
-  const parts = [settings.agentCount ? `${settings.agentCount} agents` : "Auto team size"];
-  const model = providers.find((p) => `${p.provider}/${p.model}` === settings.model);
-  parts.push(model ? model.model : "Default model");
+  const parts = [
+    settings.agentCount ? `${settings.agentCount} agents` : "Auto team size",
+  ];
+  const model = providers.find(
+    (p) => `${p.provider}/${p.model}` === settings.model,
+  );
+  parts.push(model ? (model.name ?? model.model) : "Default model");
   parts.push(`${settings.tools.length} of ${tools.tools?.length ?? 0} tools`);
   return parts.join(" · ");
 }
@@ -63,29 +78,45 @@ function FilesTray({ selected, onChange, disabled }) {
   const { run: runLoad } = load;
 
   useEffect(() => {
-    runLoad(() => api.knowledgeOverview()).then((body) => body && setLibrary(body));
+    runLoad(() => api.knowledgeOverview()).then(
+      (body) => body && setLibrary(body),
+    );
   }, [runLoad]);
 
   const ids = new Set(selected.map((d) => d.id));
 
   function toggle(doc) {
-    onChange(ids.has(doc.id) ? selected.filter((d) => d.id !== doc.id) : [...selected, doc]);
+    onChange(
+      ids.has(doc.id)
+        ? selected.filter((d) => d.id !== doc.id)
+        : [...selected, doc],
+    );
   }
 
   async function addFiles(files) {
-    const { accepted, problems: refused } = checkFiles(files, library.limits, library.documents.map((d) => d.filename));
+    const { accepted, problems: refused } = checkFiles(
+      files,
+      library.limits,
+      library.documents.map((d) => d.filename),
+    );
     setProblems(refused);
     if (!accepted.length) return;
     const added = await upload.run(async () => {
       const docs = [];
-      for (const batch of batches(accepted, library.limits.max_files_per_upload)) {
+      for (const batch of batches(
+        accepted,
+        library.limits.max_files_per_upload,
+      )) {
         docs.push(...(await api.uploadToLibrary(batch)).documents);
       }
       return docs;
     });
     if (added) {
       onChange([...selected, ...added]);
-      setLibrary((lib) => ({ ...lib, documents: [...added, ...lib.documents] }));
+      setLibrary((lib) => ({
+        ...lib,
+        documents: [...added, ...lib.documents],
+      }));
     }
   }
 
@@ -101,7 +132,11 @@ function FilesTray({ selected, onChange, disabled }) {
               onClick={() => inputRef.current?.click()}
               disabled={disabled || !library || upload.busy}
             >
-              {upload.busy ? <span className="spin" /> : <Icon name="upload" size={13} />}
+              {upload.busy ? (
+                <span className="spin" />
+              ) : (
+                <Icon name="upload" size={13} />
+              )}
               Upload files
             </button>
             <input
@@ -117,23 +152,39 @@ function FilesTray({ selected, onChange, disabled }) {
                 e.target.value = "";
               }}
             />
-            <span className="tray__hint">PDF, Word, text, Markdown or CSV. New files also go into your library.</span>
+            <span className="tray__hint">
+              PDF, Word, text, Markdown or CSV. New files also go into your
+              library.
+            </span>
           </div>
-          {problems.length > 0 && <span className="tray__hint tray__hint--warn">{problems.join(" ")}</span>}
+          {problems.length > 0 && (
+            <span className="tray__hint tray__hint--warn">
+              {problems.join(" ")}
+            </span>
+          )}
           <ErrorCallout error={load.error || upload.error} />
           {library && library.documents.length > 0 && (
             <fieldset className="filepick">
-              <legend className="tray__hint">Or choose from your library</legend>
+              <legend className="tray__hint">
+                Or choose from your library
+              </legend>
               {library.documents.map((doc) => {
                 const { badge, label } = documentBadge(doc.status);
                 return (
                   <label key={doc.id} className="filepick__item">
-                    <input type="checkbox" checked={ids.has(doc.id)} onChange={() => toggle(doc)} disabled={disabled} />
+                    <input
+                      type="checkbox"
+                      checked={ids.has(doc.id)}
+                      onChange={() => toggle(doc)}
+                      disabled={disabled}
+                    />
                     <Icon name="file" size={14} />
                     <span className="filepick__name" title={doc.filename}>
                       {doc.filename}
                     </span>
-                    <span className="muted filepick__size">{formatBytes(doc.size_bytes)}</span>
+                    <span className="muted filepick__size">
+                      {formatBytes(doc.size_bytes)}
+                    </span>
                     <StatusBadge status={badge} label={label} />
                   </label>
                 );
@@ -141,8 +192,8 @@ function FilesTray({ selected, onChange, disabled }) {
             </fieldset>
           )}
           <span className="tray__hint">
-            Agents search these files with the knowledge_search tool; file text is sent to the embedding provider
-            to index it.
+            Agents search these files with the knowledge_search tool; file text
+            is sent to the embedding provider to index it.
           </span>
         </div>
       </div>
@@ -163,7 +214,9 @@ function SettingsTray({ settings, onChange, tools, providers, disabled }) {
     onChange({ tools: allTools.map((t) => t.name).filter((n) => next.has(n)) });
   }
 
-  const externalOn = allTools.filter((t) => t.side_effect && settings.tools.includes(t.name));
+  const externalOn = allTools.filter(
+    (t) => t.side_effect && settings.tools.includes(t.name),
+  );
 
   return (
     <div className="tray" id="composer-settings">
@@ -184,7 +237,11 @@ function SettingsTray({ settings, onChange, tools, providers, disabled }) {
               <button
                 type="button"
                 aria-label="Fewer agents"
-                onClick={() => onChange({ agentCount: Math.max(MIN_AGENTS, settings.agentCount - 1) })}
+                onClick={() =>
+                  onChange({
+                    agentCount: Math.max(MIN_AGENTS, settings.agentCount - 1),
+                  })
+                }
                 disabled={disabled || settings.agentCount <= MIN_AGENTS}
               >
                 <Icon name="minus" size={13} />
@@ -195,7 +252,11 @@ function SettingsTray({ settings, onChange, tools, providers, disabled }) {
               <button
                 type="button"
                 aria-label="More agents"
-                onClick={() => onChange({ agentCount: Math.min(MAX_AGENTS, settings.agentCount + 1) })}
+                onClick={() =>
+                  onChange({
+                    agentCount: Math.min(MAX_AGENTS, settings.agentCount + 1),
+                  })
+                }
                 disabled={disabled || settings.agentCount >= MAX_AGENTS}
               >
                 <Icon name="plus" size={13} />
@@ -208,15 +269,14 @@ function SettingsTray({ settings, onChange, tools, providers, disabled }) {
       <div className="tray__row">
         <span className="tray__label">Model</span>
         <div className="tray__control">
-          <select
+          <ModelPicker
+            label="Model"
             value={settings.model}
-            onChange={(e) => onChange({ model: e.target.value })}
+            options={providers}
+            onChange={(model) => onChange({ model })}
+            emptyLabel={`Platform default${defaultModel ? ` (${defaultModel.name ?? defaultModel.model})` : ""}`}
             disabled={disabled}
-            aria-label="Model"
-          >
-            <option value="">Platform default{defaultModel ? ` (${defaultModel.model})` : ""}</option>
-            <ModelOptions options={providers} isDisabled={(p) => p.available === false} />
-          </select>
+          />
         </div>
       </div>
 
@@ -238,7 +298,10 @@ function SettingsTray({ settings, onChange, tools, providers, disabled }) {
                     .filter(Boolean)
                     .join(" ")}
                   aria-pressed={on}
-                  title={tool.description + (tool.side_effect ? " — sends data to a third party" : "")}
+                  title={
+                    tool.description +
+                    (tool.side_effect ? " — sends data to a third party" : "")
+                  }
                   onClick={() => toggleTool(tool.name)}
                   disabled={disabled}
                 >
@@ -274,21 +337,35 @@ function PlanReply({ project }) {
   return (
     <>
       <p>
-        Here's a team of <strong>{n} agent{n === 1 ? "" : "s"}</strong>,{" "}
-        {PATTERN_PHRASE[plan.orchestration_pattern] ?? plan.orchestration_pattern}.
+        Here's a team of{" "}
+        <strong>
+          {n} agent{n === 1 ? "" : "s"}
+        </strong>
+        ,{" "}
+        {PATTERN_PHRASE[plan.orchestration_pattern] ??
+          plan.orchestration_pattern}
+        .
       </p>
       <ol className="msg__agents">
         {plan.agents.map((agent) => (
           <li key={agent.id}>
             <span className="mono">{agent.id}</span>
             <span className="muted">{agent.role}</span>
-            {agent.id === plan.supervisor_id && <Pill tone="accent">router</Pill>}
+            {agent.id === plan.supervisor_id && (
+              <Pill tone="accent">router</Pill>
+            )}
           </li>
         ))}
       </ol>
-      <p className="muted">Nothing has run yet. Review the plan, then compile and run it.</p>
+      <p className="muted">
+        Nothing has run yet. Review the plan, then compile and run it.
+      </p>
       <div className="msg__actions">
-        <LinkButton variant="primary" size="sm" href={paths.project(project.project_id, "plan")}>
+        <LinkButton
+          variant="primary"
+          size="sm"
+          href={paths.project(project.project_id, "plan")}
+        >
           Review plan
           <Icon name="arrowRight" size={14} />
         </LinkButton>
@@ -322,7 +399,9 @@ function Message({ message, onRetry, busy }) {
   return (
     <div className="msg msg--assistant" aria-live="polite">
       <AssistantAvatar />
-      <div className={`msg__bubble ${message.status === "error" ? "msg__bubble--error" : ""}`}>
+      <div
+        className={`msg__bubble ${message.status === "error" ? "msg__bubble--error" : ""}`}
+      >
         {message.status === "pending" && (
           <div className="typing">
             <span className="typing__dots" aria-hidden="true">
@@ -336,10 +415,17 @@ function Message({ message, onRetry, busy }) {
         {message.status === "done" && <PlanReply project={message.project} />}
         {message.status === "error" && (
           <>
-            <p className="msg__error-title">{message.error.errorType ?? "Error"}</p>
+            <p className="msg__error-title">
+              {message.error.errorType ?? "Error"}
+            </p>
             <p>{message.error.message}</p>
             <div className="msg__actions">
-              <button type="button" className="btn btn--sm" onClick={onRetry} disabled={busy}>
+              <button
+                type="button"
+                className="btn btn--sm"
+                onClick={onRetry}
+                disabled={busy}
+              >
                 Try again
               </button>
             </div>
@@ -359,11 +445,18 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
   // Knowledge files for the next project (library documents).
   const [files, setFiles] = useState([]);
   // agentCount null = the planner decides. tools null = follow the platform default.
-  const [settings, setSettings] = useState({ agentCount: null, model: "", tools: null });
+  const [settings, setSettings] = useState({
+    agentCount: null,
+    model: "",
+    tools: null,
+  });
   const textareaRef = useRef(null);
   const endRef = useRef(null);
 
-  const effectiveSettings = { ...settings, tools: settings.tools ?? tools.default ?? [] };
+  const effectiveSettings = {
+    ...settings,
+    tools: settings.tools ?? tools.default ?? [],
+  };
   const busy = messages.some((m) => m.status === "pending");
   const empty = messages.length === 0;
 
@@ -384,22 +477,30 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
   }
 
   async function plan(request, replyId) {
-    const chosen = providers.find((p) => `${p.provider}/${p.model}` === request.model);
+    const chosen = providers.find(
+      (p) => `${p.provider}/${p.model}` === request.model,
+    );
     try {
       const project = await api.createProject({
         brief: request.brief,
         agentCount: request.agentCount,
         availableTools: request.tools,
-        availableLlms: chosen ? [{ provider: chosen.provider, model: chosen.model }] : null,
+        availableLlms: chosen
+          ? [{ provider: chosen.provider, model: chosen.model }]
+          : null,
         documentIds: request.files.map((f) => f.id),
       });
       setMessages((all) =>
-        all.map((m) => (m.id === replyId ? { ...m, status: "done", project } : m)),
+        all.map((m) =>
+          m.id === replyId ? { ...m, status: "done", project } : m,
+        ),
       );
       onCreated(project);
     } catch (error) {
       setMessages((all) =>
-        all.map((m) => (m.id === replyId ? { ...m, status: "error", error } : m)),
+        all.map((m) =>
+          m.id === replyId ? { ...m, status: "error", error } : m,
+        ),
       );
     }
   }
@@ -432,13 +533,19 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
 
   function retry(message) {
     setMessages((all) =>
-      all.map((m) => (m.id === message.id ? { ...m, status: "pending", error: null } : m)),
+      all.map((m) =>
+        m.id === message.id ? { ...m, status: "pending", error: null } : m,
+      ),
     );
     plan(message.request, message.id);
   }
 
   function onKeyDown(event) {
-    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+    if (
+      event.key === "Enter" &&
+      !event.shiftKey &&
+      !event.nativeEvent.isComposing
+    ) {
       send(event);
     }
   }
@@ -453,9 +560,9 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
             </span>
             <h1>What should your agent team do?</h1>
             <p className="muted">
-              Describe the task in your own words. The planner decides how many agents you
-              need, what each one does and how they work together. You review the plan before
-              anything runs.
+              Describe the task in your own words. The planner decides how many
+              agents you need, what each one does and how they work together.
+              You review the plan before anything runs.
             </p>
             <div className="suggestions">
               {EXAMPLES.map((example) => (
@@ -490,7 +597,9 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
 
       <form className="composer" onSubmit={send}>
         <div className="composer__inner">
-          {filesOpen && <FilesTray selected={files} onChange={setFiles} disabled={busy} />}
+          {filesOpen && (
+            <FilesTray selected={files} onChange={setFiles} disabled={busy} />
+          )}
           {settingsOpen && (
             <SettingsTray
               settings={effectiveSettings}
@@ -502,7 +611,10 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
           )}
           <div className="composer__box">
             {files.length > 0 && (
-              <ul className="composer__files" aria-label="Knowledge files for this project">
+              <ul
+                className="composer__files"
+                aria-label="Knowledge files for this project"
+              >
                 {files.map((f) => (
                   <li key={f.id} className="filechip">
                     <Icon name="file" size={12} />
@@ -510,7 +622,9 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
                     <button
                       type="button"
                       className="filechip__remove"
-                      onClick={() => setFiles((all) => all.filter((x) => x.id !== f.id))}
+                      onClick={() =>
+                        setFiles((all) => all.filter((x) => x.id !== f.id))
+                      }
                       aria-label={`Remove ${f.filename}`}
                     >
                       <Icon name="close" size={11} />
@@ -562,13 +676,17 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
                 aria-label="Plan this team"
                 title="Plan this team (Enter)"
               >
-                {busy ? <span className="spin" /> : <Icon name="arrowUp" size={16} />}
+                {busy ? (
+                  <span className="spin" />
+                ) : (
+                  <Icon name="arrowUp" size={16} />
+                )}
               </button>
             </div>
           </div>
           <p className="composer__hint">
-            Enter to send, Shift+Enter for a new line. Each message plans a new project — nothing
-            runs until you choose to run it.
+            Enter to send, Shift+Enter for a new line. Each message plans a new
+            project — nothing runs until you choose to run it.
           </p>
         </div>
       </form>

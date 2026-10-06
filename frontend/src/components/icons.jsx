@@ -42,6 +42,12 @@ const PATHS = {
   close: <path d="M6 6l12 12M18 6 6 18" />,
   chevronRight: <path d="m9 6 6 6-6 6" />,
   chevronDown: <path d="m6 9 6 6 6-6" />,
+  search: (
+    <>
+      <circle cx="11" cy="11" r="7" />
+      <path d="m20 20-3.5-3.5" />
+    </>
+  ),
   sun: (
     <>
       <circle cx="12" cy="12" r="4" />

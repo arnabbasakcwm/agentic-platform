@@ -90,13 +90,24 @@ for (const scheme of ["light", "dark"]) {
     await expect(editor.getByRole("button", { name: "Save changes" })).toBeDisabled();
     // No knowledge files attached: knowledge_search isn't offered.
     await expect(editor.getByRole("button", { name: "knowledge_search" })).toHaveCount(0);
-    // A model without a key can't be chosen.
-    // (Playwright's toBeDisabled doesn't read a native <option>'s disabled state.)
-    const keyless = editor.getByLabel("Model for price_analyzer").locator("option", { hasText: "claude-sonnet-4-6" });
-    expect(await keyless.evaluate((o) => o.disabled)).toBe(true);
-    await expect(keyless).toContainText("(no API key)");
-
-    await editor.getByLabel("Model for price_analyzer").selectOption({ label: "OpenAI · gpt-4o-mini" });
+    // The model menu: searchable, grouped, and a model without a key can't be chosen.
+    await editor.getByRole("button", { name: /^Model for price_analyzer/ }).click();
+    const menu = editor.getByRole("listbox", { name: "Model for price_analyzer" });
+    await expect(menu.getByRole("group", { name: "Platform models" })).toBeVisible();
+    await expect(menu.getByRole("group", { name: "Amazon Bedrock · recommended" }).getByRole("option")).toHaveCount(3);
+    await expect(menu.getByRole("group", { name: "Amazon Bedrock · Anthropic" })).toContainText("Claude Opus 4.6");
+    const keyless = menu.getByRole("option", { name: /claude-sonnet-4-6/ });
+    await expect(keyless).toHaveAttribute("aria-disabled", "true");
+    await expect(keyless).toContainText("No API key");
+    await page.screenshot({ path: `e2e/screenshots/model-picker-${scheme}.png`, fullPage: true });
+    expect(await axeProblems(page, "model menu")).toEqual([]);
+    // Typing filters across sections; arrows and Enter pick.
+    const search = editor.getByRole("combobox", { name: "Search model for price_analyzer" });
+    await search.fill("4o-mini");
+    await expect(menu.getByRole("option")).toHaveCount(1);
+    await search.press("Enter");
+    await expect(menu).toHaveCount(0);
+    await expect(editor.getByRole("button", { name: /^Model for price_analyzer/ })).toContainText("gpt-4o-mini · OpenAI");
     const tools = editor.getByRole("group", { name: "Tools for price_analyzer" });
     await tools.getByRole("button", { name: "wikipedia" }).click();
     await expect(tools.getByRole("button", { name: "wikipedia" })).toHaveAttribute("aria-pressed", "true");
@@ -106,16 +117,25 @@ for (const scheme of ["light", "dark"]) {
     await page.screenshot({ path: `e2e/screenshots/brief-editor-${scheme}.png`, fullPage: true });
     expect(await axeProblems(page, "brief editor")).toEqual([]);
 
-    // Amazon Bedrock models sit in their own group in the menu.
-    const select = editor.getByLabel("Model for travel_advisor");
-    await expect(select.locator('optgroup[label="Amazon Bedrock"] option')).toHaveCount(3);
-    await select.selectOption("bedrock/in.anthropic.claude-haiku-4-5-20251001-v1:0");
+    // A Bedrock model, with where it runs; Escape closes without changing anything.
+    await editor.getByRole("button", { name: /^Model for travel_advisor/ }).click();
+    const advisorMenu = editor.getByRole("listbox", { name: "Model for travel_advisor" });
+    await page.keyboard.press("Escape");
+    await expect(advisorMenu).toHaveCount(0);
+    await editor.getByRole("button", { name: /^Model for travel_advisor/ }).click();
+    const haiku = advisorMenu.getByRole("option", { name: /Claude Haiku 4\.5/ });
+    await expect(haiku).toContainText("India");
+    await haiku.click();
+    await expect(editor.getByRole("button", { name: /^Model for travel_advisor/ })).toContainText(
+      "Claude Haiku 4.5 · Anthropic on Bedrock",
+    );
     await expect(editor).toContainText("2 agents changed");
 
     // Reset discards; then save for real.
     await editor.getByRole("button", { name: "Reset" }).click();
     await expect(editor.getByRole("button", { name: "Save changes" })).toBeDisabled();
-    await editor.getByLabel("Use one model for every agent").selectOption({ label: "OpenAI · gpt-4o-mini" });
+    await editor.getByRole("button", { name: /^Use one model for every agent/ }).click();
+    await editor.getByRole("listbox", { name: "Use one model for every agent" }).getByRole("option", { name: /gpt-4o-mini/ }).click();
     await expect(editor).toContainText("3 agents changed");
     await editor.getByRole("button", { name: "Save changes" }).click();
     await expect(page.getByText("Saved as plan v3")).toBeVisible();

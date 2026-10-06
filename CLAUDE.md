@@ -438,10 +438,17 @@ whenever a change departs from or extends the contract above — don't silently 
   - **Model IDs:** a model id or an **inference-profile id**. Claude is only reachable
     through a profile (`in.` / `apac.` / `global.`).
   - **Catalog:** `bedrock_catalog` lists the account's chat models and profiles live
-    (cached 10 minutes; a failed refresh keeps the last good list), dropping embedding,
-    image, speech and guard models, and keeping one profile per model (in-country, then
-    regional, then global). Bedrock ids are accepted only if they're in that list
-    (create, `/agents`); the assistant may use the recommended ones.
+    (cached 10 minutes; a stale list is served while it refreshes in the background, and
+    a failed refresh keeps the last good list), dropping embedding, image, speech and
+    guard models, and keeping one profile per model (in-country, then regional, then
+    global). It lists only models the account can invoke: `GetFoundationModelAvailability`
+    must report agreement, authorization, entitlement and region all available (a model
+    whose access can't be read is kept). Entries carry a clean `vendor`, `name` and
+    `scope`. Bedrock ids are accepted only if they're in that list (create, `/agents`);
+    the assistant may use the recommended ones.
+  - **Console:** model menus are `components/ModelPicker.jsx`, a searchable listbox
+    grouped into platform models, recommended Bedrock models and one section per vendor,
+    with the region as a tag. Not a native `<select>`, which can't be styled or searched.
   - **Embeddings:** each option in `config.EMBEDDING_OPTIONS` carries its vector size
     (Gemini/OpenAI 768; Bedrock Titan v2 and Cohere v4 1024). Each model's vectors are
     kept and searched in their own matrix (see the per-file decision below).

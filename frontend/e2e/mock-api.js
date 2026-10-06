@@ -417,9 +417,12 @@ const server = http.createServer(async (req, res) => {
         { provider: "google_genai", model: "gemini-3.1-pro-preview", default: true, available: true },
         { provider: "openai", model: "gpt-4o-mini", default: false, available: true },
         { provider: "anthropic", model: "claude-sonnet-4-6", default: false, available: false },
-        { provider: "bedrock", model: "global.anthropic.claude-sonnet-4-6", label: "Global Claude Sonnet 4.6 (global)", recommended: true, default: false, available: true, group: "Amazon Bedrock" },
-        { provider: "bedrock", model: "in.anthropic.claude-haiku-4-5-20251001-v1:0", label: "IN Claude Haiku 4.5 (in)", recommended: true, default: false, available: true, group: "Amazon Bedrock" },
-        { provider: "bedrock", model: "openai.gpt-oss-120b-1:0", label: "OpenAI · gpt-oss-120b", recommended: true, default: false, available: true, group: "Amazon Bedrock" },
+        { provider: "bedrock", model: "global.anthropic.claude-sonnet-4-6", vendor: "Anthropic", name: "Claude Sonnet 4.6", scope: "global", label: "Anthropic · Claude Sonnet 4.6", recommended: true, default: false, available: true, group: "Amazon Bedrock" },
+        { provider: "bedrock", model: "in.anthropic.claude-haiku-4-5-20251001-v1:0", vendor: "Anthropic", name: "Claude Haiku 4.5", scope: "in", label: "Anthropic · Claude Haiku 4.5", recommended: true, default: false, available: true, group: "Amazon Bedrock" },
+        { provider: "bedrock", model: "openai.gpt-oss-120b-1:0", vendor: "OpenAI", name: "gpt-oss-120b", scope: null, label: "OpenAI · gpt-oss-120b", recommended: true, default: false, available: true, group: "Amazon Bedrock" },
+        { provider: "bedrock", model: "global.anthropic.claude-opus-4-6-v1", vendor: "Anthropic", name: "Claude Opus 4.6", scope: "global", label: "Anthropic · Claude Opus 4.6", recommended: false, default: false, available: true, group: "Amazon Bedrock" },
+        { provider: "bedrock", model: "mistral.mistral-large-3-675b-instruct", vendor: "Mistral AI", name: "Mistral Large 3", scope: null, label: "Mistral AI · Mistral Large 3", recommended: false, default: false, available: true, group: "Amazon Bedrock" },
+        { provider: "bedrock", model: "qwen.qwen3-32b-v1:0", vendor: "Qwen", name: "Qwen3 32B (dense)", scope: null, label: "Qwen · Qwen3 32B (dense)", recommended: false, default: false, available: true, group: "Amazon Bedrock" },
       ],
     });
   }

@@ -318,8 +318,10 @@ Your IAM user, and the execution role for deployed flows, need:
               "arn:aws:bedrock:*:<account-id>:inference-profile/*"]}
 ```
 
-plus `bedrock:ListFoundationModels` and `bedrock:ListInferenceProfiles` to fill the
-menus. Set `BEDROCK_REGION` to use a region other than the AgentCore one (default
+plus `bedrock:ListFoundationModels`, `bedrock:ListInferenceProfiles` and
+`bedrock:GetFoundationModelAvailability` to fill the menus. Only models your account can
+invoke are listed: a model whose agreement hasn't been accepted (Bedrock → Model access)
+is left out. Set `BEDROCK_REGION` to use a region other than the AgentCore one (default
 ap-south-1).
 
 ## Deploying to AWS (AgentCore)

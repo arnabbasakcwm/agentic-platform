@@ -58,6 +58,42 @@ def test_catalog_keeps_chat_models_prefers_local_profiles_and_ranks_recommended_
     assert all(m["provider"] == "bedrock" and m["recommended"] for m in models[:3])
 
 
+def test_catalog_entries_have_clean_vendor_name_and_scope():
+    models = {m["model"]: m for m in catalog.build_catalog(FOUNDATION, PROFILES + [
+        {"inferenceProfileId": "global.xai.grok-4.7", "inferenceProfileName": "Global xAI Grok 4.7", "status": "ACTIVE"},
+        {"inferenceProfileId": "in.openai.gpt-5.6-luna", "inferenceProfileName": "IN OpenAI GPT-5.6 Luna", "status": "ACTIVE"},
+    ])}
+    haiku = models["in.anthropic.claude-haiku-4-5-20251001-v1:0"]
+    assert (haiku["vendor"], haiku["name"], haiku["scope"]) == ("Anthropic", "Claude Haiku 4.5", "in")
+    assert haiku["label"] == "Anthropic · Claude Haiku 4.5"
+    # No foundation entry to name it: the profile name, without its scope word or vendor.
+    assert (models["global.xai.grok-4.7"]["vendor"], models["global.xai.grok-4.7"]["name"]) == ("xAI", "Grok 4.7")
+    assert models["in.openai.gpt-5.6-luna"]["name"] == "GPT-5.6 Luna"
+    oss = models["openai.gpt-oss-120b-1:0"]
+    assert (oss["vendor"], oss["name"], oss["scope"]) == ("OpenAI", "gpt-oss-120b", None)
+
+
+def test_only_models_the_account_can_invoke_are_listed():
+    ok = {"agreementAvailability": {"status": "AVAILABLE"}, "authorizationStatus": "AUTHORIZED",
+          "entitlementAvailability": "AVAILABLE", "regionAvailability": "AVAILABLE"}
+    assert catalog.is_accessible(ok)
+    assert not catalog.is_accessible({**ok, "agreementAvailability": {"status": "NOT_AVAILABLE"}})
+    assert not catalog.is_accessible({**ok, "authorizationStatus": "NOT_AUTHORIZED"})
+
+    models = catalog.build_catalog(FOUNDATION, PROFILES)
+    asked = []
+
+    def check(base_id):
+        asked.append(base_id)
+        return {"anthropic.claude-sonnet-4-6": False, "openai.gpt-oss-120b-1:0": None}.get(base_id, True)
+
+    ids = [m["model"] for m in catalog.filter_accessible(models, check)]
+    assert "global.anthropic.claude-sonnet-4-6" not in ids  # no agreement: hidden
+    assert "openai.gpt-oss-120b-1:0" in ids  # access unknown: kept
+    assert "in.anthropic.claude-haiku-4-5-20251001-v1:0" in ids
+    assert sorted(asked) == sorted({catalog._base_id(m["model"]) for m in models})  # base ids, once each
+
+
 def test_catalog_is_cached_and_survives_a_failed_refresh(monkeypatch):
     calls = []
 
@@ -70,7 +106,9 @@ def test_catalog_is_cached_and_survives_a_failed_refresh(monkeypatch):
     monkeypatch.setattr(catalog, "_fetch", fetch)
     first = catalog.bedrock_models(now=1000.0)
     assert catalog.bedrock_models(now=1100.0) == first and len(calls) == 1  # cached
-    assert catalog.bedrock_models(now=1000.0 + catalog.CACHE_SECONDS + 1) == first  # refresh failed: last good list
+    stale = 1000.0 + catalog.CACHE_SECONDS + 1
+    assert catalog.bedrock_models(now=stale, wait=True) == first  # refresh failed: last good list
+    assert catalog.bedrock_models(now=stale) == first  # stale: returned at once, refreshed in the background
     assert catalog.is_bedrock_model("openai.gpt-oss-120b-1:0")
 
 
