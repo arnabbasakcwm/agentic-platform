@@ -165,12 +165,13 @@ browser. Set `VITE_API_BASE` to point the console at a different API.
    deployed on AgentCore must have its deployment removed on the Deploy page before it
    can be deleted.
 6. **Knowledge** (sidebar) — your knowledge library. Upload PDF, Word, text, Markdown or
-   CSV files without choosing a project (or attach them on upload), see each file's live
-   indexing status, attach any file to any number of projects from its row, filter by
-   name, project ("not attached" included) and status, and delete files. The library has
-   one embedding model, chosen here; changing it re-indexes every file. File text and
-   agents' search queries go to that embedding provider; the files themselves aren't
-   stored, only the text passages taken from them.
+   CSV files from the upload area at the top, see each file's live indexing status,
+   attach any file to any number of projects from its row, filter by name, project ("not
+   attached" included) and status, and delete files. Each file has its own embedding
+   model, shown in its row: pick another one there and confirm to re-index that file
+   (nothing is uploaded again). "New files use" sets the model for new uploads only.
+   File text and agents' search queries go to each file's embedding provider; the files
+   themselves aren't stored, only the text passages taken from them.
 7. **Usage** (sidebar) — which models your projects used, how many tokens, and the
    estimated cost, over 7, 30 or 90 days and per project:
    - totals and a cost-per-day chart;
@@ -275,11 +276,12 @@ signed-in user's projects. Interactive docs: http://127.0.0.1:8000/docs.
 | `POST /projects/{id}/run` | Run the whole team on an input |
 | `POST /projects/{id}/run/stream` | Same, streaming each agent's progress as Server-Sent Events |
 | `POST /projects/{id}/agents/{agent_id}/invoke` | Run one agent on its own |
-| `GET /knowledge` | Your library: every file with the projects it's attached to, the embedding model, limits |
+| `GET /knowledge` | Your library: every file with the projects it's attached to and its embedding model, the default model for new uploads, limits |
 | `POST /knowledge/documents` | Upload files to the library, attached to no project (multipart field `files`) |
 | `PUT /knowledge/documents/{doc_id}/projects` | Set which projects a file is attached to |
 | `DELETE /knowledge/documents/{doc_id}` | Delete a file from the library (and every project) |
-| `PUT /knowledge/embedding` | Change the library's embedding model (re-embeds every passage) |
+| `PUT /knowledge/embedding` | Set the embedding model new uploads use (existing files keep theirs) |
+| `PUT /knowledge/documents/{doc_id}/embedding` | Re-index one file with another embedding model (202; in the background) |
 | `POST /knowledge/search` | Search the whole library |
 | `GET /usage?days=30&project_id=` | Models, tokens and estimated cost: totals, per day, per model, per project, per activity, recent runs |
 | `POST /usage/sync` | Read deployed runtimes' usage logs now, counting runs invoked straight through AWS |

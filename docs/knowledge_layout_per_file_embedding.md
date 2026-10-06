@@ -1,6 +1,9 @@
 # Plan: Knowledge page layout + embedding model per file
 
-Status: **planned, not started** (saved 2026-10-05). Nothing in the code has changed yet.
+Status: **done** (2026-10-06). Recorded in the CLAUDE.md decision log, "Each knowledge
+file has its own embedding model". Where the build differs from this plan, the decision
+log and code are what's current: the snapshot keeps one matrix per model in
+`knowledge_vectors.npz` (see the 2026-10-06 update below).
 
 ## Context
 

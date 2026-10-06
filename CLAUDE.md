@@ -443,14 +443,45 @@ whenever a change departs from or extends the contract above — don't silently 
     regional, then global). Bedrock ids are accepted only if they're in that list
     (create, `/agents`); the assistant may use the recommended ones.
   - **Embeddings:** each option in `config.EMBEDDING_OPTIONS` carries its vector size
-    (Gemini/OpenAI 768; Bedrock Titan v2 and Cohere v4 1024). A library uses one model,
-    and a deploy snapshot refuses mixed sizes.
+    (Gemini/OpenAI 768; Bedrock Titan v2 and Cohere v4 1024). Each model's vectors are
+    kept and searched in their own matrix (see the per-file decision below).
   - **Permissions:** the IAM user and the execution role need `bedrock:InvokeModel` (and
     `InvokeModelWithResponseStream`) on `arn:aws:bedrock:*::foundation-model/*` and
     `arn:aws:bedrock:*:<account>:inference-profile/*`. Platform-created roles get this;
     an admin-made role needs it added. `boto3` now ships in runtime packages.
   - **Tests:** the offline suite must not call AWS: `tests/conftest.py` stubs the catalog
     for every test.
+
+### 2026-10-06 — Each knowledge file has its own embedding model
+- **Why:** the user wants to choose the embedding model per file, from the file's row on
+  the Knowledge page, rather than one model for the whole library. This supersedes the
+  "single embedding model" part of the per-user library decision.
+- **Rule:**
+  - **Data:** `KnowledgeDocument.embedding` is the model a file is indexed with, set at
+    upload from the library default. Files from before this have none and read as the
+    library default (`knowledge.effective_embedding`); changing the default first pins
+    them to the model they were really indexed with. No migration write.
+  - **Default:** `PUT /knowledge/embedding` sets the model for **new uploads only** and
+    re-indexes nothing.
+  - **One file:** `PUT /knowledge/documents/{id}/embedding` (owner-scoped; 422 for an
+    unknown model, 409 `KnowledgeBusy` while the file is indexing) re-embeds that file's
+    stored passages in the background. On failure the file is `failed` and keeps its old
+    vectors and model.
+  - **Search across models:** vectors from different models live in different spaces (and
+    sizes), so passages are grouped by model, one matrix each; the query is embedded once
+    per model in use, each group is ranked by cosine similarity, and the rankings are
+    merged with reciprocal rank fusion (1 / (60 + rank)). Scores are never compared
+    across models. With one model the results are exactly that model's ranking.
+  - **Cost:** a search costs one query embedding per distinct model among the files
+    searched; each is recorded as its own `embedding_query` usage entry.
+  - **Embedders** are chosen at search time, so the compiled-graph cache is keyed by
+    `plan_version` only.
+  - **Deploys:** the snapshot holds one matrix per model (`knowledge_vectors.npz`), and
+    the runtime gets the key of every embedding provider its files use. Old one-model
+    snapshots still load.
+  - **Console:** the Knowledge page has no side panel. The upload area is centred above
+    the table and uploads to the library only; files are attached to projects from
+    their rows. Each row has a model select that confirms inline before re-indexing.
 
 ## Working style — verify-and-retry, always
 

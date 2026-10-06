@@ -377,16 +377,26 @@ KnowledgeStore.replace_chunks ──► status=ready (chunk_count) | failed (err
 
 - **Embeddings:** `graph_builder.get_embeddings(EmbeddingConfig)` is the embedding twin of
   `get_llm()`. Google `gemini-embedding-001` (separate document/query task types) and
-  OpenAI `text-embedding-3-small`, both shortened to 768 dimensions
-  (`config.EMBEDDING_MODELS`, `EMBEDDING_DIMENSIONS`). The library has one model
-  (`KnowledgeStore.get_embedding`, the `knowledge_settings` collection), chosen at the
-  first upload: the uploading project's provider if it has one, else the platform default
-  or the first with a key. `PUT /knowledge/embedding` re-embeds the stored passage text,
-  so files never need re-uploading.
-- **Search:** `KnowledgeContext.search(query, k)` embeds the query and ranks the ready
-  passages of the files attached to the project by cosine similarity with numpy. It
-  reads attachments and passages at call time, so files attached after compiling are
-  found without recompiling.
+  OpenAI `text-embedding-3-small`, both shortened to 768 dimensions, and Bedrock Titan v2
+  / Cohere v4 at 1024 (`config.EMBEDDING_OPTIONS`, each with its size).
+- **Model per file:** each file records the model it is indexed with
+  (`KnowledgeDocument.embedding`; files from before this have none and use the library
+  default, via `knowledge.effective_embedding`). The library default
+  (`KnowledgeStore.get_embedding`, the `knowledge_settings` collection) is only what new
+  uploads use; it is chosen at the first upload (the uploading project's provider if it
+  has one, else the platform default or the first with a key) and changed with
+  `PUT /knowledge/embedding`, which re-indexes nothing. `PUT
+  /knowledge/documents/{id}/embedding` re-embeds one file's stored passage text in the
+  background (`knowledge.reembed_document`); on failure the file keeps its old vectors
+  and model.
+- **Search:** `KnowledgeContext.search(query, k, on_query_embedded)` groups the ready
+  passages of the files attached to the project by embedding model (one numpy matrix per
+  model, `SearchGroup`), embeds the query once per model, ranks each group by cosine
+  similarity, and merges the rankings with reciprocal rank fusion (`fuse`, score =
+  1 / (60 + rank)), because cosine scores from different models don't compare. With one
+  model that is exactly its own ranking. Each query embedding is counted as an
+  `embedding_query` usage entry for its model. Attachments and passages are read at call
+  time, so files attached after compiling are found without recompiling.
 - **The tool:** `get_tools(names, knowledge)` binds `knowledge_search` to one project's
   context. `compile_graph(plan, knowledge)` and `run_single_agent(…, knowledge)` pass it
   through to every node. Without a context the tool raises `KnowledgeUnavailableError`
@@ -397,17 +407,19 @@ KnowledgeStore.replace_chunks ──► status=ready (chunk_count) | failed (err
   `default_tool_names()`. `app.py` adds it to the planner's allowed tools only when a
   ready file is attached to the project. Uploading is the opt-in for sending text to the
   embedding provider.
-- **Cache:** compiled graphs are cached per `(plan_version, library embedding model)`,
-  because the embedder is bound when the graph is built.
+- **Cache:** compiled graphs are cached per `plan_version`; embedders are chosen at
+  search time, per file's model.
 - **Migration:** knowledge stored before libraries existed (one project per file) is
   converted on first use by `MongoKnowledgeStore._migrate_project_scoped`: each file
   joins its owner's library attached to its project, and the library takes that
   project's embedding model.
 - **Deployed runtimes** have no database. When an agent uses the tool, the package
   carries the files attached to the project as `knowledge.json` (passage text and
-  sources) and `knowledge_vectors.npy`
-  (float32, one row per passage), and `runtime_app.create_app(plan, knowledge_dir)`
-  searches them in memory (`SnapshotContext`). `KnowledgeChunk` lives in `knowledge.py`,
+  sources, grouped by embedding model) and `knowledge_vectors.npz` (one float32 matrix
+  per model, since models' vector sizes differ), and `runtime_app.create_app(plan,
+  knowledge_dir)` searches them in memory (`snapshot_context`, the same per-model search
+  and fusion). Snapshots from before per-file models (`knowledge_vectors.npy`, one model)
+  still load. The deployment gets the key of every embedding provider its files use. `KnowledgeChunk` lives in `knowledge.py`,
   not `stores.py`, so the runtime doesn't need the database layer. Parsing packages
   (`pypdf`, `python-docx`, `python-multipart`) are left out of the bundle.
 
@@ -508,7 +520,7 @@ business logic, and every rule it appears to enforce is really enforced server-s
 | API calls + typed error normalisation | `frontend/src/lib/api.js` — every failure becomes an `ApiError` carrying the backend's `{error_type, message, details}` |
 | App shell: sign-in gate, collapsible sidebar, breadcrumb bar, page switch | `frontend/src/App.jsx`, `components/Sidebar.jsx`, `components/TopBar.jsx` |
 | Routing (hash-based, no router dependency) | `frontend/src/lib/router.js` — `#/projects`, `#/new`, `#/knowledge`, `#/projects/<id>/<step>` |
-| Knowledge library: every file the user uploaded — totals, filters, upload with or without a project, per-file project attachments, library embedding model, delete | `frontend/src/pages/KnowledgePage.jsx` (`GET /knowledge`); the project's Knowledge step (`pages/project/KnowledgeStep.jsx`) shows the attached files with attach-from-library and detach; the upload area is shared via `components/KnowledgeUpload.jsx` |
+| Knowledge library: every file the user uploaded — totals, a centred upload area (library only) with the default model for new files, filters, per-file project attachments and embedding model, delete | `frontend/src/pages/KnowledgePage.jsx` (`GET /knowledge`); the project's Knowledge step (`pages/project/KnowledgeStep.jsx`) shows the attached files with attach-from-library and detach; the upload area is shared via `components/KnowledgeUpload.jsx` |
 | Project list: every project the signed-in user owns | `frontend/src/pages/ProjectsPage.jsx` (`GET /projects`); the sidebar also lists the five most recent |
 | New project as a conversation: each message is a brief and gets a planned team (or the error) as the reply; team size, model and tools sit in an optional settings tray, defaulting to "planner chooses", the default model and the default tools | `frontend/src/pages/NewProjectPage.jsx` |
 | One project, one workflow step per page | `frontend/src/pages/ProjectWorkspace.jsx` + `pages/project/` — `BriefStep` (read-only brief and settings), `PlanStep` (agent cards, raw JSON editing), `CompileStep` (execution-flow view, compile), `RunStep` (full-graph and single-agent runs, results) |
