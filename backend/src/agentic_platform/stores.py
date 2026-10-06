@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, Iterator, Literal, Protocol
 from pydantic import BaseModel, Field
 
 from .agent_schema import AgentPlan, EmbeddingConfig
+from .datasources import DataSourceConfig
 from .knowledge import KnowledgeChunk
 from .config import MONGODB_DB, MONGODB_TIMEOUT_MS, MONGODB_URI
 from .errors import EmailTakenError, StoreUnavailableError
@@ -793,7 +794,9 @@ class MongoKnowledgeStore:
 
 
 # ---------------------------------------------------------------------------- usage
-UsageKind = Literal["run", "deployed_run", "planner", "assistant", "embedding_index", "embedding_query"]
+UsageKind = Literal[
+    "run", "deployed_run", "planner", "assistant", "embedding_index", "embedding_query", "bigquery_query"
+]
 
 
 class UsageRecord(BaseModel):
@@ -813,6 +816,7 @@ class UsageRecord(BaseModel):
     input_tokens: int = 0
     output_tokens: int = 0
     estimated: bool = False  # tokens estimated, not reported by the provider (embeddings)
+    bytes_billed: int = 0  # data queries (BigQuery): bytes the query was billed for
     cost: float | None = None  # None: the model has no price in pricing.json
     currency: str = "USD"
     price: dict[str, Any] | None = None
@@ -899,6 +903,173 @@ class MongoUsageStore:
             self._ensure_index()
             found = self._events.distinct("run_id", {"tenant_id": tenant_id, "run_id": {"$in": list(run_ids)}})
         return set(found)
+
+
+# ---------------------------------------------------------------------------- data sources
+class DataSource(DataSourceConfig):
+    """A user's connection to BigQuery: one service account, the tables agents may query,
+    and the projects whose agents may use it (attaching is the per-project opt-in)."""
+
+    tenant_id: str
+    project_ids: list[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=_now)
+    updated_at: datetime = Field(default_factory=_now)
+
+    def config(self) -> DataSourceConfig:
+        return DataSourceConfig.model_validate(self.model_dump(include=set(DataSourceConfig.model_fields)))
+
+
+class DataSourceStore(Protocol):
+    """Users' data sources. Every method is scoped by tenant."""
+
+    def add(self, source: DataSource) -> None: ...
+
+    def get(self, tenant_id: str, source_id: str) -> DataSource | None: ...
+
+    def list(self, tenant_id: str, project_id: str | None = None) -> list[DataSource]:
+        """The tenant's sources, newest first; with `project_id`, those attached to it."""
+        ...
+
+    def update(self, tenant_id: str, source_id: str, **changes: Any) -> DataSource | None: ...
+
+    def delete(self, tenant_id: str, source_id: str) -> bool: ...
+
+    def detach_project(self, tenant_id: str, project_id: str) -> int: ...
+
+    def owner_of_service_account(self, service_account: str) -> str | None:
+        """The tenant that registered this service account, if any (one tenant each)."""
+        ...
+
+
+class InMemoryDataSourceStore:
+    def __init__(self) -> None:
+        self._sources: dict[str, DataSource] = {}
+
+    def add(self, source: DataSource) -> None:
+        self._sources[source.id] = source.model_copy(deep=True)
+
+    def get(self, tenant_id: str, source_id: str) -> DataSource | None:
+        s = self._sources.get(source_id)
+        return s.model_copy(deep=True) if s and s.tenant_id == tenant_id else None
+
+    def list(self, tenant_id: str, project_id: str | None = None) -> list[DataSource]:
+        found = [
+            s for s in self._sources.values()
+            if s.tenant_id == tenant_id and (project_id is None or project_id in s.project_ids)
+        ]
+        return [s.model_copy(deep=True) for s in sorted(found, key=lambda s: s.created_at, reverse=True)]
+
+    def update(self, tenant_id: str, source_id: str, **changes: Any) -> DataSource | None:
+        s = self._sources.get(source_id)
+        if s is None or s.tenant_id != tenant_id:
+            return None
+        updated = DataSource.model_validate({**s.model_dump(), **_plain(changes), "updated_at": _now()})
+        self._sources[source_id] = updated
+        return updated.model_copy(deep=True)
+
+    def delete(self, tenant_id: str, source_id: str) -> bool:
+        s = self._sources.get(source_id)
+        if s is None or s.tenant_id != tenant_id:
+            return False
+        del self._sources[source_id]
+        return True
+
+    def detach_project(self, tenant_id: str, project_id: str) -> int:
+        count = 0
+        for s in self._sources.values():
+            if s.tenant_id == tenant_id and project_id in s.project_ids:
+                s.project_ids = [p for p in s.project_ids if p != project_id]
+                count += 1
+        return count
+
+    def owner_of_service_account(self, service_account: str) -> str | None:
+        return next((s.tenant_id for s in self._sources.values() if s.service_account == service_account), None)
+
+
+def _plain(changes: dict[str, Any]) -> dict[str, Any]:
+    def dump(v: Any) -> Any:
+        if isinstance(v, BaseModel):
+            return v.model_dump()
+        if isinstance(v, list):
+            return [dump(x) for x in v]
+        return v
+
+    return {k: dump(v) for k, v in changes.items()}
+
+
+class MongoDataSourceStore:
+    """`data_sources`, one document per source, keyed by tenant."""
+
+    def __init__(self, db: "Database"):
+        self._sources = db["data_sources"]
+        self._ready = False
+
+    def _ensure_ready(self) -> None:
+        if not self._ready:
+            self._sources.create_index([("tenant_id", 1), ("created_at", -1)])
+            self._sources.create_index([("service_account", 1)])
+            self._ready = True
+
+    @staticmethod
+    def _out(doc: dict[str, Any]) -> DataSource:
+        doc = dict(doc)
+        doc["id"] = doc.pop("_id")
+        return DataSource.model_validate(doc)
+
+    def add(self, source: DataSource) -> None:
+        body = source.model_dump()
+        body["_id"] = body.pop("id")
+        with _mongo_errors():
+            self._ensure_ready()
+            self._sources.insert_one(body)
+
+    def get(self, tenant_id: str, source_id: str) -> DataSource | None:
+        with _mongo_errors():
+            self._ensure_ready()
+            doc = self._sources.find_one({"_id": source_id, "tenant_id": tenant_id})
+        return self._out(doc) if doc else None
+
+    def list(self, tenant_id: str, project_id: str | None = None) -> list[DataSource]:
+        query: dict[str, Any] = {"tenant_id": tenant_id}
+        if project_id is not None:
+            query["project_ids"] = project_id
+        with _mongo_errors():
+            self._ensure_ready()
+            docs = list(self._sources.find(query).sort("created_at", -1))
+        return [self._out(d) for d in docs]
+
+    def update(self, tenant_id: str, source_id: str, **changes: Any) -> DataSource | None:
+        with _mongo_errors():
+            self._ensure_ready()
+            result = self._sources.update_one(
+                {"_id": source_id, "tenant_id": tenant_id},
+                {"$set": {**_plain(changes), "updated_at": _now()}},
+            )
+        return self.get(tenant_id, source_id) if result.matched_count == 1 else None
+
+    def delete(self, tenant_id: str, source_id: str) -> bool:
+        with _mongo_errors():
+            result = self._sources.delete_one({"_id": source_id, "tenant_id": tenant_id})
+        return result.deleted_count == 1
+
+    def detach_project(self, tenant_id: str, project_id: str) -> int:
+        with _mongo_errors():
+            result = self._sources.update_many(
+                {"tenant_id": tenant_id, "project_ids": project_id}, {"$pull": {"project_ids": project_id}}
+            )
+        return result.modified_count
+
+    def owner_of_service_account(self, service_account: str) -> str | None:
+        with _mongo_errors():
+            self._ensure_ready()
+            doc = self._sources.find_one({"service_account": service_account}, {"tenant_id": 1})
+        return doc["tenant_id"] if doc else None
+
+
+def make_datasource_store() -> DataSourceStore:
+    if MONGODB_URI:
+        return MongoDataSourceStore(mongo_database(MONGODB_URI, MONGODB_DB))
+    return InMemoryDataSourceStore()
 
 
 def make_stores() -> tuple[ProjectStore, UserStore, KnowledgeStore, UsageStore]:

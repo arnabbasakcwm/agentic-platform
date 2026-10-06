@@ -78,7 +78,7 @@ def test_runtime_ping_and_invocations_match_the_local_run_contract(monkeypatch):
 def test_runtime_single_agent_and_unknown_agent(monkeypatch):
     monkeypatch.setattr(
         runtime_app, "run_single_agent",
-        lambda plan, agent_id, task_input, upstream, knowledge=None, usage=None: {"outputs": {agent_id: {"content": "ok"}}},
+        lambda plan, agent_id, task_input, upstream, knowledge=None, usage=None, data=None: {"outputs": {agent_id: {"content": "ok"}}},
     )
     client = TestClient(runtime_app.create_app(_plan().model_dump()))
     r = client.post("/invocations", json={"input": {}, "agent_id": "a"})
@@ -153,7 +153,7 @@ def test_a_timed_out_run_still_logs_what_it_used(monkeypatch, capsys):
 
 
 def test_single_agent_and_failed_invocations_log_a_line_too(monkeypatch, capsys):
-    def one_agent(plan, agent_id, task_input, upstream, knowledge=None, usage=None):
+    def one_agent(plan, agent_id, task_input, upstream, knowledge=None, usage=None, data=None):
         usage.add(kind="run", provider="google_genai", model="m", agent_id=agent_id, input_tokens=10, output_tokens=1)
         return {"outputs": {agent_id: {"content": "ok"}}}
 
@@ -646,7 +646,7 @@ def test_runtime_searches_its_knowledge_snapshot(tmp_path, monkeypatch):
                         lambda cfg: used.setdefault("cfg", cfg) and Embedder(None, lambda q: [0.1, 0.9]))
     captured = {}
 
-    def fake_compile(plan, knowledge=None):
+    def fake_compile(plan, knowledge=None, data=None):
         captured["knowledge"] = knowledge
         return object()
 

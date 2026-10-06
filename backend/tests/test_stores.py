@@ -425,3 +425,39 @@ def test_project_scoped_knowledge_is_migrated_into_libraries():
     finally:
         db.client.drop_database(db.name)
         db.client.close()
+
+
+# ------------------------------------------------------------------ data sources
+@pytest.fixture
+def sources(backend):
+    from agentic_platform.stores import InMemoryDataSourceStore, MongoDataSourceStore
+
+    return InMemoryDataSourceStore() if backend is None else MongoDataSourceStore(backend)
+
+
+def _source(source_id="s1", tenant_id="u1", **overrides):
+    from agentic_platform.stores import DataSource
+
+    fields = dict(id=source_id, tenant_id=tenant_id, name="Warehouse", billing_project="agenticdb-510807",
+                  service_account="reader@agenticdb-510807.iam.gserviceaccount.com")
+    return DataSource(**{**fields, **overrides})
+
+
+def test_data_sources_are_scoped_and_updatable(sources):
+    from agentic_platform.datasources import AllowedTable
+
+    sources.add(_source())
+    sources.add(_source("s2", tenant_id="u2", service_account="other@p-12345.iam.gserviceaccount.com"))
+    assert [s.id for s in sources.list("u1")] == ["s1"]
+    assert sources.get("u2", "s1") is None  # never another tenant's
+    table = AllowedTable(id="agenticdb-510807.mydata.trips", location="US")
+    updated = sources.update("u1", "s1", tables=[table], project_ids=["p1"])
+    assert updated.tables == [table] and updated.project_ids == ["p1"]
+    assert sources.update("u2", "s1", project_ids=[]) is None
+    assert [s.id for s in sources.list("u1", "p1")] == ["s1"] and sources.list("u1", "p2") == []
+    assert sources.get("u1", "s1").config().table_ids() == {"agenticdb-510807.mydata.trips"}
+    assert sources.owner_of_service_account("reader@agenticdb-510807.iam.gserviceaccount.com") == "u1"
+    assert sources.owner_of_service_account("nobody@x-12345.iam.gserviceaccount.com") is None
+    assert sources.detach_project("u1", "p1") == 1 and sources.get("u1", "s1").project_ids == []
+    assert sources.delete("u2", "s1") is False and sources.delete("u1", "s1") is True
+    assert sources.list("u1") == []

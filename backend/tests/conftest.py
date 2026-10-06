@@ -14,3 +14,19 @@ def _no_live_bedrock_catalog(monkeypatch):
     bedrock_catalog._cache.update(at=0.0, models=[])
     yield
     bedrock_catalog._cache.update(at=0.0, models=[])
+
+
+@pytest.fixture(autouse=True)
+def _no_live_bigquery(monkeypatch):
+    """BigQuery is reached by federating the platform's AWS identity, and .env holds real
+    settings: a test that forgot to install a fake client must fail, not call Google."""
+    import agentic_platform.app as app_module
+    import agentic_platform.datasources as datasources
+
+    def offline(*args, **kwargs):
+        raise RuntimeError("the offline suite must not sign in to Google; install a fake BigQuery client")
+
+    monkeypatch.setattr(datasources, "gcp_credentials", offline)
+    app_module._BQ_CLIENTS.clear()
+    yield
+    app_module._BQ_CLIENTS.clear()

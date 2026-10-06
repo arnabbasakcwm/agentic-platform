@@ -49,7 +49,7 @@ def make_records(
     table = usage_mod.prices()
     records = []
     for e in entries:
-        if not (e.get("calls") or e.get("input_tokens") or e.get("output_tokens")):
+        if not (e.get("calls") or e.get("input_tokens") or e.get("output_tokens") or e.get("bytes_billed")):
             continue
         kind = "deployed_run" if deployed and e["kind"] == "run" else e["kind"]
         fields: dict[str, Any] = dict(
@@ -65,6 +65,7 @@ def make_records(
             input_tokens=int(e.get("input_tokens", 0)),
             output_tokens=int(e.get("output_tokens", 0)),
             estimated=bool(e.get("estimated")),
+            bytes_billed=int(e.get("bytes_billed", 0)),
             cost=usage_mod.cost(e, table),
             currency=table.get("currency", "USD"),
             price=usage_mod.price_for(e["provider"], e["model"], table),

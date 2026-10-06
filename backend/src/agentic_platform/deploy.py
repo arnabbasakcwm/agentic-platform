@@ -30,7 +30,8 @@ from .agentcore import RUNTIME_NAME_PREFIX
 from .config import PROVIDER_ENV_VARS
 from .errors import DeployError, MissingProviderKeyError, MissingToolKeyError
 from .knowledge import SNAPSHOT_FILE, SNAPSHOT_VECTORS_FILE
-from .tools import TOOL_ENV_VARS, uses_knowledge
+from .datasources import DATASOURCES_FILE
+from .tools import TOOL_ENV_VARS, uses_data, uses_knowledge
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +98,13 @@ def runtime_environment(
         embeddings = [embeddings]
     if embeddings and uses_knowledge(plan):
         providers |= {e.provider for e in embeddings}
+    if uses_data(plan):
+        # Not a secret: Google trusts the runtime's execution role through federation.
+        from .config import GCP_WIF_AUDIENCE
+
+        if not GCP_WIF_AUDIENCE:
+            raise DeployError("the plan queries BigQuery but GCP_WIF_AUDIENCE isn't set on this server")
+        env["GCP_WIF_AUDIENCE"] = GCP_WIF_AUDIENCE
     for provider in sorted(providers):
         if provider == "ollama":
             raise DeployError("ollama models run on your own machine and can't be deployed")
@@ -202,6 +210,7 @@ def build_package(
     out_path: Path,
     dependencies: Callable[[], Path] | None = None,
     knowledge: tuple[bytes, bytes] | None = None,
+    datasources: bytes | None = None,
 ) -> dict[str, int]:
     """Write the deployment zip for `plan` to `out_path`; returns its sizes in bytes.
     `knowledge` is the knowledge-base snapshot (knowledge.build_snapshot), if any."""
@@ -217,6 +226,8 @@ def build_package(
         if knowledge is not None:
             _add_file(zf, SNAPSHOT_FILE, knowledge[0])
             _add_file(zf, SNAPSHOT_VECTORS_FILE, knowledge[1])
+        if datasources is not None:
+            _add_file(zf, DATASOURCES_FILE, datasources)
         unzipped = sum(i.file_size for i in zf.infolist())
     zipped = out_path.stat().st_size
     if zipped > MAX_ZIPPED_BYTES or unzipped > MAX_UNZIPPED_BYTES:
@@ -260,6 +271,7 @@ def run_deployment(
     packager: Packager = build_package,
     knowledge_snapshot: Callable[[], tuple[bytes, bytes] | None] | None = None,
     knowledge_embeddings: list[EmbeddingConfig] | EmbeddingConfig | None = None,
+    data_snapshot: Callable[[], bytes | None] | None = None,
 ) -> None:
     """The background job: package, upload, provision, wait. Progress and the outcome are
     written to the project's deployment record; this never raises. `knowledge_snapshot`
@@ -284,12 +296,15 @@ def run_deployment(
     try:
         environment = runtime_environment(project.plan, knowledge_embeddings)
         snapshot = knowledge_snapshot() if knowledge_snapshot is not None else None
+        datasources = data_snapshot() if data_snapshot is not None else None
         with tempfile.TemporaryDirectory(prefix="agentic-deploy-") as tmp:
             package = Path(tmp) / "package.zip"
+            extras: dict[str, Any] = {}
             if snapshot is not None:
-                packager(project.plan, package, knowledge=snapshot)
-            else:
-                packager(project.plan, package)
+                extras["knowledge"] = snapshot
+            if datasources is not None:
+                extras["datasources"] = datasources
+            packager(project.plan, package, **extras)
 
             update(status="uploading")
             cloud.ensure_bucket()

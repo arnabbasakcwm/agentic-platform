@@ -25,9 +25,10 @@ import requests
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, tool
 
-from .errors import KnowledgeUnavailableError, MissingToolKeyError, UnknownToolError
+from .errors import KnowledgeUnavailableError, MissingToolKeyError, UnknownToolError, DataSourceUnavailableError
 
 if TYPE_CHECKING:
+    from .datasources import DataContext
     from .knowledge import KnowledgeContext
 
 # Wikipedia's API policy expects requests to identify themselves; the rest of the
@@ -330,6 +331,8 @@ def _build_wolfram_alpha() -> BaseTool:
 # registry never has to build a tool — and so never needs that tool's API key.
 TOOL_SUMMARIES: dict[str, str] = {
     "knowledge_search": "Search the documents uploaded to this project's knowledge base (cited passages)",
+    "sql_schema": "List the tables of this project's data sources (BigQuery), with their columns",
+    "sql_query": "Run a read-only SQL query on this project's data sources (BigQuery; capped)",
     "lookup": "Small built-in reference table, for testing tool calls offline",
     "calculator": "Arithmetic on plain numbers",
     "web_search": "Live web search (Tavily)",
@@ -403,8 +406,61 @@ def _build_knowledge_search(knowledge: KnowledgeContext | None = None) -> BaseTo
 # They are offered to the planner only when that data exists — see app.py.
 KNOWLEDGE_TOOLS: frozenset[str] = frozenset({"knowledge_search"})
 
+
+def _build_sql_schema(data: DataContext | None = None) -> BaseTool:
+    """The tables of the project's data sources. Bound to one project's DataContext."""
+    if data is None:
+        raise DataSourceUnavailableError()
+
+    @tool
+    def sql_schema() -> str:
+        """List the database tables you may query with sql_query: each table's full name,
+        size, columns, types and descriptions. Call this before writing SQL."""
+        return data.schema()
+
+    return sql_schema
+
+
+def _build_sql_query(data: DataContext | None = None) -> BaseTool:
+    """Read-only SQL over the project's data sources, inside the platform's guardrails."""
+    if data is None:
+        raise DataSourceUnavailableError()
+    from .datasources import format_result
+    from .errors import DataSourceError
+
+    @tool
+    def sql_query(sql: str, config: RunnableConfig) -> str:
+        """Run one read-only BigQuery Standard SQL SELECT over the tables sql_schema lists
+        and return the rows. Name tables in full, in backticks
+        (`project.dataset.table`). Select only the columns you need and aggregate or
+        filter in SQL: results are cut at 200 rows, and a query may scan at most 1 GB. If
+        the query is refused, read the reason, fix the SQL and try again."""
+        configurable = (config or {}).get("configurable") or {}
+        agent_id = configurable.get("agent_id")
+        try:
+            result = data.query(sql, agent_id=agent_id)
+        except DataSourceError as e:
+            # Back to the agent, so it can correct its own SQL in the same turn.
+            return f"Query refused: {e}"
+        usage = configurable.get("usage")
+        if usage is not None:
+            usage.add(
+                kind="bigquery_query", provider="bigquery", model="on-demand",
+                input_tokens=0, bytes_billed=result.bytes_billed, agent_id=agent_id,
+            )
+        return format_result(result)
+
+    return sql_query
+
+
+# Tools that query the user's own databases (a DataContext). Offered only when a data
+# source is attached to the project — attaching is the per-project opt-in.
+DATA_TOOLS: frozenset[str] = frozenset({"sql_schema", "sql_query"})
+
 TOOL_REGISTRY: dict[str, Callable[[], BaseTool]] = {
     "knowledge_search": _build_knowledge_search,
+    "sql_schema": _build_sql_schema,
+    "sql_query": _build_sql_query,
     "lookup": lambda: lookup,
     "calculator": lambda: calculator,
     "web_search": _build_web_search,
@@ -422,14 +478,21 @@ def uses_knowledge(plan) -> bool:
     return any(set(agent.tools) & KNOWLEDGE_TOOLS for agent in plan.agents)
 
 
+def uses_data(plan) -> bool:
+    """Whether any agent in the plan queries the project's data sources."""
+    return any(set(agent.tools) & DATA_TOOLS for agent in plan.agents)
+
+
 def default_tool_names() -> list[str]:
     """Tool names safe to expose to a project by default: the full registry minus any
     side-effecting tool, which requires explicit per-project opt-in, and the knowledge
     tool, which needs uploaded documents."""
-    return [n for n in TOOL_REGISTRY if n not in SIDE_EFFECT_TOOLS | KNOWLEDGE_TOOLS]
+    return [n for n in TOOL_REGISTRY if n not in SIDE_EFFECT_TOOLS | KNOWLEDGE_TOOLS | DATA_TOOLS]
 
 
-def get_tools(names: list[str], knowledge: KnowledgeContext | None = None) -> list[BaseTool]:
+def get_tools(
+    names: list[str], knowledge: KnowledgeContext | None = None, data: DataContext | None = None
+) -> list[BaseTool]:
     """Resolve tool names against the registry.
 
     Raises UnknownToolError (naming every unresolved name, not just the first) instead
@@ -442,4 +505,12 @@ def get_tools(names: list[str], knowledge: KnowledgeContext | None = None) -> li
     unknown = [n for n in names if n not in TOOL_REGISTRY]
     if unknown:
         raise UnknownToolError(unknown)
-    return [_build_knowledge_search(knowledge) if n in KNOWLEDGE_TOOLS else TOOL_REGISTRY[n]() for n in names]
+    built = []
+    for n in names:
+        if n in KNOWLEDGE_TOOLS:
+            built.append(_build_knowledge_search(knowledge))
+        elif n in DATA_TOOLS:
+            built.append(TOOL_REGISTRY[n](data))
+        else:
+            built.append(TOOL_REGISTRY[n]())
+    return built

@@ -57,6 +57,7 @@ def _malformed_tool_call(error: Exception) -> str | None:
     return text[:1500]
 
 if TYPE_CHECKING:
+    from .datasources import DataContext
     from .knowledge import KnowledgeContext
 
 # Providers reachable through LangChain's native init_chat_model. Moonshot is handled
@@ -277,6 +278,7 @@ def _run_agent_once(
     bounds: RunBounds,
     knowledge: KnowledgeContext | None = None,
     usage: UsageCollector | None = None,
+    data: DataContext | None = None,
 ) -> AgentOutput:
     """One full attempt for an agent node: bounded tool loop, then structured output.
 
@@ -284,7 +286,7 @@ def _run_agent_once(
     retry loop, which feeds the error text back into the agent's own context.
     """
     messages = list(base_messages)
-    tools = get_tools(spec.tools, knowledge)
+    tools = get_tools(spec.tools, knowledge, data)
     # Every model call (tool turns, the structured answer, the rewrite) reports its
     # provider-counted tokens to the run's collector, labelled with this agent.
     call_config: RunnableConfig = (
@@ -396,6 +398,7 @@ def _make_node(
     bounds: RunBounds,
     include_all_outputs: bool = False,
     knowledge: KnowledgeContext | None = None,
+    data: DataContext | None = None,
 ):
     def node(state: GraphState, config: Optional[RunnableConfig] = None) -> dict[str, Any]:
         emit = _emitter(config)
@@ -443,7 +446,7 @@ def _make_node(
                     )
                 )
             try:
-                output = _run_agent_once(llm, spec, attempt_messages, bounds, knowledge, usage)
+                output = _run_agent_once(llm, spec, attempt_messages, bounds, knowledge, usage, data)
                 dumped = output.model_dump()
                 emit("node_completed", node=spec.id, duration_ms=elapsed_ms(),
                      attempts=attempt, output=dumped,
@@ -501,7 +504,7 @@ class _SupervisorDecision(BaseModel):
     reason: str = Field(default="", description="brief justification for the choice")
 
 
-def compile_graph(plan: AgentPlan, knowledge: KnowledgeContext | None = None):
+def compile_graph(plan: AgentPlan, knowledge: KnowledgeContext | None = None, data: DataContext | None = None):
     """Compile a validated AgentPlan into a runnable LangGraph graph.
 
     Dispatches on orchestration pattern. All three share the same node implementation,
@@ -518,24 +521,24 @@ def compile_graph(plan: AgentPlan, knowledge: KnowledgeContext | None = None):
     # Fail fast at compile time if any agent references an unknown tool, rather than
     # discovering it mid-run.
     for spec in plan.agents:
-        get_tools(spec.tools, knowledge)
+        get_tools(spec.tools, knowledge, data)
 
     if plan.orchestration_pattern == "sequential":
-        return _compile_sequential(plan, knowledge)
+        return _compile_sequential(plan, knowledge, data)
     if plan.orchestration_pattern == "parallel":
-        return _compile_parallel(plan, knowledge)
+        return _compile_parallel(plan, knowledge, data)
     if plan.orchestration_pattern == "supervisor":
-        return _compile_supervisor(plan, knowledge)
+        return _compile_supervisor(plan, knowledge, data)
     raise NotImplementedError(
         f"orchestration pattern '{plan.orchestration_pattern}' is not supported"
     )
 
 
-def _compile_sequential(plan: AgentPlan, knowledge: KnowledgeContext | None = None):
+def _compile_sequential(plan: AgentPlan, knowledge: KnowledgeContext | None = None, data: DataContext | None = None):
     ordered = _topological_order(plan.agents)
     builder = StateGraph(GraphState)
     for spec in ordered:
-        builder.add_node(spec.id, _make_node(spec, plan.bounds, knowledge=knowledge))
+        builder.add_node(spec.id, _make_node(spec, plan.bounds, knowledge=knowledge, data=data))
 
     builder.add_edge(START, ordered[0].id)
     for i, spec in enumerate(ordered):
@@ -552,7 +555,7 @@ def _compile_sequential(plan: AgentPlan, knowledge: KnowledgeContext | None = No
     return builder.compile()
 
 
-def _compile_parallel(plan: AgentPlan, knowledge: KnowledgeContext | None = None):
+def _compile_parallel(plan: AgentPlan, knowledge: KnowledgeContext | None = None, data: DataContext | None = None):
     """Wire the dependency DAG directly: agents with no deps fan out from START and run
     concurrently; agents with deps run once their deps complete (the merge/synthesis
     step). Failure isolation is per-branch via the node's dependency gating, not a global
@@ -563,7 +566,7 @@ def _compile_parallel(plan: AgentPlan, knowledge: KnowledgeContext | None = None
 
     builder = StateGraph(GraphState)
     for spec in plan.agents:
-        builder.add_node(spec.id, _make_node(spec, plan.bounds, knowledge=knowledge))
+        builder.add_node(spec.id, _make_node(spec, plan.bounds, knowledge=knowledge, data=data))
 
     for spec in plan.agents:
         if not spec.depends_on:
@@ -633,7 +636,7 @@ def _make_supervisor(sup_spec: AgentSpec, worker_ids: list[str], cap: int):
     return node
 
 
-def _compile_supervisor(plan: AgentPlan, knowledge: KnowledgeContext | None = None):
+def _compile_supervisor(plan: AgentPlan, knowledge: KnowledgeContext | None = None, data: DataContext | None = None):
     workers = [a for a in plan.agents if a.id != plan.supervisor_id]
     worker_ids = [w.id for w in workers]
     sup_spec = next(a for a in plan.agents if a.id == plan.supervisor_id)
@@ -643,7 +646,7 @@ def _compile_supervisor(plan: AgentPlan, knowledge: KnowledgeContext | None = No
     builder.add_node(sup_spec.id, _make_supervisor(sup_spec, worker_ids, cap))
     for w in workers:
         # Supervisor workers see all accumulated outputs (they carry no depends_on wiring).
-        builder.add_node(w.id, _make_node(w, plan.bounds, include_all_outputs=True, knowledge=knowledge))
+        builder.add_node(w.id, _make_node(w, plan.bounds, include_all_outputs=True, knowledge=knowledge, data=data))
         builder.add_edge(w.id, sup_spec.id)  # control returns to the router after each worker
 
     builder.add_edge(START, sup_spec.id)
@@ -677,6 +680,7 @@ def run_single_agent(
     upstream_outputs: dict[str, Any] | None = None,
     knowledge: KnowledgeContext | None = None,
     usage: UsageCollector | None = None,
+    data: DataContext | None = None,
 ) -> dict[str, Any]:
     """Run one agent node in isolation (the per-agent endpoint path).
 
@@ -686,7 +690,7 @@ def run_single_agent(
     spec = next((a for a in plan.agents if a.id == agent_id), None)
     if spec is None:
         raise KeyError(agent_id)
-    node = _make_node(spec, plan.bounds, knowledge=knowledge)
+    node = _make_node(spec, plan.bounds, knowledge=knowledge, data=data)
     state = initial_state(task_input)
     state["outputs"] = dict(upstream_outputs or {})
     usage = usage if usage is not None else UsageCollector()

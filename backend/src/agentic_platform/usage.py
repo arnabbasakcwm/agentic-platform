@@ -43,6 +43,7 @@ class UsageEntry:
     long_input_tokens: int = 0
     long_output_tokens: int = 0
     estimated: bool = False
+    bytes_billed: int = 0  # data queries (BigQuery)
 
     def add(self, input_tokens: int, output_tokens: int, calls: int = 1) -> None:
         self.calls += calls
@@ -71,6 +72,7 @@ class UsageCollector:
         agent_id: str | None = None,
         estimated: bool = False,
         calls: int = 1,
+        bytes_billed: int = 0,
     ) -> None:
         key = (kind, provider, model, agent_id, estimated)
         with self._lock:
@@ -78,6 +80,7 @@ class UsageCollector:
             if entry is None:
                 entry = self._entries[key] = UsageEntry(kind, provider, model, agent_id, estimated=estimated)
             entry.add(max(int(input_tokens), 0), max(int(output_tokens), 0), calls)
+            entry.bytes_billed += max(int(bytes_billed), 0)
 
     def merge(self, entries: list[dict[str, Any]]) -> None:
         """Add entries reported elsewhere (e.g. by a deployed runtime)."""
@@ -94,6 +97,7 @@ class UsageCollector:
                 entry.output_tokens += int(e.get("output_tokens", 0))
                 entry.long_input_tokens += int(e.get("long_input_tokens", 0))
                 entry.long_output_tokens += int(e.get("long_output_tokens", 0))
+                entry.bytes_billed += int(e.get("bytes_billed", 0))
 
     def entries(self, agent_id: str | None = None) -> list[dict[str, Any]]:
         with self._lock:
@@ -178,7 +182,8 @@ def cost(entry: dict[str, Any], table: dict[str, Any] | None = None) -> float | 
     normal_in = entry["input_tokens"] - long_in
     normal_out = entry["output_tokens"] - long_out
     total = (
-        normal_in * rate.get("input_per_1m", 0)
+        entry.get("bytes_billed", 0) * rate.get("per_tib", 0) * 1_000_000 / 2**40
+        + normal_in * rate.get("input_per_1m", 0)
         + normal_out * rate.get("output_per_1m", 0)
         + long_in * long_rate.get("input_per_1m", 0)
         + long_out * long_rate.get("output_per_1m", 0)
@@ -206,12 +211,14 @@ def dashboard(
     from datetime import timedelta
 
     def bucket() -> dict[str, Any]:
-        return {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cost": 0.0, "unpriced_tokens": 0}
+        return {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cost": 0.0, "unpriced_tokens": 0,
+                "bytes_billed": 0}
 
     def add(target: dict[str, Any], r: dict[str, Any]) -> None:
         target["calls"] += r["calls"]
         target["input_tokens"] += r["input_tokens"]
         target["output_tokens"] += r["output_tokens"]
+        target["bytes_billed"] += r.get("bytes_billed", 0)
         if r["cost"] is None:
             target["unpriced_tokens"] += r["input_tokens"] + r["output_tokens"]
         else:

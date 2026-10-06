@@ -34,6 +34,11 @@ from .agent_schema import AgentPlan, EmbeddingConfig, LLMConfig, RunBounds
 from .auth import create_access_token, decode_access_token, hash_password, verify_password
 from .agentcore import make_cloud
 from .config import (
+    BIGQUERY_MAX_BYTES,
+    BIGQUERY_MAX_ROWS,
+    BIGQUERY_PROJECT,
+    GCP_SERVICE_ACCOUNT,
+    GCP_WIF_AUDIENCE,
     AGENTCORE_CODE_BUCKET,
     AGENTCORE_EXECUTION_ROLE_ARN,
     AGENTCORE_REGION,
@@ -46,6 +51,7 @@ from .config import (
     JWT_EXPIRES_MINUTES,
     MAX_AGENTS,
 )
+from . import datasources as ds
 from .deploy import build_package, remove_deployment, run_deployment, runtime_environment, runtime_name
 from .errors import (
     AuthenticationError,
@@ -55,6 +61,9 @@ from .errors import (
     DeployError,
     DeployInProgressError,
     DeployNotConfiguredError,
+    DataSourceError,
+    DataSourceNotFoundError,
+    DataSourceUnavailableError,
     DocumentNotFoundError,
     KnowledgeBusyError,
     KnowledgeError,
@@ -82,22 +91,26 @@ from .graph_builder import (
 )
 from .meta_planner_prompt import plan_project, revise_plan
 from .stores import (
+    DataSource,
     ChatMessage,
     Deployment,
     KnowledgeDocument,
     ProjectRecord,
     UsageRecord,
     UserRecord,
+    make_datasource_store,
     make_stores,
 )
 from .usage import UsageCollector
 from .usage_sync import make_records, sync_deployed_usage
 from .tools import (
+    DATA_TOOLS,
     KNOWLEDGE_TOOLS,
     SIDE_EFFECT_TOOLS,
     TOOL_REGISTRY,
     TOOL_SUMMARIES,
     default_tool_names,
+    uses_data,
     uses_knowledge,
 )
 
@@ -119,6 +132,7 @@ app.add_middleware(
 )
 
 _store, _users, _knowledge, _usage = make_stores()
+_datasources = make_datasource_store()
 logger = logging.getLogger(__name__)
 
 
@@ -266,9 +280,15 @@ def _project_body(project: ProjectRecord) -> dict[str, Any]:
         "conversation": [m.model_dump() for m in project.conversation],
         "deployment": _deployment_body(project),
         "knowledge": _knowledge_summary(project),
+        "data_sources": _data_summary(project),
         "created_at": project.created_at,
         "updated_at": project.updated_at,
     }
+
+
+def _data_summary(project: ProjectRecord) -> dict[str, Any]:
+    sources = _datasources.list(project.tenant_id, project.id)
+    return {"sources": len(sources), "tables": sum(len(s.tables) for s in sources)}
 
 
 def _get_project(project_id: str, user: UserRecord) -> ProjectRecord:
@@ -286,7 +306,7 @@ def _compiled_graph(project: ProjectRecord) -> Any:
     cached = _COMPILED.get(project.id)
     if cached is not None and cached[0] == project.plan_version:
         return cached[1]
-    graph = compile_graph(project.plan, _knowledge_context(project))
+    graph = compile_graph(project.plan, _knowledge_context(project), _data_context(project))
     _COMPILED[project.id] = (project.plan_version, graph)
     return graph
 
@@ -307,6 +327,35 @@ def _knowledge_context(project: ProjectRecord) -> kb.KnowledgeContext | None:
     return kb.store_context(_knowledge, project.tenant_id, project.id, _embedder_for)
 
 
+# One BigQuery client per (service account, billing project) per process: each holds
+# its federated Google token and refreshes it, so queries don't sign in every time.
+_BQ_CLIENTS: dict[tuple[str, str], ds.BigQueryClient] = {}
+
+
+def _bq_client(source: ds.DataSourceConfig) -> ds.BigQueryClient:
+    key = (source.service_account, source.billing_project)
+    if key not in _BQ_CLIENTS:
+        _BQ_CLIENTS[key] = ds.BigQueryClient(source.billing_project, source.service_account)
+    return _BQ_CLIENTS[key]
+
+
+def _data_context(project: ProjectRecord) -> ds.DataContext | None:
+    """The data sources attached to the project, for sql_schema / sql_query — or None when
+    no agent uses them or none is attached (compiling then fails with
+    DataSourceUnavailable). Sources are read at call time."""
+    if not uses_data(project.plan) or not _attached_sources(project):
+        return None
+    return ds.DataContext(
+        lambda: [s.config() for s in _attached_sources(project)],
+        lambda source: _bq_client(source),
+        labels={"agentic_project": project.id},
+    )
+
+
+def _attached_sources(project: ProjectRecord) -> list[Any]:
+    return [s for s in _datasources.list(project.tenant_id, project.id) if s.tables]
+
+
 def _has_ready_knowledge(project: ProjectRecord) -> bool:
     return any(d.status == "ready" for d in _knowledge.list_documents(project.tenant_id, project.id))
 
@@ -317,6 +366,8 @@ def _offered_tools(project: ProjectRecord) -> list[str]:
     tools = set(default_tool_names()) | set(project.side_effect_tools_enabled)
     if _has_ready_knowledge(project):
         tools |= KNOWLEDGE_TOOLS
+    if _attached_sources(project):
+        tools |= DATA_TOOLS
     return sorted(tools)
 
 
@@ -407,6 +458,197 @@ def _reembed(tenant_id: str, document_id: str, config: EmbeddingConfig) -> None:
         )
     finally:
         _record_usage(tenant_id, None, collector.entries(), run_id=uuid.uuid4().hex)
+
+
+# --------------------------------------------------------------------------- data sources
+class DataSourceCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    billing_project: str | None = Field(default=None, max_length=64)
+    service_account: str | None = Field(default=None, max_length=200)
+
+
+class DataSourceTablesRequest(BaseModel):
+    tables: list[str] = Field(max_length=200)
+
+
+class DataSourceProjectsRequest(BaseModel):
+    project_ids: list[str] = Field(max_length=200)
+
+
+class DataQueryRequest(BaseModel):
+    sql: str = Field(min_length=1, max_length=20_000)
+
+
+def _get_source(source_id: str, user: UserRecord) -> Any:
+    source = _datasources.get(user.id, source_id)
+    if source is None:  # someone else's source is reported exactly like a missing one
+        raise DataSourceNotFoundError(source_id)
+    return source
+
+
+def _source_body(source: Any, owned: set[str] | None = None) -> dict[str, Any]:
+    body = source.model_dump(exclude={"tenant_id"})
+    if owned is not None:
+        body["project_ids"] = [p for p in source.project_ids if p in owned]
+    return body
+
+
+def _require_configured() -> None:
+    if not GCP_WIF_AUDIENCE:
+        raise DataSourceError(
+            "BigQuery isn't set up on this server: set GCP_WIF_AUDIENCE, GCP_SERVICE_ACCOUNT and "
+            "BIGQUERY_PROJECT in backend/.env (see docs/bigquery_setup.md)",
+            status=503,
+            error_type="DataSourceNotConfigured",
+        )
+
+
+@app.get("/datasources")
+def list_datasources(user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """Your data sources, the projects you can attach them to, whether BigQuery is set up
+    on this server, the defaults for a new source and the per-query limits."""
+    projects = _store.list_for_tenant(user.id)
+    owned = {p.id for p in projects}
+    sources = _datasources.list(user.id)
+    return {
+        "configured": bool(GCP_WIF_AUDIENCE),
+        "defaults": {"billing_project": BIGQUERY_PROJECT, "service_account": GCP_SERVICE_ACCOUNT},
+        "limits": {"max_bytes": BIGQUERY_MAX_BYTES, "max_rows": BIGQUERY_MAX_ROWS},
+        "sources": [_source_body(s, owned) for s in sources],
+        "projects": [
+            {
+                "project_id": p.id,
+                "brief": p.brief,
+                "used_by": [a.id for a in p.plan.agents if set(a.tools) & DATA_TOOLS],
+            }
+            for p in projects
+        ],
+    }
+
+
+@app.post("/datasources", status_code=201)
+def create_datasource(req: DataSourceCreateRequest, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """Connect BigQuery as a service account that trusts this platform. The connection is
+    checked first (sign in, then list datasets); a failure names the step that failed."""
+    _require_configured()
+    billing_project = (req.billing_project or BIGQUERY_PROJECT or "").strip()
+    service_account = (req.service_account or GCP_SERVICE_ACCOUNT or "").strip().lower()
+    try:
+        config = ds.DataSourceConfig(
+            id=uuid.uuid4().hex, name=req.name.strip(), billing_project=billing_project,
+            service_account=service_account,
+        )
+    except ValidationError as e:
+        raise DataSourceError(
+            "enter a Google Cloud project id and a service account email (…@….iam.gserviceaccount.com)",
+            status=422,
+        ) from e
+    owner = _datasources.owner_of_service_account(service_account)
+    if owner is not None and owner != user.id:
+        # Federation trusts the platform, not the user: one tenant per service account.
+        raise DataSourceError("that service account is already connected by another account", status=409)
+    check = ds.check_connection(_bq_client(config), billing_project)
+    if not check["ok"]:
+        error = DataSourceError(
+            f"couldn't connect: {check['steps'][-1]['error']}", status=422, error_type="DataSourceConnectionFailed"
+        )
+        error.details = {"steps": check["steps"]}
+        raise error
+    source = DataSource(**config.model_dump(), tenant_id=user.id)
+    _datasources.add(source)
+    return {"source": _source_body(source), "check": check}
+
+
+@app.get("/datasources/{source_id}/browse")
+def browse_datasource(
+    source_id: str, project: str | None = None, user: UserRecord = Depends(current_user)
+) -> dict[str, Any]:
+    """The datasets and tables the source's service account can see in a project (its
+    billing project by default), to choose which tables agents may query."""
+    source = _get_source(source_id, user)
+    target = (project or source.billing_project).strip()
+    client = _bq_client(source.config())
+    datasets = client.list_datasets(target)[:50]
+    return {
+        "project": target,
+        "datasets": [{"id": d, "tables": client.list_tables(target, d)[:500]} for d in datasets],
+    }
+
+
+@app.put("/datasources/{source_id}/tables")
+def set_datasource_tables(
+    source_id: str, req: DataSourceTablesRequest, user: UserRecord = Depends(current_user)
+) -> dict[str, Any]:
+    """Set exactly which tables agents may query, as `project.dataset.table` (public
+    datasets included). Each is read first, to confirm access and record its location."""
+    source = _get_source(source_id, user)
+    client = _bq_client(source.config())
+    known = {t.id: t for t in source.tables}
+    tables: list[ds.AllowedTable] = []
+    for table_id in dict.fromkeys(t.strip() for t in req.tables):
+        if table_id.count(".") < 2:
+            raise DataSourceError(f"'{table_id}' isn't a full table name (project.dataset.table)", status=422)
+        if table_id in known:
+            tables.append(known[table_id])
+            continue
+        try:
+            meta = client.table(table_id)
+        except DataSourceError as e:
+            raise DataSourceError(f"can't read `{table_id}`: {e}", status=422) from e
+        tables.append(ds.AllowedTable(
+            id=table_id, location=meta.get("location") or "US", description=meta.get("description"),
+        ))
+    updated = _datasources.update(user.id, source_id, tables=tables)
+    if updated is None:
+        raise DataSourceNotFoundError(source_id)
+    _COMPILED.clear()  # compiled graphs check data tools against attached sources
+    return {"source": _source_body(updated)}
+
+
+@app.put("/datasources/{source_id}/projects")
+def set_datasource_projects(
+    source_id: str, req: DataSourceProjectsRequest, user: UserRecord = Depends(current_user)
+) -> dict[str, Any]:
+    """Set exactly which of your projects may query this source. Attaching is that
+    project's opt-in to sending query results to its agents' model provider."""
+    _get_source(source_id, user)
+    wanted = list(dict.fromkeys(req.project_ids))
+    for project_id in wanted:
+        _get_project(project_id, user)  # each must be one of yours (else 404)
+    updated = _datasources.update(user.id, source_id, project_ids=wanted)
+    if updated is None:
+        raise DataSourceNotFoundError(source_id)
+    return {"source": _source_body(updated)}
+
+
+@app.delete("/datasources/{source_id}")
+def delete_datasource(source_id: str, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """Remove a data source (and its project attachments). Nothing in BigQuery changes."""
+    if not _datasources.delete(user.id, source_id):
+        raise DataSourceNotFoundError(source_id)
+    return {"deleted": source_id}
+
+
+@app.post("/datasources/{source_id}/query")
+def query_datasource(
+    source_id: str, req: DataQueryRequest, user: UserRecord = Depends(current_user)
+) -> dict[str, Any]:
+    """Run a query the way an agent's sql_query does — same checks and limits — to test
+    the source. The bytes it's billed for are recorded on the Usage page."""
+    source = _get_source(source_id, user)
+    context = ds.DataContext(lambda: [source.config()], lambda s: _bq_client(s), labels={"agentic_test": "1"})
+    result = context.query(req.sql)
+    collector = UsageCollector()
+    collector.add(kind="bigquery_query", provider="bigquery", model="on-demand", input_tokens=0,
+                  bytes_billed=result.bytes_billed)
+    _record_usage(user.id, None, collector.entries(), run_id=uuid.uuid4().hex)
+    return {
+        "columns": result.columns,
+        "rows": result.rows,
+        "truncated": result.truncated,
+        "bytes_processed": result.bytes_processed,
+        "bytes_billed": result.bytes_billed,
+    }
 
 
 # --------------------------------------------------------------------------- usage
@@ -571,7 +813,8 @@ def create_project(
     documents = [_get_document(doc_id, user) for doc_id in dict.fromkeys(req.document_ids)]
     # knowledge_search only when files come with the project — otherwise there's nothing
     # for it to search.
-    available_tools = [t for t in available_tools if t not in KNOWLEDGE_TOOLS]
+    # Data tools need a data source attached, which a project can't have before it exists.
+    available_tools = [t for t in available_tools if t not in KNOWLEDGE_TOOLS | DATA_TOOLS]
     if documents:
         available_tools = [*available_tools, *sorted(KNOWLEDGE_TOOLS)]
     side_effect_tools_enabled = sorted(set(available_tools) & SIDE_EFFECT_TOOLS)
@@ -649,6 +892,7 @@ def delete_project(project_id: str, user: UserRecord = Depends(current_user)) ->
         raise ProjectNotFoundError(project_id)
     _COMPILED.pop(project_id, None)
     detached = _knowledge.detach_project(user.id, project_id)
+    _datasources.detach_project(user.id, project_id)
     return {"deleted": project_id, "knowledge_documents_detached": detached}
 
 
@@ -665,6 +909,7 @@ def update_agent_settings(
     agents = {a.id: a for a in project.plan.agents}
     current_models = {(a.llm.provider, a.llm.model) for a in project.plan.agents}
     has_knowledge = bool(_knowledge.list_documents(user.id, project_id))
+    has_data = bool(_attached_sources(project))
     problems: list[str] = []
     updates: dict[str, Any] = {}
     for change in req.agents:
@@ -679,6 +924,8 @@ def update_agent_settings(
             problems.append(f"unknown tool(s) for '{change.id}': {unknown}")
         if set(change.tools) & KNOWLEDGE_TOOLS and not has_knowledge:
             problems.append("knowledge_search needs files attached to this project first")
+        if set(change.tools) & DATA_TOOLS and not has_data:
+            problems.append("sql_schema and sql_query need a data source attached to this project first")
         llm = agent.llm
         if (change.provider, change.model) != (llm.provider, llm.model):
             # Provider-specific extras don't carry over to a different model.
@@ -846,7 +1093,7 @@ def invoke_agent(
     try:
         result = run_single_agent(
             project.plan, agent_id, req.input, req.upstream_outputs, _knowledge_context(project),
-            usage=collector,
+            usage=collector, data=_data_context(project),
         )
     except KeyError:
         return JSONResponse(
@@ -1335,6 +1582,15 @@ def deploy_project(
         def snapshot():
             return kb.build_snapshot(_knowledge, user.id, project_id)
 
+    data_snapshot = None
+    if uses_data(project.plan):
+        sources = _attached_sources(project)
+        if not sources:
+            raise DataSourceUnavailableError()
+
+        def data_snapshot():
+            return ds.snapshot([s.config() for s in _attached_sources(project)])
+
     runtime_environment(project.plan, embeddings)
 
     deployment = Deployment(
@@ -1350,7 +1606,9 @@ def deploy_project(
         usage_synced_until=previous.usage_synced_until if previous else None,
     )
     _store.set_deployment(project_id, deployment)
-    background.add_task(run_deployment, project_id, _store, cloud, _package_builder, snapshot, embeddings)
+    background.add_task(
+        run_deployment, project_id, _store, cloud, _package_builder, snapshot, embeddings, data_snapshot
+    )
     return {"deployment": _deployment_body(_get_project(project_id, user))}
 
 
@@ -1515,6 +1773,11 @@ def _handle_deploy(_req: Request, exc: DeployError):
 @app.exception_handler(KnowledgeError)
 def _handle_knowledge(_req: Request, exc: KnowledgeError):
     return _error_response(exc.status, "KnowledgeRejected", str(exc))
+
+
+@app.exception_handler(DataSourceError)
+def _handle_data_source(_req: Request, exc: DataSourceError):
+    return _error_response(exc.status, exc.error_type, str(exc), getattr(exc, "details", None))
 
 
 @app.exception_handler(KnowledgeUnavailableError)

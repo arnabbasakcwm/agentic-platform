@@ -158,6 +158,41 @@ class KnowledgeUnavailableError(PlatformError):
         )
 
 
+class DataSourceError(PlatformError):
+    """A data source can't be connected, read or queried. The message is written for the
+    person (or agent) who asked; `status` and `error_type` are the API's response."""
+
+    def __init__(self, message: str, status: int = 400, error_type: str = "DataSourceError"):
+        self.status = status
+        self.error_type = error_type
+        super().__init__(message)
+
+
+class DataSourceNotFoundError(DataSourceError):
+    def __init__(self, source_id: str):
+        super().__init__(f"data source not found: {source_id}", status=404, error_type="DataSourceNotFound")
+
+
+class DataSourceUnavailableError(DataSourceError):
+    """sql_schema / sql_query were requested where no data source is attached."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "sql_schema and sql_query need a data source: attach one to this project on the "
+            "Data sources page first",
+            status=409,
+            error_type="DataSourceUnavailable",
+        )
+
+
+class QueryRefusedError(DataSourceError):
+    """The platform refused an agent's SQL before running it (or BigQuery stopped it). The
+    message tells the agent what to change."""
+
+    def __init__(self, message: str):
+        super().__init__(message, status=422, error_type="QueryRefused")
+
+
 class PlannerError(PlatformError):
     """Raised when the meta-planner cannot produce a valid AgentPlan within the retry ceiling."""
 

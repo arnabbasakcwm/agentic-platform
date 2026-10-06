@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field
 from .agent_schema import AgentPlan
 from .errors import PlatformError
 from .graph_builder import compile_graph, get_embeddings, run_graph, run_single_agent
+from . import datasources as ds
 from .knowledge import KnowledgeContext, cached_embedders, load_snapshot, snapshot_context
 from .usage import UsageCollector
 
@@ -83,7 +84,9 @@ def create_app(plan_data: dict[str, Any], knowledge_dir: Path | None = None) -> 
     `knowledge_dir` holds the knowledge-base snapshot, if the deployment has one."""
     plan = AgentPlan.model_validate(plan_data)
     knowledge = _snapshot_context(knowledge_dir)
-    graph = compile_graph(plan, knowledge)
+    sources = ds.load_snapshot(knowledge_dir) if knowledge_dir is not None else None
+    data = ds.config_context(sources) if sources else None
+    graph = compile_graph(plan, knowledge, data)
     started = int(time.time())
 
     app = FastAPI(title="Agentic Platform runtime", docs_url=None, redoc_url=None)
@@ -106,7 +109,7 @@ def create_app(plan_data: dict[str, Any], knowledge_dir: Path | None = None) -> 
         if req.agent_id is not None:
             try:
                 result = run_single_agent(
-                    plan, req.agent_id, req.input, req.upstream_outputs, knowledge, usage=usage
+                    plan, req.agent_id, req.input, req.upstream_outputs, knowledge, usage=usage, data=data
                 )
             except KeyError:
                 return _error(404, "AgentNotFound", f"agent '{req.agent_id}' is not in this plan")

@@ -86,3 +86,13 @@ def embedding_option(provider: str, model: str) -> dict[str, object] | None:
 
 # Region for Amazon Bedrock model calls (chat and embeddings).
 BEDROCK_REGION: str = os.environ.get("BEDROCK_REGION") or os.environ.get("AGENTCORE_REGION") or "ap-south-1"
+
+# BigQuery data sources (see docs/bigquery_setup.md). Google trusts the platform's AWS
+# identity through Workload Identity Federation, so these are identifiers, not secrets.
+GCP_WIF_AUDIENCE: str | None = os.environ.get("GCP_WIF_AUDIENCE") or None
+GCP_SERVICE_ACCOUNT: str | None = os.environ.get("GCP_SERVICE_ACCOUNT") or None
+BIGQUERY_PROJECT: str | None = os.environ.get("BIGQUERY_PROJECT") or None
+# Limits on every agent query, enforced by the platform and (bytes) by BigQuery itself.
+BIGQUERY_MAX_BYTES: int = int(os.environ.get("BIGQUERY_MAX_BYTES") or 1_000_000_000)
+BIGQUERY_MAX_ROWS: int = int(os.environ.get("BIGQUERY_MAX_ROWS") or 200)
+BIGQUERY_TIMEOUT_MS: int = int(os.environ.get("BIGQUERY_TIMEOUT_MS") or 60_000)
