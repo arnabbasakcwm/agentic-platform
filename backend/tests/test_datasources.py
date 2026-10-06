@@ -411,3 +411,73 @@ def test_the_runtime_builds_a_data_context_from_its_snapshot(monkeypatch, tmp_pa
                      orchestration_pattern="sequential")
     runtime_app.create_app(plan.model_dump(), knowledge_dir=tmp_path)
     assert captured["data"].load_sources()[0].table_ids() == ALLOWED
+
+
+# ---------------------------------------------------------------------------- in the project flow
+def test_a_new_project_can_start_with_data_sources(api, monkeypatch):
+    h = api.login("ada@example.com")
+    source_id = _connected(api, h)
+    seen = {}
+    plan = AgentPlan(agents=[AgentSpec(id="analyst", role="r", system_prompt="p", tools=["sql_schema", "sql_query"],
+                                       llm=LLMConfig(provider="google_genai", model="gemini-3.1-pro-preview"))],
+                     orchestration_pattern="sequential")
+
+    def planner(**kw):
+        seen.update(kw)
+        return plan
+
+    monkeypatch.setattr(app_module, "plan_project", planner)
+    r = api.post("/projects", json={"brief": "bike analyst", "datasource_ids": [source_id]}, headers=h)
+    assert r.status_code == 201
+    pid = r.json()["project_id"]
+    # The planner gets the SQL tools and the table names, never data.
+    assert {"sql_schema", "sql_query"} <= set(seen["available_tools"])
+    assert seen["data_tables"] == [TRIPS, STATIONS]
+    (source,) = api.get("/datasources", headers=h).json()["sources"]
+    assert source["project_ids"] == [pid]
+    assert api.post(f"/projects/{pid}/compile", headers=h).status_code == 200
+
+    # Without sources, no SQL tools; someone else's source is a 404.
+    api.post("/projects", json={"brief": "no data"}, headers=h)
+    assert not {"sql_schema", "sql_query"} & set(seen["available_tools"]) and not seen["data_tables"]
+    bob = api.login("bob@example.com")
+    assert api.post("/projects", json={"brief": "x", "datasource_ids": [source_id]}, headers=bob).status_code == 404
+
+
+def test_the_projects_data_step_attaches_and_detaches(api, monkeypatch):
+    h = api.login("ada@example.com")
+    pid = api.post("/projects", json={"brief": "bike analyst"}, headers=h).json()["project_id"]
+    source_id = _connected(api, h)
+    body = api.get(f"/projects/{pid}/datasources", headers=h).json()
+    assert body["configured"] and body["attached"] == [] and [s["id"] for s in body["available"]] == [source_id]
+
+    r = api.post(f"/projects/{pid}/datasources/{source_id}", headers=h)
+    assert r.status_code == 200 and r.json()["source"]["project_ids"] == [pid]
+    assert api.post(f"/projects/{pid}/datasources/{source_id}", headers=h).json()["source"]["project_ids"] == [pid]
+    body = api.get(f"/projects/{pid}/datasources", headers=h).json()
+    assert [s["id"] for s in body["attached"]] == [source_id] and body["available"] == []
+
+    # The assistant is told the attached tables when revising.
+    seen = {}
+
+    def revise(**kw):
+        seen.update(kw)
+        from agentic_platform.agent_schema import PlanRevision
+
+        return PlanRevision(reply="ok", brief=kw["brief"], plan=kw["plan"])
+
+    monkeypatch.setattr(app_module, "revise_plan", revise)
+    api.post(f"/projects/{pid}/revise", json={"message": "give the analyst sql_query"}, headers=h)
+    assert seen["data_tables"] == [TRIPS, STATIONS] and "sql_query" in seen["available_tools"]
+
+    bob = api.login("bob@example.com")
+    assert api.post(f"/projects/{pid}/datasources/{source_id}", headers=bob).status_code == 404
+    assert api.delete(f"/projects/{pid}/datasources/{source_id}", headers=h).json()["source"]["project_ids"] == []
+
+
+def test_the_planner_sees_table_names_only():
+    from agentic_platform.meta_planner_prompt import _build_user_message
+
+    message = _build_user_message("analyse bikes", None, ["sql_query"], [], None, None, [TRIPS])
+    assert f"DATA TABLES attached to this project (BigQuery, read-only): `{TRIPS}`" in message
+    assert "DATA TABLES" not in _build_user_message("x", None, [], [], None, None, None)

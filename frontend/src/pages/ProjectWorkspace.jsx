@@ -2,22 +2,32 @@ import { useCallback, useEffect, useState } from "react";
 import { AssistantPanel } from "../components/AssistantPanel.jsx";
 import { Icon } from "../components/icons.jsx";
 import { Stepper } from "../components/Stepper.jsx";
-import { Button, Empty, ErrorCallout, LinkButton, PageHeader, Panel, Pill } from "../components/ui.jsx";
+import {
+  Button,
+  Empty,
+  ErrorCallout,
+  LinkButton,
+  PageHeader,
+  Panel,
+  Pill,
+} from "../components/ui.jsx";
 import { api } from "../lib/api.js";
 import { projectTitle } from "../lib/format.js";
 import { paths } from "../lib/router.js";
 import { useAction } from "../lib/useAction.js";
+import { dataHint } from "../lib/datasources.js";
 import { knowledgeHint } from "../lib/knowledge.js";
 import { useProjectRun } from "../lib/useProjectRun.js";
 import { BriefStep } from "./project/BriefStep.jsx";
 import { CompileStep } from "./project/CompileStep.jsx";
 import { DeployStep } from "./project/DeployStep.jsx";
+import { DataStep } from "./project/DataStep.jsx";
 import { KnowledgeStep } from "./project/KnowledgeStep.jsx";
 import { PlanStep } from "./project/PlanStep.jsx";
 import { RunStep } from "./project/RunStep.jsx";
 
 // The steps where the brief and plan can still change, so where the assistant is offered.
-const ASSISTANT_STEPS = ["brief", "knowledge", "plan", "compile"];
+const ASSISTANT_STEPS = ["brief", "knowledge", "data", "plan", "compile"];
 const ASSISTANT_KEY = "agentic-platform.assistant-open";
 
 // Open by default where there's room for it beside the page; remembered per browser.
@@ -45,7 +55,8 @@ function deployHint(deployment) {
 function runHint(project, run) {
   if (run?.status === "running") return "Running…";
   if (run?.status === "failed") return "Last run failed";
-  if (run?.status === "completed") return run.halted ? "Last run halted" : "Last run completed";
+  if (run?.status === "completed")
+    return run.halted ? "Last run halted" : "Last run completed";
   return project.compiled ? "Ready" : "Needs compiling";
 }
 
@@ -70,6 +81,10 @@ export function ProjectWorkspace({ id, step, onChanged, tools, providers }) {
 
   const knowledgeChanged = useCallback((knowledge) => {
     setProject((p) => (p ? { ...p, knowledge } : p));
+  }, []);
+
+  const dataChanged = useCallback((dataSources) => {
+    setProject((p) => (p ? { ...p, data_sources: dataSources } : p));
   }, []);
 
   useEffect(() => {
@@ -113,6 +128,12 @@ export function ProjectWorkspace({ id, step, onChanged, tools, providers }) {
       label: "Knowledge",
       hint: knowledgeHint(project.knowledge),
       done: (project.knowledge?.ready ?? 0) > 0,
+    },
+    {
+      key: "data",
+      label: "Data",
+      hint: dataHint(project.data_sources),
+      done: (project.data_sources?.tables ?? 0) > 0,
     },
     {
       key: "plan",
@@ -188,7 +209,10 @@ export function ProjectWorkspace({ id, step, onChanged, tools, providers }) {
             }
             actions={
               assistantAvailable && !assistantOpen ? (
-                <Button onClick={() => setAssistant(true)} aria-expanded={false}>
+                <Button
+                  onClick={() => setAssistant(true)}
+                  aria-expanded={false}
+                >
                   <Icon name="chat" />
                   Assistant
                 </Button>
@@ -205,7 +229,12 @@ export function ProjectWorkspace({ id, step, onChanged, tools, providers }) {
 
         {step === "brief" && (
           // Not keyed by plan version: its model/tools editor saves new versions itself.
-          <BriefStep project={project} tools={tools} providers={providers} onSaved={projectChanged} />
+          <BriefStep
+            project={project}
+            tools={tools}
+            providers={providers}
+            onSaved={projectChanged}
+          />
         )}
         {step === "knowledge" && (
           // Not keyed by plan version: it holds no plan draft, and a revision made from it
@@ -216,10 +245,23 @@ export function ProjectWorkspace({ id, step, onChanged, tools, providers }) {
             onRevised={projectChanged}
           />
         )}
-        {step === "plan" && (
-          <PlanStep key={stepKey} project={project} onSaved={(next) => projectChanged(next)} />
+        {step === "data" && (
+          <DataStep
+            project={project}
+            onDataChanged={dataChanged}
+            onRevised={projectChanged}
+          />
         )}
-        {step === "compile" && <CompileStep key={stepKey} project={project} onCompiled={compiled} />}
+        {step === "plan" && (
+          <PlanStep
+            key={stepKey}
+            project={project}
+            onSaved={(next) => projectChanged(next)}
+          />
+        )}
+        {step === "compile" && (
+          <CompileStep key={stepKey} project={project} onCompiled={compiled} />
+        )}
         {step === "run" && (
           <RunStep
             project={project}
@@ -230,7 +272,10 @@ export function ProjectWorkspace({ id, step, onChanged, tools, providers }) {
           />
         )}
         {step === "deploy" && (
-          <DeployStep project={project} onDeploymentChanged={deploymentChanged} />
+          <DeployStep
+            project={project}
+            onDeploymentChanged={deploymentChanged}
+          />
         )}
       </div>
 

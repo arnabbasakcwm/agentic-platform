@@ -290,6 +290,8 @@ signed-in user's projects. Interactive docs: http://127.0.0.1:8000/docs.
 | `PUT /datasources/{id}/tables` | Set which tables agents may query (`project.dataset.table`) |
 | `PUT /datasources/{id}/projects` | Set which projects may query the source (the opt-in) |
 | `POST /datasources/{id}/query` | Test a query with the same checks and limits as `sql_query` |
+| `GET /projects/{id}/datasources` | The sources attached to a project, the ones that could be, and which agents can query |
+| `POST` / `DELETE /projects/{id}/datasources/{source_id}` | Attach / detach a source (attaching is the opt-in) |
 | `DELETE /datasources/{id}` | Remove a data source |
 | `GET /usage?days=30&project_id=` | Models, tokens and estimated cost: totals, per day, per model, per project, per activity, recent runs |
 | `POST /usage/sync` | Read deployed runtimes' usage logs now, counting runs invoked straight through AWS |
@@ -348,7 +350,10 @@ Then, in the console's **Data sources** page:
    model provider, so attaching is the opt-in.
 4. **Test a query.**
 
-Give an agent `sql_schema` and `sql_query` on the Brief page.
+You can also pick data sources when creating a project ("Add data" in the new-project
+chat): the planner is told the table names and gives the right agents the SQL tools. Or
+attach them on the project's **Data** step, which also offers "Give agents access" and a
+test query. Otherwise, give an agent `sql_schema` and `sql_query` on the Brief page.
 
 Every query is checked by the platform before Google sees it:
 - one `SELECT`, over your chosen tables only; no writes or scripts;

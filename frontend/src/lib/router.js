@@ -13,6 +13,7 @@ import { useEffect, useState } from "react";
 export const PROJECT_STEPS = [
   "brief",
   "knowledge",
+  "data",
   "plan",
   "compile",
   "run",

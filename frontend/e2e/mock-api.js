@@ -269,6 +269,25 @@ function dataBody() {
 const usedByData = () => plan.agents.filter((a) => a.tools.includes("sql_query")).map((a) => a.id);
 
 async function dataRoute(req, res, path) {
+  const projectData = path.match(/^\/projects\/([^/]+)\/datasources(?:\/([^/]+))?$/);
+  if (projectData) {
+    const [, pid, sid] = projectData;
+    if (!sid) {
+      return send(res, 200, {
+        configured: true,
+        limits: { max_bytes: 1_000_000_000, max_rows: 200 },
+        attached: dataSources.list.filter((s) => s.project_ids.includes(pid)),
+        available: dataSources.list.filter((s) => !s.project_ids.includes(pid)),
+        used_by: pid === PROJECT_ID ? usedByData() : [],
+      });
+    }
+    const s = dataSources.list.find((x) => x.id === sid);
+    if (!s) return send(res, 404, { error_type: "DataSourceNotFound", message: "data source not found", details: null });
+    if (req.method === "POST") s.project_ids = [...new Set([...s.project_ids, pid])];
+    if (req.method === "DELETE") s.project_ids = s.project_ids.filter((x) => x !== pid);
+    dataSummary();
+    return send(res, 200, { source: s });
+  }
   if (path === "/datasources" && req.method === "GET") return send(res, 200, dataBody());
   if (path === "/datasources" && req.method === "POST") {
     const body = await readBody(req);
@@ -464,6 +483,19 @@ async function upload(req, res, projectId = null) {
 }
 
 function revise(res, message) {
+  if (/sql_query/.test(message)) {
+    plan.agents[0].tools = [...new Set([...plan.agents[0].tools, "sql_schema", "sql_query"])];
+    project.plan_version += 1;
+    project.compiled = false;
+    const reply = {
+      role: "assistant",
+      content: "Gave flight_searcher sql_schema and sql_query, with instructions to report numbers exactly.",
+      plan_version: project.plan_version,
+      created_at: new Date().toISOString(),
+    };
+    project.conversation = [...project.conversation, reply];
+    return send(res, 200, { changed: true, reply, project });
+  }
   if (/knowledge_search/.test(message)) {
     plan.agents[0].tools = [...new Set([...plan.agents[0].tools, "knowledge_search"])];
     project.plan_version += 1;
@@ -536,6 +568,10 @@ const server = http.createServer(async (req, res) => {
     const body = await readBody(req);
     created.last = body;
     const id = "e2e0new0project";
+    for (const sourceId of body.datasource_ids ?? []) {
+      const s = dataSources.list.find((x) => x.id === sourceId);
+      if (s) s.project_ids = [...new Set([...s.project_ids, id])];
+    }
     for (const docId of body.document_ids ?? []) {
       const d = knowledge.documents.find((x) => x.id === docId);
       if (d) d.project_ids = [...new Set([...d.project_ids, id])];
@@ -586,7 +622,7 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, project);
   }
   // Library
-  if (path.startsWith("/datasources")) {
+  if (path.startsWith("/datasources") || /^\/projects\/[^/]+\/datasources/.test(path)) {
     const handled = await dataRoute(req, res, path);
     if (handled !== false) return handled;
   }

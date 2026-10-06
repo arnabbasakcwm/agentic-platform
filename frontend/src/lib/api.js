@@ -139,6 +139,7 @@ export const api = {
     availableTools,
     availableLlms,
     documentIds,
+    datasourceIds,
   }) =>
     request("/projects", {
       method: "POST",
@@ -150,6 +151,8 @@ export const api = {
         ...(availableLlms ? { available_llms: availableLlms } : {}),
         // Library files to attach; the planner is told about them.
         ...(documentIds?.length ? { document_ids: documentIds } : {}),
+        // Data sources to attach; the planner is told their table names.
+        ...(datasourceIds?.length ? { datasource_ids: datasourceIds } : {}),
       },
     }),
   // Change agents' model and tools: [{ id, provider, model, tools }]. Makes a new plan version.
@@ -215,6 +218,11 @@ export const api = {
     }),
   queryDataSource: (id, sql) =>
     request(`/datasources/${id}/query`, { method: "POST", body: { sql } }),
+  projectDataSources: (id) => request(`/projects/${id}/datasources`),
+  attachDataSource: (id, sourceId) =>
+    request(`/projects/${id}/datasources/${sourceId}`, { method: "POST" }),
+  detachDataSource: (id, sourceId) =>
+    request(`/projects/${id}/datasources/${sourceId}`, { method: "DELETE" }),
   deleteDataSource: (id) => request(`/datasources/${id}`, { method: "DELETE" }),
   // ---- one project's view: the files attached to it.
   getKnowledge: (id) => request(`/projects/${id}/knowledge`),

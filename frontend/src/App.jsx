@@ -19,6 +19,7 @@ const COLLAPSED_KEY = "agentic-platform.sidebar-collapsed";
 const STEP_LABELS = {
   brief: "Brief",
   knowledge: "Knowledge",
+  data: "Data",
   plan: "Plan",
   compile: "Compile",
   run: "Run",

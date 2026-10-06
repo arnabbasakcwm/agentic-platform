@@ -123,6 +123,7 @@ def _build_user_message(
     available_llms: list[dict[str, Any]],
     correction: str | None,
     knowledge_files: list[str] | None = None,
+    data_tables: list[str] | None = None,
 ) -> str:
     count = (
         str(requested_agent_count)
@@ -133,6 +134,7 @@ def _build_user_message(
         f"TASK DESCRIPTION:\n{user_brief}",
         f"\nDESIRED AGENT COUNT: {count}",
         *_knowledge_block(knowledge_files),
+        *_data_block(data_tables),
         *_options_block(available_tools, available_llms),
         *_correction_block(correction, "AgentPlan"),
     ]
@@ -152,6 +154,20 @@ def _knowledge_block(knowledge_files: list[str] | None) -> list[str]:
     ]
 
 
+def _data_block(data_tables: list[str] | None) -> list[str]:
+    """Names of the database tables attached to the project. Only names: the agents that
+    need data read the columns with sql_schema and query with sql_query."""
+    if not data_tables:
+        return []
+    names = ", ".join(f"`{name}`" for name in data_tables[:100])
+    return [
+        f"\nDATA TABLES attached to this project (BigQuery, read-only): {names}. Give "
+        "sql_schema and sql_query to the agents that need facts from this data; tell them to "
+        "call sql_schema first, aggregate in SQL, and report numbers exactly as the query "
+        "returns them."
+    ]
+
+
 def _build_revision_message(
     brief: str,
     plan: AgentPlan,
@@ -160,6 +176,7 @@ def _build_revision_message(
     available_tools: list[str],
     available_llms: list[dict[str, Any]],
     correction: str | None,
+    data_tables: list[str] | None = None,
 ) -> str:
     parts = [
         f"CURRENT BRIEF:\n{brief}",
@@ -169,6 +186,7 @@ def _build_revision_message(
         parts.append("\nRECENT CONVERSATION (oldest first):")
         parts.extend(f"  {role.upper()}: {content}" for role, content in history)
     parts.append(f"\nUSER REQUEST:\n{request}")
+    parts.extend(_data_block(data_tables))
     parts.extend(_options_block(available_tools, available_llms))
     parts.extend(_correction_block(correction, "PlanRevision"))
     return "\n".join(parts)
@@ -272,6 +290,7 @@ def plan_project(
     planner_llm: LLMConfig | None = None,
     usage: UsageCollector | None = None,
     knowledge_files: list[str] | None = None,
+    data_tables: list[str] | None = None,
 ) -> AgentPlan:
     """Turn a natural-language brief into a validated AgentPlan.
 
@@ -283,7 +302,7 @@ def plan_project(
         AgentPlan,
         _SYSTEM_PROMPT,
         lambda correction: _build_user_message(
-            user_brief, requested_agent_count, tools, llms, correction, knowledge_files
+            user_brief, requested_agent_count, tools, llms, correction, knowledge_files, data_tables
         ),
         lambda plan: _semantic_check(plan, requested_agent_count, tools, llms),
         planner_llm,
@@ -304,6 +323,7 @@ def revise_plan(
     available_llms: list[dict[str, Any]] | None = None,
     planner_llm: LLMConfig | None = None,
     usage: UsageCollector | None = None,
+    data_tables: list[str] | None = None,
 ) -> PlanRevision:
     """Apply a natural-language change request to an existing brief and plan.
 
@@ -317,7 +337,7 @@ def revise_plan(
         PlanRevision,
         _REVISION_PROMPT,
         lambda correction: _build_revision_message(
-            brief, plan, request, recent, tools, llms, correction
+            brief, plan, request, recent, tools, llms, correction, data_tables
         ),
         lambda revision: _semantic_check(revision.plan, None, tools, llms),
         planner_llm,

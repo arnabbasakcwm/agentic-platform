@@ -519,7 +519,10 @@ whenever a change departs from or extends the contract above — don't silently 
   - **Opt-in:** `sql_schema` / `sql_query` are never default tools. Attaching a source to a
     project on the Data sources page is that project's opt-in to sending query results
     to its agents' model provider; only then are the tools offered (planner, assistant,
-    Brief editor).
+    Brief editor). A source can be attached from the Data sources page, from the
+    project's **Data** step (between Knowledge and Plan), or when creating a project
+    (`POST /projects` `datasource_ids`, the new-project chat's "Add data"). The planner
+    and assistant get the attached tables' **names** only, never rows.
   - **Usage:** each query records `kind="bigquery_query"` with `bytes_billed`. Cost uses a
     `per_tib` price from `pricing.json`, which stays unset until confirmed on Google's
     pricing page.

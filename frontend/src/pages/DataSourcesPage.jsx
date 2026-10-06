@@ -268,7 +268,7 @@ function ProjectChecklist({ source, projects, onSaved }) {
   );
 }
 
-function TestQuery({ source, limits }) {
+export function TestQuery({ source, limits }) {
   const [sql, setSql] = useState(() => queryPreview(source.tables[0]?.id));
   const [result, setResult] = useState(null);
   const query = useAction();

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { formatBytes, queryPreview, tableName } from "./datasources.js";
+import {
+  dataHint,
+  formatBytes,
+  queryPreview,
+  tableName,
+} from "./datasources.js";
 
 describe("data source helpers", () => {
   it("formats bytes the way BigQuery counts them", () => {
@@ -13,5 +18,12 @@ describe("data source helpers", () => {
     expect(tableName("agenticdb-510807.mydata.trips")).toBe("mydata.trips");
     expect(queryPreview("p.d.t")).toBe("SELECT *\nFROM `p.d.t`\nLIMIT 10");
     expect(queryPreview(undefined)).toBe("");
+  });
+
+  it("summarises a project's data for the stepper", () => {
+    expect(dataHint(null)).toBe("Optional");
+    expect(dataHint({ sources: 0, tables: 0 })).toBe("Optional");
+    expect(dataHint({ sources: 1, tables: 1 })).toBe("1 table");
+    expect(dataHint({ sources: 2, tables: 3 })).toBe("3 tables");
   });
 });

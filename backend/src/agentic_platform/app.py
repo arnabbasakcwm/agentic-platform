@@ -166,6 +166,9 @@ class CreateProjectRequest(BaseModel):
     # Files from the user's knowledge library to attach to the new project. The planner is
     # told their names, so it can give the agents that need them knowledge_search.
     document_ids: list[str] = Field(default_factory=list, max_length=50)
+    # Data sources (BigQuery) to attach to the new project. The planner is told their
+    # table names, so it can give the agents that need data sql_schema / sql_query.
+    datasource_ids: list[str] = Field(default_factory=list, max_length=20)
 
 
 class AgentSettings(BaseModel):
@@ -629,6 +632,42 @@ def delete_datasource(source_id: str, user: UserRecord = Depends(current_user)) 
     return {"deleted": source_id}
 
 
+@app.get("/projects/{project_id}/datasources")
+def project_datasources(project_id: str, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """The data sources attached to this project (its agents query only these), your
+    other sources that could be attached, which agents have the SQL tools, and whether
+    BigQuery is set up on this server."""
+    project = _get_project(project_id, user)
+    sources = _datasources.list(user.id)
+    return {
+        "configured": bool(GCP_WIF_AUDIENCE),
+        "limits": {"max_bytes": BIGQUERY_MAX_BYTES, "max_rows": BIGQUERY_MAX_ROWS},
+        "attached": [_source_body(s) for s in sources if project_id in s.project_ids],
+        "available": [_source_body(s) for s in sources if project_id not in s.project_ids],
+        "used_by": [a.id for a in project.plan.agents if set(a.tools) & DATA_TOOLS],
+    }
+
+
+@app.post("/projects/{project_id}/datasources/{source_id}")
+def attach_datasource(project_id: str, source_id: str, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """Attach one of your data sources to this project: its opt-in to sending query
+    results to its agents' model provider. Agents with sql_query can use it at once."""
+    _get_project(project_id, user)
+    source = _get_source(source_id, user)
+    if project_id not in source.project_ids:
+        source = _datasources.update(user.id, source_id, project_ids=[*source.project_ids, project_id])
+    return {"source": _source_body(source)}
+
+
+@app.delete("/projects/{project_id}/datasources/{source_id}")
+def detach_datasource(project_id: str, source_id: str, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """Detach a data source from this project. The source itself stays."""
+    _get_project(project_id, user)
+    source = _get_source(source_id, user)
+    source = _datasources.update(user.id, source_id, project_ids=[p for p in source.project_ids if p != project_id])
+    return {"source": _source_body(source)}
+
+
 @app.post("/datasources/{source_id}/query")
 def query_datasource(
     source_id: str, req: DataQueryRequest, user: UserRecord = Depends(current_user)
@@ -811,12 +850,16 @@ def create_project(
     # a caller opts a project into one by naming it explicitly here.
     available_tools = req.available_tools if req.available_tools is not None else default_tool_names()
     documents = [_get_document(doc_id, user) for doc_id in dict.fromkeys(req.document_ids)]
+    sources = [_get_source(source_id, user) for source_id in dict.fromkeys(req.datasource_ids)]
+    data_tables = [t.id for s in sources for t in s.tables]
     # knowledge_search only when files come with the project — otherwise there's nothing
     # for it to search.
-    # Data tools need a data source attached, which a project can't have before it exists.
+    # SQL tools likewise only when data sources with tables come with it.
     available_tools = [t for t in available_tools if t not in KNOWLEDGE_TOOLS | DATA_TOOLS]
     if documents:
         available_tools = [*available_tools, *sorted(KNOWLEDGE_TOOLS)]
+    if data_tables:
+        available_tools = [*available_tools, *sorted(DATA_TOOLS)]
     side_effect_tools_enabled = sorted(set(available_tools) & SIDE_EFFECT_TOOLS)
     collector = UsageCollector()
     project_id: str | None = None
@@ -828,6 +871,7 @@ def create_project(
             available_llms=available_llms,
             usage=collector,
             knowledge_files=[d.filename for d in documents],
+            data_tables=data_tables,
         )
         project_id = uuid.uuid4().hex
     finally:
@@ -844,6 +888,8 @@ def create_project(
     )
     for doc in documents:
         _knowledge.attach(user.id, doc.id, project_id)
+    for source in sources:
+        _datasources.update(user.id, source.id, project_ids=[*source.project_ids, project_id])
     return {
         "project_id": project_id,
         "plan": plan.model_dump(),
@@ -992,6 +1038,7 @@ def revise_project(
             available_tools=allowed_tools,
             available_llms=allowed_llms,
             usage=collector,
+            data_tables=[t.id for s in _attached_sources(project) for t in s.tables],
         )
     finally:
         _record_usage(user.id, project_id, collector.entries(), run_id=uuid.uuid4().hex)

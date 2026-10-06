@@ -57,7 +57,11 @@ function describeSettings(settings, tools, providers) {
     (p) => `${p.provider}/${p.model}` === settings.model,
   );
   parts.push(model ? (model.name ?? model.model) : "Default model");
-  parts.push(`${settings.tools.length} of ${tools.tools?.length ?? 0} tools`);
+  // The SQL tools come with data sources (the Data tray), not from these settings.
+  const offered = (tools.tools ?? []).filter(
+    (t) => t.name !== "sql_schema" && t.name !== "sql_query",
+  );
+  parts.push(`${settings.tools.length} of ${offered.length} tools`);
   return parts.join(" · ");
 }
 
@@ -194,6 +198,75 @@ function FilesTray({ selected, onChange, disabled }) {
           <span className="tray__hint">
             Agents search these files with the knowledge_search tool; file text
             is sent to the embedding provider to index it.
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------ data sources tray
+/**
+ * Pick data sources (BigQuery) for the next project. They're attached when the project is
+ * created, and the planner is told their table names so it can give agents the SQL tools.
+ */
+function DataTray({ selected, onChange, disabled }) {
+  const [body, setBody] = useState(null);
+  const load = useAction();
+  const { run: runLoad } = load;
+
+  useEffect(() => {
+    runLoad(() => api.dataSources()).then((res) => res && setBody(res));
+  }, [runLoad]);
+
+  const ids = new Set(selected.map((s) => s.id));
+  const usable = (body?.sources ?? []).filter((s) => s.tables.length > 0);
+
+  function toggle(source) {
+    onChange(
+      ids.has(source.id)
+        ? selected.filter((s) => s.id !== source.id)
+        : [...selected, source],
+    );
+  }
+
+  return (
+    <div className="tray" id="composer-data">
+      <div className="tray__row tray__row--top">
+        <span className="tray__label">Data</span>
+        <div className="tray__control">
+          <ErrorCallout error={load.error} />
+          {body && usable.length === 0 && (
+            <span className="tray__hint">
+              No data source with tables yet.{" "}
+              <a href="#/data">Connect BigQuery and choose tables</a> first.
+            </span>
+          )}
+          {usable.length > 0 && (
+            <fieldset className="filepick">
+              <legend className="tray__hint">
+                Data sources agents may query
+              </legend>
+              {usable.map((s) => (
+                <label key={s.id} className="filepick__item">
+                  <input
+                    type="checkbox"
+                    checked={ids.has(s.id)}
+                    onChange={() => toggle(s)}
+                    disabled={disabled}
+                  />
+                  <Icon name="database" size={14} />
+                  <span className="filepick__name">{s.name}</span>
+                  <span className="muted filepick__size">
+                    {s.tables.length} table{s.tables.length === 1 ? "" : "s"}
+                  </span>
+                </label>
+              ))}
+            </fieldset>
+          )}
+          <span className="tray__hint">
+            Agents query these with sql_schema and sql_query: read-only, capped
+            per query. Results are sent to the agents&apos; model provider.
           </span>
         </div>
       </div>
@@ -447,6 +520,9 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
   const [filesOpen, setFilesOpen] = useState(false);
   // Knowledge files for the next project (library documents).
   const [files, setFiles] = useState([]);
+  const [dataOpen, setDataOpen] = useState(false);
+  // Data sources for the next project.
+  const [sources, setSources] = useState([]);
   // agentCount null = the planner decides. tools null = follow the platform default.
   const [settings, setSettings] = useState({
     agentCount: null,
@@ -492,6 +568,7 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
           ? [{ provider: chosen.provider, model: chosen.model }]
           : null,
         documentIds: request.files.map((f) => f.id),
+        datasourceIds: request.sources.map((s) => s.id),
       });
       setMessages((all) =>
         all.map((m) =>
@@ -513,7 +590,7 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
     const brief = draft.trim();
     if (!brief || busy || disabled) return;
     // Settings are captured per message, so changing them later never rewrites history.
-    const request = { brief, ...effectiveSettings, files };
+    const request = { brief, ...effectiveSettings, files, sources };
     const replyId = ++nextMessageId;
     setMessages((all) => [
       ...all,
@@ -603,6 +680,13 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
           {filesOpen && (
             <FilesTray selected={files} onChange={setFiles} disabled={busy} />
           )}
+          {dataOpen && (
+            <DataTray
+              selected={sources}
+              onChange={setSources}
+              disabled={busy}
+            />
+          )}
           {settingsOpen && (
             <SettingsTray
               settings={effectiveSettings}
@@ -661,6 +745,19 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
               >
                 <Icon name="file" size={14} />
                 {files.length ? filesLabel(files.length) : "Add files"}
+              </button>
+              <button
+                type="button"
+                className={`composer__options ${dataOpen ? "composer__options--open" : ""}`}
+                onClick={() => setDataOpen((open) => !open)}
+                aria-expanded={dataOpen}
+                aria-controls="composer-data"
+                title="Let the agents query your BigQuery tables"
+              >
+                <Icon name="database" size={14} />
+                {sources.length
+                  ? `${sources.length} data source${sources.length === 1 ? "" : "s"}`
+                  : "Add data"}
               </button>
               <button
                 type="button"

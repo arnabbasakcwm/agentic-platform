@@ -24,3 +24,16 @@ export function tableName(id) {
 export function queryPreview(tableId) {
   return tableId ? `SELECT *\nFROM \`${tableId}\`\nLIMIT 10` : "";
 }
+
+// What the "give agents access" button asks the plan assistant for.
+export const DATA_ACCESS_REQUEST =
+  "Give the agents that need facts from the attached BigQuery tables the sql_schema and " +
+  "sql_query tools, and tell them to call sql_schema first, aggregate in SQL, and report " +
+  "numbers exactly as the query returns them.";
+
+/** The Data step's hint in the project stepper. */
+export function dataHint(summary) {
+  if (!summary || summary.sources === 0) return "Optional";
+  const n = summary.tables;
+  return `${n} table${n === 1 ? "" : "s"}`;
+}
