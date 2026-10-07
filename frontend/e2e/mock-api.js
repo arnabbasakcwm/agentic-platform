@@ -30,6 +30,9 @@ const plan = {
 const project = {
   project_id: PROJECT_ID,
   brief: "Travel agent for finding cheap flights",
+  // Like the API: the name it was given, else the brief's first line.
+  name: "Travel agent for finding cheap flights",
+  named: false,
   plan,
   plan_version: 2,
   compiled: true,
@@ -348,7 +351,7 @@ function dataBody() {
     limits: { max_bytes: 1_000_000_000, max_rows: 200 },
     sources: dataSources.list,
     projects: [
-      ...(project.deleted ? [] : [{ project_id: PROJECT_ID, brief: project.brief, used_by: usedByData() }]),
+      ...(project.deleted ? [] : [{ project_id: PROJECT_ID, name: project.name, brief: project.brief, used_by: usedByData() }]),
       { project_id: SECOND_PROJECT.project_id, brief: SECOND_PROJECT.brief, used_by: [] },
     ],
   };
@@ -512,7 +515,7 @@ function libraryBody() {
     documents: newestFirst(knowledge.documents).map(publicDoc),
     passages: knowledge.documents.reduce((n, d) => n + d.chunk_count, 0),
     projects: [
-      ...(project.deleted ? [] : [summary(PROJECT_ID, project.brief, project.updated_at)]),
+      ...(project.deleted ? [] : [{ ...summary(PROJECT_ID, project.brief, project.updated_at), name: project.name }]),
       summary(SECOND_PROJECT.project_id, SECOND_PROJECT.brief, SECOND_PROJECT.updated_at),
     ],
     limits: LIMITS,
@@ -671,7 +674,11 @@ const server = http.createServer(async (req, res) => {
     // Like the real planner: agents use the model the caller allowed, if one was given.
     const llm = body.available_llms?.[0];
     const agents = plan.agents.slice(0, 2).map((a) => (llm ? { ...a, llm: { ...a.llm, ...llm } } : a));
-    return send(res, 201, { project_id: id, plan: { ...plan, agents }, side_effect_tools_enabled: [] });
+    const name = (body.name ?? "").trim();
+    return send(res, 201, {
+      project_id: id, name: name || body.brief.split("\n")[0], named: Boolean(name), brief: body.brief,
+      plan: { ...plan, agents }, side_effect_tools_enabled: [],
+    });
   }
   if (path === "/__last_create") return send(res, 200, created.last ?? {});
   const agentsPut = path.match(/^\/projects\/([^/]+)\/agents$/);
@@ -697,7 +704,7 @@ const server = http.createServer(async (req, res) => {
   if (path === "/projects") {
     if (project.deleted) return send(res, 200, { projects: [] });
     return send(res, 200, {
-      projects: [{ project_id: PROJECT_ID, brief: project.brief, orchestration_pattern: "sequential", agent_count: 3, compiled: true, created_at: project.created_at, updated_at: project.updated_at }],
+      projects: [{ project_id: PROJECT_ID, name: project.name, named: project.named, brief: project.brief, orchestration_pattern: "sequential", agent_count: 3, compiled: true, created_at: project.created_at, updated_at: project.updated_at }],
     });
   }
   if (path === p && req.method === "DELETE") {
@@ -710,6 +717,22 @@ const server = http.createServer(async (req, res) => {
       }
     }
     return send(res, 200, { deleted: PROJECT_ID, knowledge_documents_detached: detached });
+  }
+  // Renaming a project made in this session (the new-project chat).
+  const renameOther = path.match(/^\/projects\/(e2e0new0project)$/);
+  if (renameOther && req.method === "PATCH") {
+    const body = await readBody(req);
+    const name = (body.name ?? "").split(/\s+/).filter(Boolean).join(" ");
+    const brief = created.last?.brief ?? "";
+    return send(res, 200, { project_id: renameOther[1], name: name || brief.split("\n")[0], named: Boolean(name), brief });
+  }
+  if (path === p && req.method === "PATCH") {
+    const body = await readBody(req);
+    const name = (body.name ?? "").split(/\s+/).filter(Boolean).join(" ");
+    if (name.length > 100) return send(res, 422, { error_type: "ValidationError", message: "name: too long", details: null });
+    Object.assign(project, name ? { name, named: true } : { name: project.brief.split("\n")[0], named: false });
+    project.updated_at = new Date().toISOString();
+    return send(res, 200, project);
   }
   if (path === p) {
     knowledgeBody();

@@ -185,6 +185,8 @@ def test_list_projects_is_newest_first_and_summarised(monkeypatch):
     assert [p["project_id"] for p in projects] == [first, second]
     assert projects[0] == {
         "project_id": first,
+        "name": "first",  # no name given: the brief's first line
+        "named": False,
         "brief": "first",
         "orchestration_pattern": "sequential",
         "agent_count": 1,
@@ -414,3 +416,24 @@ def test_example_input_round_trips_with_the_plan(monkeypatch):
     monkeypatch.setattr(app_module, "plan_project", lambda **kw: plan)
     body = c.post("/projects", json={"brief": "x"}).json()
     assert body["plan"]["example_input"] == {"origin": "Kolkata", "destination": "Delhi"}
+
+
+def test_projects_can_be_named_at_creation_and_renamed(monkeypatch):
+    c = _client(monkeypatch)
+    created = c.post("/projects", json={"brief": "Find cheap flights\nfrom Kolkata", "name": "  Flights   CCU  "}).json()
+    pid = created["project_id"]
+    assert created["name"] == "Flights CCU"  # whitespace collapsed
+    body = c.get(f"/projects/{pid}").json()
+    assert (body["name"], body["named"]) == ("Flights CCU", True)
+    version = body["plan_version"]
+
+    r = c.patch(f"/projects/{pid}", json={"name": "Weekend trips"})
+    assert r.status_code == 200 and r.json()["name"] == "Weekend trips" and r.json()["plan_version"] == version
+    assert [p["name"] for p in c.get("/projects").json()["projects"]] == ["Weekend trips"]
+    # Clearing the name falls back to the brief's first line.
+    cleared = c.patch(f"/projects/{pid}", json={"name": "   "}).json()
+    assert (cleared["name"], cleared["named"]) == ("Find cheap flights", False)
+    assert c.patch(f"/projects/{pid}", json={"name": "x" * 101}).status_code == 422
+    # Without a name at creation, the brief stands in.
+    other = c.post("/projects", json={"brief": "Summarise news"}).json()
+    assert other["name"] == "Summarise news"

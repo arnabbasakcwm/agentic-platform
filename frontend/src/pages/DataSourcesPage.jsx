@@ -14,7 +14,7 @@ import {
 } from "../components/ui.jsx";
 import { api } from "../lib/api.js";
 import { formatBytes, queryPreview, tableName } from "../lib/datasources.js";
-import { projectTitle } from "../lib/format.js";
+import { projectName } from "../lib/format.js";
 import { useAction } from "../lib/useAction.js";
 
 /** Each step of a connection check, ticked or crossed. */
@@ -256,7 +256,7 @@ function ProjectChecklist({ source, projects, onSaved }) {
             checked={ticked.includes(p.project_id)}
             onChange={(e) => toggle(p.project_id, e.target.checked)}
           />
-          <span>{projectTitle(p.brief, 60)}</span>
+          <span>{projectName(p, 60)}</span>
           {source.project_ids.includes(p.project_id) &&
             p.used_by.length === 0 && (
               <Pill tone="warn">No agent queries it yet</Pill>

@@ -12,7 +12,7 @@ import {
   Pill,
 } from "../components/ui.jsx";
 import { api } from "../lib/api.js";
-import { projectTitle } from "../lib/format.js";
+import { ProjectName } from "../components/ProjectName.jsx";
 import { paths } from "../lib/router.js";
 import { useAction } from "../lib/useAction.js";
 import { dataHint } from "../lib/datasources.js";
@@ -202,7 +202,23 @@ export function ProjectWorkspace({ id, step, onChanged, tools, providers }) {
       <div className="workspace__main">
         <div className="page page--head">
           <PageHeader
-            title={projectTitle(project.brief, 110)}
+            title={
+              <ProjectName
+                project={project}
+                max={110}
+                renderName={(name) => (
+                  <h1 className="pagehead__title">{name}</h1>
+                )}
+                onRenamed={(updated) => {
+                  setProject((p) => ({
+                    ...p,
+                    name: updated.name,
+                    named: updated.named,
+                  }));
+                  onChanged();
+                }}
+              />
+            }
             meta={
               <>
                 <Pill tone="accent">{project.plan.orchestration_pattern}</Pill>

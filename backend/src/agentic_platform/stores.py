@@ -109,12 +109,27 @@ class Deployment(BaseModel):
         return self
 
 
+PROJECT_NAME_MAX = 100
+TITLE_MAX = 72
+
+
+def brief_title(brief: str, limit: int = TITLE_MAX) -> str:
+    """A project without a name is called by its brief's first line (as the console does)."""
+    first = (brief or "").strip().split("\n")[0].strip()
+    if not first:
+        return "Untitled project"
+    return first if len(first) <= limit else first[: limit - 1].rstrip() + "…"
+
+
 class ProjectRecord(BaseModel):
     id: str
     # The owning user's id. Each user is their own tenant for now.
     tenant_id: str
     brief: str
     plan: AgentPlan
+    # The name the user gave the project; None until they do (display_name falls back to
+    # the brief's first line).
+    name: str | None = Field(default=None, max_length=PROJECT_NAME_MAX)
     # Bumped on every plan edit.
     plan_version: int = 1
     # The plan_version that was last compiled; None until the first compile. A project is
@@ -129,6 +144,10 @@ class ProjectRecord(BaseModel):
     @property
     def is_compiled(self) -> bool:
         return self.compiled_version == self.plan_version
+
+    @property
+    def display_name(self) -> str:
+        return self.name or brief_title(self.brief)
 
 
 KNOWLEDGE_IN_PROGRESS = ("queued", "processing")
@@ -195,6 +214,11 @@ class ProjectStore(Protocol):
     def set_deployment(self, project_id: str, deployment: Deployment | None) -> bool:
         """Replace (or with None, clear) the project's deployment record. False if the
         project is gone."""
+        ...
+
+    def rename(self, project_id: str, name: str | None) -> ProjectRecord | None:
+        """Set (or with None, clear) the project's name. Doesn't change the plan or its
+        version. None if the project is gone."""
         ...
 
 
@@ -293,6 +317,14 @@ class InMemoryProjectStore:
             return False
         record.deployment = deployment.model_copy() if deployment else None
         return True
+
+    def rename(self, project_id: str, name: str | None) -> ProjectRecord | None:
+        record = self._records.get(project_id)
+        if record is None:
+            return None
+        record.name = name
+        record.updated_at = _now()
+        return record.model_copy(deep=True)
 
 
     def delete(self, project_id: str) -> bool:
@@ -451,6 +483,17 @@ class MongoProjectStore:
                 {"_id": project_id}, {"$set": {"deployment": value}}
             )
         return result.matched_count == 1
+
+    def rename(self, project_id: str, name: str | None) -> ProjectRecord | None:
+        from pymongo import ReturnDocument
+
+        with _mongo_errors():
+            doc = self._projects.find_one_and_update(
+                {"_id": project_id},
+                {"$set": {"name": name, "updated_at": _now()}},
+                return_document=ReturnDocument.AFTER,
+            )
+        return self._from_doc(doc) if doc else None
 
 
     def delete(self, project_id: str) -> bool:

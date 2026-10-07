@@ -594,6 +594,18 @@ whenever a change departs from or extends the contract above — don't silently 
     follow it if it's still going, and list the last 5 to reopen. Opening one puts its
     input back in the editor.
 
+### 2026-10-07 — Projects have names
+- **Why:** a project was only ever called by its brief's first line, which is often long
+  or vague.
+- **Rule:** `ProjectRecord.name` is optional (≤ 100 characters, whitespace collapsed).
+  Without one, `display_name` is the brief's first line, as before. Every API body that
+  names a project returns `name` (the display name) and `named`. A name can be given at
+  creation (`POST /projects` `name`) and changed with `PATCH /projects/{id}` `{name}`,
+  where an empty name clears it. Renaming never touches the brief, the plan or
+  `plan_version`. In the console, `components/ProjectName.jsx` shows the name with a
+  pencil to rename it in place (the project page header, the Projects list, the
+  new-project reply), and the new-project settings have an optional Name field.
+
 ## Working style — verify-and-retry, always
 
 Never mark something done because the code looks right.

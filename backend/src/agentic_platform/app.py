@@ -104,6 +104,8 @@ from .stores import (
     UsageRecord,
     UserRecord,
     make_capability_store,
+    PROJECT_NAME_MAX,
+    brief_title,
     make_run_store,
     make_datasource_store,
     make_stores,
@@ -168,6 +170,8 @@ MAX_FILES_PER_UPLOAD = 10
 # --------------------------------------------------------------------------- models
 class CreateProjectRequest(BaseModel):
     brief: str = Field(min_length=1)
+    # Optional; without one the project is called by its brief's first line.
+    name: str | None = Field(default=None, max_length=PROJECT_NAME_MAX)
     # Omit to let the planner choose the team size (still capped at MAX_AGENTS).
     agent_count: int | None = Field(default=None, gt=0, le=MAX_AGENTS)
     available_tools: list[str] | None = None
@@ -284,6 +288,8 @@ def _deployment_body(project: ProjectRecord) -> dict[str, Any] | None:
 def _project_body(project: ProjectRecord) -> dict[str, Any]:
     return {
         "project_id": project.id,
+        "name": project.display_name,
+        "named": project.name is not None,
         "brief": project.brief,
         "plan": project.plan.model_dump(),
         "plan_version": project.plan_version,
@@ -933,6 +939,7 @@ def list_datasources(user: UserRecord = Depends(current_user)) -> dict[str, Any]
         "projects": [
             {
                 "project_id": p.id,
+                "name": p.display_name,
                 "brief": p.brief,
                 "used_by": [a.id for a in p.plan.agents if set(a.tools) & DATA_TOOLS],
             }
@@ -1157,7 +1164,7 @@ def _deployments_usage_status(projects: list[ProjectRecord]) -> list[dict[str, A
         last = _SYNC_STATUS.get(p.id)
         out.append({
             "project_id": p.id,
-            "name": p.brief,
+            "name": p.display_name,
             "reports_usage": p.deployment.reports_usage,
             "synced_until": p.deployment.usage_synced_until,
             "last_sync": last,
@@ -1302,6 +1309,7 @@ def create_project(
             id=project_id,
             tenant_id=user.id,
             brief=req.brief,
+            name=_clean_name(req.name),
             plan=plan,
             side_effect_tools_enabled=side_effect_tools_enabled,
         )
@@ -1312,6 +1320,9 @@ def create_project(
         _datasources.update(user.id, source.id, project_ids=[*source.project_ids, project_id])
     return {
         "project_id": project_id,
+        "name": _clean_name(req.name) or brief_title(req.brief),
+        "named": _clean_name(req.name) is not None,
+        "brief": req.brief,
         "plan": plan.model_dump(),
         "side_effect_tools_enabled": side_effect_tools_enabled,
     }
@@ -1325,6 +1336,8 @@ def list_projects(user: UserRecord = Depends(current_user)) -> dict[str, Any]:
         "projects": [
             {
                 "project_id": p.id,
+                "name": p.display_name,
+                "named": p.name is not None,
                 "brief": p.brief,
                 "orchestration_pattern": p.plan.orchestration_pattern,
                 "agent_count": len(p.plan.agents),
@@ -1340,6 +1353,29 @@ def list_projects(user: UserRecord = Depends(current_user)) -> dict[str, Any]:
 @app.get("/projects/{project_id}")
 def get_project(project_id: str, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
     return _project_body(_get_project(project_id, user))
+
+
+class RenameProjectRequest(BaseModel):
+    # Empty clears the name: the project is called by its brief's first line again.
+    name: str = Field(max_length=PROJECT_NAME_MAX)
+
+
+def _clean_name(name: str | None) -> str | None:
+    """A name as stored: whitespace collapsed; empty means none."""
+    cleaned = " ".join((name or "").split())
+    return cleaned or None
+
+
+@app.patch("/projects/{project_id}")
+def rename_project(
+    project_id: str, req: RenameProjectRequest, user: UserRecord = Depends(current_user)
+) -> dict[str, Any]:
+    """Rename a project. Changes only its name — not the brief, plan or plan version."""
+    _get_project(project_id, user)
+    updated = _store.rename(project_id, _clean_name(req.name))
+    if updated is None:
+        raise ProjectNotFoundError(project_id)
+    return _project_body(updated)
 
 
 @app.delete("/projects/{project_id}")
@@ -1633,6 +1669,7 @@ def knowledge_library(user: UserRecord = Depends(current_user)) -> dict[str, Any
         "projects": [
             {
                 "project_id": p.id,
+                "name": p.display_name,
                 "brief": p.brief,
                 "documents": sum(p.id in d.project_ids for d in docs),
                 "ready": sum(p.id in d.project_ids and d.status == "ready" for d in docs),
@@ -1959,7 +1996,7 @@ def usage_dashboard(
     start = today - timedelta(days=days - 1)
     since = datetime(start.year, start.month, start.day, tzinfo=timezone.utc)
     records = [r.model_dump() for r in _usage.list(user.id, since, project_id)]
-    names = {p.id: p.brief for p in _store.list_for_tenant(user.id)}
+    names = {p.id: p.display_name for p in _store.list_for_tenant(user.id)}
     table = usage_mod.prices()
     body = usage_mod.dashboard(
         records, start=start, days=days, project_names=names, currency=table.get("currency", "USD")

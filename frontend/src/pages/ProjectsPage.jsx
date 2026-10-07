@@ -10,7 +10,8 @@ import {
   Pill,
 } from "../components/ui.jsx";
 import { api } from "../lib/api.js";
-import { fullDate, projectTitle, timeAgo } from "../lib/format.js";
+import { ProjectName } from "../components/ProjectName.jsx";
+import { fullDate, projectName, timeAgo } from "../lib/format.js";
 import { navigate, paths } from "../lib/router.js";
 import { useAction } from "../lib/useAction.js";
 
@@ -19,14 +20,24 @@ function entryPath(project) {
   return paths.project(project.project_id, project.compiled ? "run" : "plan");
 }
 
-function ProjectRow({ project, onDelete }) {
+function ProjectRow({ project, onDelete, onRenamed }) {
   const href = entryPath(project);
   return (
     <tr onClick={() => navigate(href)}>
       <td>
-        <a className="table__title" href={href} onClick={(e) => e.stopPropagation()}>
-          {projectTitle(project.brief)}
-        </a>
+        <ProjectName
+          project={project}
+          onRenamed={onRenamed}
+          renderName={(name) => (
+            <a
+              className="table__title"
+              href={href}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {name}
+            </a>
+          )}
+        />
         <span className="table__sub">{project.project_id}</span>
       </td>
       <td>
@@ -42,13 +53,17 @@ function ProjectRow({ project, onDelete }) {
           <Pill dot>Not compiled</Pill>
         )}
       </td>
-      <td className="muted" title={fullDate(project.updated_at)} style={{ whiteSpace: "nowrap" }}>
+      <td
+        className="muted"
+        title={fullDate(project.updated_at)}
+        style={{ whiteSpace: "nowrap" }}
+      >
         {timeAgo(project.updated_at)}
       </td>
       {/* Clicks here mustn't open the project (the row itself is a link). */}
       <td className="table__actions" onClick={(e) => e.stopPropagation()}>
         <DeleteButton
-          name={projectTitle(project.brief, 60)}
+          name={projectName(project, 60)}
           prompt="Delete this project? Its files stay in your library."
           onDelete={() => onDelete(project)}
         />
@@ -57,7 +72,13 @@ function ProjectRow({ project, onDelete }) {
   );
 }
 
-export function ProjectsPage({ projects, error, onRetry, onDeleted }) {
+export function ProjectsPage({
+  projects,
+  error,
+  onRetry,
+  onDeleted,
+  onRenamed,
+}) {
   const count = projects?.length ?? 0;
   const remove = useAction();
 
@@ -103,7 +124,8 @@ export function ProjectsPage({ projects, error, onRetry, onDeleted }) {
               </LinkButton>
             }
           >
-            Describe a task in plain language and the planner will design an agent team for it.
+            Describe a task in plain language and the planner will design an
+            agent team for it.
           </Empty>
         </Panel>
       ) : (
@@ -128,7 +150,12 @@ export function ProjectsPage({ projects, error, onRetry, onDeleted }) {
             </thead>
             <tbody>
               {projects.map((project) => (
-                <ProjectRow key={project.project_id} project={project} onDelete={deleteProject} />
+                <ProjectRow
+                  key={project.project_id}
+                  project={project}
+                  onDelete={deleteProject}
+                  onRenamed={onRenamed}
+                />
               ))}
             </tbody>
           </table>

@@ -22,7 +22,11 @@ export function PageHeader({ title, subtitle, meta, actions }) {
   return (
     <header className="pagehead">
       <div className="pagehead__text">
-        <h1 className="pagehead__title">{title}</h1>
+        {typeof title === "string" ? (
+          <h1 className="pagehead__title">{title}</h1>
+        ) : (
+          title
+        )}
         {subtitle && <p className="pagehead__sub">{subtitle}</p>}
         {meta && <div className="pagehead__meta">{meta}</div>}
       </div>
@@ -53,7 +57,12 @@ export function Field({ label, hint, children }) {
 }
 
 function buttonClasses({ variant, size, block }) {
-  return ["btn", variant && `btn--${variant}`, size && `btn--${size}`, block && "btn--block"]
+  return [
+    "btn",
+    variant && `btn--${variant}`,
+    size && `btn--${size}`,
+    block && "btn--block",
+  ]
     .filter(Boolean)
     .join(" ");
 }
@@ -97,7 +106,9 @@ export function Switch({ checked, onChange, disabled, label }) {
 
 export function Pill({ tone, dot, children }) {
   return (
-    <span className={["pill", tone && `pill--${tone}`].filter(Boolean).join(" ")}>
+    <span
+      className={["pill", tone && `pill--${tone}`].filter(Boolean).join(" ")}
+    >
       {dot && <span className="dot" />}
       {children}
     </span>
@@ -106,7 +117,11 @@ export function Pill({ tone, dot, children }) {
 
 export function Callout({ tone, title, children, detail }) {
   return (
-    <div className={["callout", tone && `callout--${tone}`].filter(Boolean).join(" ")}>
+    <div
+      className={["callout", tone && `callout--${tone}`]
+        .filter(Boolean)
+        .join(" ")}
+    >
       <div className="callout__body">
         {title && <div className="callout__title">{title}</div>}
         {children}
@@ -171,7 +186,11 @@ export function StatusBadge({ status, label }) {
   const s = STATUS[status] ?? STATUS.idle;
   return (
     <span className={`badge badge--${status}`}>
-      {status === "running" ? <span className="spin spin--sm" aria-hidden="true" /> : s.icon && <Icon name={s.icon} size={12} />}
+      {status === "running" ? (
+        <span className="spin spin--sm" aria-hidden="true" />
+      ) : (
+        s.icon && <Icon name={s.icon} size={12} />
+      )}
       {label ?? s.label}
     </span>
   );
@@ -181,7 +200,11 @@ export function Skeleton({ lines = 3 }) {
   return (
     <div className="skeleton" aria-hidden="true">
       {Array.from({ length: lines }, (_, i) => (
-        <span key={i} className="skeleton__line" style={{ width: `${92 - i * 14}%` }} />
+        <span
+          key={i}
+          className="skeleton__line"
+          style={{ width: `${92 - i * 14}%` }}
+        />
       ))}
     </div>
   );
@@ -206,7 +229,11 @@ export function DeleteButton({ name, onDelete, prompt }) {
 
   if (confirm) {
     return (
-      <span className="row confirm-delete" role="group" aria-label={`Confirm deleting ${name}`}>
+      <span
+        className="row confirm-delete"
+        role="group"
+        aria-label={`Confirm deleting ${name}`}
+      >
         {prompt && <span className="confirm-delete__prompt">{prompt}</span>}
         <Button size="sm" variant="danger" onClick={remove} loading={deleting}>
           Delete

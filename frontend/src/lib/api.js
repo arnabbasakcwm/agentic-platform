@@ -146,11 +146,13 @@ export const api = {
     availableLlms,
     documentIds,
     datasourceIds,
+    name,
   }) =>
     request("/projects", {
       method: "POST",
       body: {
         brief,
+        ...(name?.trim() ? { name: name.trim() } : {}),
         // Omitted = the planner chooses the team size.
         ...(agentCount ? { agent_count: agentCount } : {}),
         ...(availableTools ? { available_tools: availableTools } : {}),
@@ -167,6 +169,9 @@ export const api = {
 
   listProjects: () => request("/projects"),
   getProject: (id) => request(`/projects/${id}`),
+  // Rename; an empty name goes back to the brief's first line.
+  renameProject: (id, name) =>
+    request(`/projects/${id}`, { method: "PATCH", body: { name } }),
   // Deletes the project with its plan, conversation and knowledge-base files.
   deleteProject: (id) => request(`/projects/${id}`, { method: "DELETE" }),
   updatePlan: (id, plan) =>

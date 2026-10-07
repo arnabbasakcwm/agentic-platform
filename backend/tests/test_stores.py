@@ -517,3 +517,17 @@ def test_a_run_left_running_past_its_limit_reads_as_interrupted():
     run = RunRecord(id="r", tenant_id="u", project_id="p", timeout_s=300, updated_at=now - timedelta(seconds=500))
     assert run.effective(now).status == "failed" and run.effective(now).error["error_type"] == "RunInterrupted"
     assert run.effective(now - timedelta(seconds=200)).status == "running"
+
+
+def test_a_project_can_be_renamed_without_touching_its_plan(store):
+    from agentic_platform.stores import ProjectRecord, brief_title
+
+    store.create(ProjectRecord(id="pn", tenant_id="u1", brief="Find cheap flights\nfrom Kolkata", plan=_plan()))
+    assert store.get("pn").display_name == "Find cheap flights"
+    renamed = store.rename("pn", "Flights CCU→DEL")
+    assert renamed.name == "Flights CCU→DEL" and renamed.plan_version == 1
+    assert store.get("pn").display_name == "Flights CCU→DEL"
+    assert store.rename("pn", None).display_name == "Find cheap flights"
+    assert store.rename("missing", "x") is None
+    assert brief_title("x" * 100).endswith("…") and len(brief_title("x" * 100)) == 72
+    assert brief_title("   ") == "Untitled project"

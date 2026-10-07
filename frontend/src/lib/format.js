@@ -1,8 +1,20 @@
-// A project has no name of its own; its brief's first line stands in for one.
+function shorten(text, max) {
+  return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
+}
+
+/** A project's name: the one its owner gave it, else its brief's first line. */
+export function projectName(project, max = 72) {
+  if (project?.name) return shorten(project.name, max);
+  return projectTitle(project?.brief, max);
+}
+
+// A project without a name is called by its brief's first line.
 export function projectTitle(brief, max = 72) {
   const firstLine = (brief ?? "").trim().split("\n")[0].trim();
   if (!firstLine) return "Untitled project";
-  return firstLine.length > max ? `${firstLine.slice(0, max - 1).trimEnd()}…` : firstLine;
+  return firstLine.length > max
+    ? `${firstLine.slice(0, max - 1).trimEnd()}…`
+    : firstLine;
 }
 
 const UNITS = [
@@ -44,7 +56,8 @@ export function formatDuration(ms) {
 
 // A money field names its currency in its key (the agents are told to: price_inr,
 // fare_usd). The amount is shown in that currency only — never converted.
-const CURRENCY_SUFFIX = /(?:^|_)(inr|usd|eur|gbp|aed|sgd|jpy|aud|cad|chf|cny)$/i;
+const CURRENCY_SUFFIX =
+  /(?:^|_)(inr|usd|eur|gbp|aed|sgd|jpy|aud|cad|chf|cny)$/i;
 const LOCALE_FOR_CURRENCY = { INR: "en-IN" };
 
 export function currencyOf(key) {
@@ -53,7 +66,9 @@ export function currencyOf(key) {
 }
 
 export function formatNumber(value, locale = "en-IN") {
-  return new Intl.NumberFormat(locale, { maximumFractionDigits: 2 }).format(value);
+  return new Intl.NumberFormat(locale, { maximumFractionDigits: 2 }).format(
+    value,
+  );
 }
 
 /** Format a value from structured agent data, using its key for context. */
@@ -80,7 +95,11 @@ export function formatValue(key, value) {
 export function humanizeKey(key) {
   const currency = currencyOf(key);
   const base = String(key).replace(CURRENCY_SUFFIX, "");
-  const words = base.split(/[_\-\s]+|(?<=[a-z])(?=[A-Z])/).filter(Boolean).join(" ").toLowerCase();
+  const words = base
+    .split(/[_\-\s]+|(?<=[a-z])(?=[A-Z])/)
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
   const label = words.charAt(0).toUpperCase() + words.slice(1);
   return currency ? `${label} (${currency})` : label;
 }

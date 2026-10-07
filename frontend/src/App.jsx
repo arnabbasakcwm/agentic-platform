@@ -4,7 +4,7 @@ import { Icon } from "./components/icons.jsx";
 import { Sidebar } from "./components/Sidebar.jsx";
 import { HealthPill, ThemeToggle, TopBar } from "./components/TopBar.jsx";
 import { api, session } from "./lib/api.js";
-import { projectTitle } from "./lib/format.js";
+import { projectName } from "./lib/format.js";
 import { navigate, paths, useRoute } from "./lib/router.js";
 import { ThemeContext, useThemeState } from "./lib/theme.js";
 import { useAction } from "./lib/useAction.js";
@@ -47,7 +47,7 @@ function crumbsFor(route, projects) {
     return [
       root,
       {
-        label: known ? projectTitle(known.brief, 48) : "Project",
+        label: known ? projectName(known, 48) : "Project",
         href: paths.project(route.id, "plan"),
       },
       { label: STEP_LABELS[route.step] },
@@ -216,6 +216,7 @@ function Console() {
               projects={projects}
               error={projectsError}
               onRetry={refreshProjects}
+              onRenamed={refreshProjects}
               onDeleted={() => {
                 refreshProjects();
                 refreshKnowledgeCount();

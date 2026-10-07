@@ -1,4 +1,4 @@
-import { projectTitle } from "../lib/format.js";
+import { projectName } from "../lib/format.js";
 import { paths } from "../lib/router.js";
 import { Icon } from "./icons.jsx";
 
@@ -114,7 +114,7 @@ export function Sidebar({
               <NavItem
                 key={p.project_id}
                 href={paths.project(p.project_id, p.compiled ? "run" : "plan")}
-                label={projectTitle(p.brief, 40)}
+                label={projectName(p, 40)}
                 active={route.page === "project" && route.id === p.project_id}
                 className="navitem--sub"
               />

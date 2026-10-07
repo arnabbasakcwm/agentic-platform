@@ -21,7 +21,7 @@ import {
   StatusBadge,
 } from "../components/ui.jsx";
 import { api } from "../lib/api.js";
-import { fullDate, projectTitle, timeAgo } from "../lib/format.js";
+import { fullDate, projectName, timeAgo } from "../lib/format.js";
 import {
   NO_PROJECT,
   batches,
@@ -100,7 +100,7 @@ function ProjectAttachments({ doc, projects, projectsById, onChange }) {
               className="kproject"
               href={paths.project(p.project_id, "knowledge")}
             >
-              {projectTitle(p.brief, 60)}
+              {projectName(p, 60)}
             </a>
             {p.ready > 0 && p.used_by.length === 0 && (
               <a
@@ -140,7 +140,7 @@ function ProjectAttachments({ doc, projects, projectsById, onChange }) {
                 checked={ticked.includes(p.project_id)}
                 onChange={(e) => toggle(p.project_id, e.target.checked)}
               />
-              <span>{projectTitle(p.brief, 48)}</span>
+              <span>{projectName(p, 48)}</span>
             </label>
           ))}
         </fieldset>
@@ -501,7 +501,7 @@ export function KnowledgePage({ onCountChanged }) {
                   .filter((p) => p.documents > 0)
                   .map((p) => (
                     <option key={p.project_id} value={p.project_id}>
-                      {projectTitle(p.brief, 40)}
+                      {projectName(p, 40)}
                     </option>
                   ))}
               </select>

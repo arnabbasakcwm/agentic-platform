@@ -12,7 +12,7 @@ import {
   Skeleton,
 } from "../components/ui.jsx";
 import { api } from "../lib/api.js";
-import { fullDate, projectTitle, timeAgo } from "../lib/format.js";
+import { fullDate, projectName, projectTitle, timeAgo } from "../lib/format.js";
 import { paths } from "../lib/router.js";
 import { formatBytes } from "../lib/datasources.js";
 import {
@@ -372,7 +372,7 @@ export function UsagePage({ projects }) {
           <option value="">All projects</option>
           {(projects ?? []).map((p) => (
             <option key={p.project_id} value={p.project_id}>
-              {projectTitle(p.brief, 50)}
+              {projectName(p, 50)}
             </option>
           ))}
         </select>

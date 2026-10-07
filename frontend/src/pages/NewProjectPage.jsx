@@ -1,3 +1,4 @@
+import { ProjectName } from "../components/ProjectName.jsx";
 import { cannotCallTools, pickerLabel, withVerdicts } from "../lib/models.js";
 import { useToolCheck } from "../lib/useToolCheck.js";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -277,7 +278,15 @@ function DataTray({ selected, onChange, disabled }) {
 }
 
 // ------------------------------------------------------------------ settings tray
-function SettingsTray({ settings, onChange, tools, providers, disabled }) {
+function SettingsTray({
+  settings,
+  onChange,
+  tools,
+  providers,
+  disabled,
+  name,
+  onNameChange,
+}) {
   // SQL tools need a data source attached, which only an existing project can have.
   const allTools = (tools.tools ?? []).filter(
     (t) => t.name !== "sql_schema" && t.name !== "sql_query",
@@ -302,6 +311,24 @@ function SettingsTray({ settings, onChange, tools, providers, disabled }) {
 
   return (
     <div className="tray" id="composer-settings">
+      <div className="tray__row">
+        <label className="tray__label" htmlFor="new-project-name">
+          Name
+        </label>
+        <div className="tray__control">
+          <input
+            id="new-project-name"
+            type="text"
+            className="tray__name"
+            value={name}
+            onChange={(e) => onNameChange(e.target.value)}
+            maxLength={100}
+            placeholder="Optional — otherwise the task's first line"
+            disabled={disabled}
+          />
+        </div>
+      </div>
+
       <div className="tray__row">
         <span className="tray__label">Team size</span>
         <div className="tray__control">
@@ -454,11 +481,17 @@ function saveSettings(settings) {
   }
 }
 
-function PlanReply({ project, providers }) {
+function PlanReply({ project, providers, onRenamed }) {
   const { plan } = project;
   const n = plan.agents.length;
   return (
     <>
+      <ProjectName
+        project={project}
+        className="msg__name"
+        renderName={(name) => <strong>{name}</strong>}
+        onRenamed={onRenamed}
+      />
       <p>
         Here's a team of{" "}
         <strong>
@@ -500,7 +533,7 @@ function PlanReply({ project, providers }) {
   );
 }
 
-function Message({ message, onRetry, busy, providers }) {
+function Message({ message, onRetry, busy, providers, onRenamed }) {
   if (message.role === "user") {
     return (
       <div className="msg msg--user">
@@ -539,7 +572,11 @@ function Message({ message, onRetry, busy, providers }) {
           </div>
         )}
         {message.status === "done" && (
-          <PlanReply project={message.project} providers={providers} />
+          <PlanReply
+            project={message.project}
+            providers={providers}
+            onRenamed={(updated) => onRenamed(message.id, updated)}
+          />
         )}
         {message.status === "error" && (
           <>
@@ -577,6 +614,8 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
   const [sources, setSources] = useState([]);
   // agentCount null = the planner decides. tools null = follow the platform default.
   const [settings, setSettings] = useState(readSettings);
+  // The next project's name: per project, so it's cleared once a message is sent.
+  const [name, setName] = useState("");
   const toolCheck = useToolCheck();
   const modelList = withVerdicts(providers, toolCheck.verdicts);
   const textareaRef = useRef(null);
@@ -647,6 +686,7 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
           : null,
         documentIds: request.files.map((f) => f.id),
         datasourceIds: request.sources.map((s) => s.id),
+        name: request.name,
       });
       setMessages((all) =>
         all.map((m) =>
@@ -668,7 +708,8 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
     const brief = draft.trim();
     if (!brief || busy || disabled) return;
     // Settings are captured per message, so changing them later never rewrites history.
-    const request = { brief, ...effectiveSettings, files, sources };
+    const request = { brief, ...effectiveSettings, files, sources, name };
+    setName("");
     const replyId = ++nextMessageId;
     setMessages((all) => [
       ...all,
@@ -747,6 +788,23 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
               message={message}
               busy={busy}
               providers={modelList}
+              onRenamed={(id, updated) => {
+                setMessages((all) =>
+                  all.map((m) =>
+                    m.id === id
+                      ? {
+                          ...m,
+                          project: {
+                            ...m.project,
+                            name: updated.name,
+                            named: updated.named,
+                          },
+                        }
+                      : m,
+                  ),
+                );
+                onCreated(updated);
+              }}
               onRetry={() => retry(message)}
             />
           ))
@@ -773,6 +831,8 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
               tools={tools}
               providers={modelList}
               disabled={busy}
+              name={name}
+              onNameChange={setName}
             />
           )}
           <div className="composer__box">

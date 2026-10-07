@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { currencyOf, formatDuration, formatValue, humanizeKey } from "./format.js";
+import { currencyOf, formatDuration, formatValue, humanizeKey, projectName } from "./format.js";
 
 describe("formatValue", () => {
   it("formats money in the currency its key names, without converting", () => {
@@ -26,5 +26,15 @@ describe("formatValue", () => {
     expect(formatDuration(4_200)).toBe("4.2 s");
     expect(formatDuration(12_300)).toBe("12 s");
     expect(formatDuration(84_000)).toBe("1m 24s");
+  });
+});
+
+describe("projectName", () => {
+  it("uses the given name, else the brief's first line", () => {
+    expect(projectName({ name: "Weekend trips", brief: "Find flights" })).toBe("Weekend trips");
+    expect(projectName({ brief: "Find cheap flights\nfrom Kolkata" })).toBe("Find cheap flights");
+    expect(projectName({ name: "x".repeat(80) }, 20)).toBe(`${"x".repeat(19)}…`);
+    expect(projectName({ brief: "  " })).toBe("Untitled project");
+    expect(projectName(null)).toBe("Untitled project");
   });
 });
