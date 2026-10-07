@@ -65,7 +65,16 @@ function runHint(project, run) {
 // latest run, which keeps streaming while another step is open.
 export function ProjectWorkspace({ id, step, onChanged, tools, providers }) {
   const [project, setProject] = useState(null);
-  const { run, draftInput, setDraftInput, start } = useProjectRun(project);
+  const {
+    run,
+    runId,
+    runVersion,
+    history,
+    open,
+    draftInput,
+    setDraftInput,
+    start,
+  } = useProjectRun(project);
   const [assistantOpen, setAssistantOpen] = useState(readAssistantOpen);
   const load = useAction();
   const { run: runLoad } = load;
@@ -266,6 +275,13 @@ export function ProjectWorkspace({ id, step, onChanged, tools, providers }) {
           <RunStep
             project={project}
             run={run}
+            runId={runId}
+            runVersion={runVersion}
+            history={history}
+            onOpenRun={(id) => {
+              setDraftInput(null); // show that run's input, ready to run again
+              open(id);
+            }}
             draftInput={draftInput}
             onDraftInput={setDraftInput}
             onStart={start}

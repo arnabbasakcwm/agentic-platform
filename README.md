@@ -276,6 +276,11 @@ signed-in user's projects. Interactive docs: http://127.0.0.1:8000/docs.
 | `POST /projects/{id}/compile` | Build the runnable graph (no model calls) |
 | `POST /projects/{id}/run` | Run the whole team on an input |
 | `POST /projects/{id}/run/stream` | Same, streaming each agent's progress as Server-Sent Events |
+| `POST /projects/{id}/runs` | Start a run in the background; it's saved as it happens (202) |
+| `GET /projects/{id}/runs?kind=local\|deployed` | The project's last 5 saved runs of that kind |
+| `GET /projects/{id}/runs/{run_id}` | One saved run: input, events, outputs, errors, usage |
+| `GET /projects/{id}/runs/{run_id}/stream?after=N` | Replay a saved run's events from N, then follow it live |
+| `POST /projects/{id}/deployment/runs` | Run the deployment in the background (the console's Try it); saved like any run |
 | `POST /projects/{id}/agents/{agent_id}/invoke` | Run one agent on its own |
 | `GET /knowledge` | Your library: every file with the projects it's attached to and its embedding model, the default model for new uploads, limits |
 | `POST /knowledge/documents` | Upload files to the library, attached to no project (multipart field `files`) |

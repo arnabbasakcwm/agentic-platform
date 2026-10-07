@@ -9,9 +9,9 @@ Status: the MVP loop is built and tested — schema, planner, compiler (sequenti
 parallel, supervisor), tool registry, FastAPI serving layer, project persistence
 (MongoDB), user accounts with JWT sign-in, plan revision by conversation, deployment
 to Bedrock AgentCore Runtime (not yet exercised against a real AWS account), project
-knowledge bases (uploaded documents agents search with `knowledge_search`), and a
-React console. Not yet built: run history, background workers, per-project API keys,
-rate limiting, and observability. Full architecture
+knowledge bases (uploaded documents agents search with `knowledge_search`), saved runs
+(the last 5 per project), and a React console. Not yet built: background workers,
+per-project API keys, rate limiting, and observability. Full architecture
 reference lives in `docs/systemDescription.md`; `README.md` is the quick start; this file
 is the operating contract for whoever (human or AI) writes code here. Decisions that
 changed or extended this contract are recorded, with their reasons, in the
@@ -567,6 +567,32 @@ whenever a change departs from or extends the contract above — don't silently 
     reason, for agents with tools and for routers. An agent left in that state shows an
     inline warning and blocks Save. Tool chips can be switched off but not on. In the
     new-project settings, choosing one disables the tools and explains why.
+
+### 2026-10-07 — Runs are saved on the server, the last 5 per project
+- **Why:** run and Try-it output lived only in the console's page state, so moving to
+  another step or page, or refreshing, lost it. Leaving a project mid-run also aborted
+  the stream.
+- **Rule:**
+  - **Saved as they happen:** every run (`RunRecord`, `RunStore`, Mongo `runs`) stores
+    its input, its stream events (without each node's output, which is kept once in
+    `outputs`), errors and usage. This covers runs started by `POST
+    /projects/{id}/runs`, `/run`, `/run/stream`, single-agent invoke, deployed Try-it
+    (`POST …/deployment/runs`) and `…/deployment/invoke`. Run inputs and outputs are
+    user data: owner-only (someone else's run is a 404) and deleted with the project.
+  - **Kept:** the 5 newest `local` and 5 newest `deployed` runs per project; older ones
+    are deleted when a new one starts.
+  - **Reconnecting:** `GET …/runs/{id}/stream?after=N` replays stored events from N, then
+    follows the run until it ends, so the console reconnects from any page, after a
+    refresh or from another browser. A run still marked running past `timeout_s + 120` s
+    reads as `RunInterrupted`.
+  - **Contracts:** `/run`, `/run/stream` and the invoke endpoints keep their request and
+    response shapes.
+  - **Usage:** usage records carry the run's id.
+  - **Known deviation:** background runs are in-process daemon threads (one per run),
+    which a restart cuts off. Move them to the job queue when it exists.
+  - **Console:** the Run and Deploy steps load the latest run of the current plan version,
+    follow it if it's still going, and list the last 5 to reopen. Opening one puts its
+    input back in the editor.
 
 ## Working style — verify-and-retry, always
 

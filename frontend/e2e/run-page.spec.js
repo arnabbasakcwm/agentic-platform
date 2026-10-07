@@ -9,8 +9,11 @@ const SHOTS = "e2e/screenshots";
 const KOLKATA = { origin: "Kolkata (CCU)", destination: "New Delhi (DEL)", month: "October", step_ms: 150 };
 
 let consoleErrors = [];
+const MOCK_API = "http://127.0.0.1:8765";
 
-test.beforeEach(async ({ page }) => {
+test.beforeEach(async ({ page, request }) => {
+  // Runs are saved on the (mock) server now: start every test from a fresh project.
+  await request.post(`${MOCK_API}/__reset`);
   consoleErrors = [];
   page.on("console", (msg) => {
     if (msg.type() === "error") consoleErrors.push(msg.text());
@@ -166,8 +169,14 @@ test("the diagram is the real graph, animates during a run, and ends in the true
   await expect(page.locator(".flow-edge__dash")).toHaveCount(1);
   await expect(page.locator(".timeline__bar")).toHaveCount(2);
 
-  // The Run button stays disabled while a run is in progress; reload to leave the paused one.
+  // The Run button stays disabled while a run is in progress. Runs are saved on the server,
+  // so a reload reconnects to it, still running.
   await expect(page.getByRole("button", { name: "Running…" })).toBeDisabled();
+  await reloadRunPage(page);
+  await expect(analyzer).toHaveClass(/flow-node--running/);
+  await expect(page.getByRole("button", { name: "Running…" })).toBeDisabled();
+  // The mock's slow agent never finishes: clear it to carry on.
+  await page.request.post(`${MOCK_API}/__reset`);
   await reloadRunPage(page);
   await startRun(page, KOLKATA);
   await waitCompleted(page);
@@ -270,6 +279,8 @@ for (const scheme of ["light", "dark"]) {
       await shot("running");
       await axe(page);
 
+      // The mock's slow agent never finishes: clear it to carry on.
+      await page.request.post(`${MOCK_API}/__reset`);
       await reloadRunPage(page);
       await startRun(page, KOLKATA);
       await waitCompleted(page);

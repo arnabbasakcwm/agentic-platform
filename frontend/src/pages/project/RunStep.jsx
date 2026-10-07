@@ -1,4 +1,13 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { RunHistory } from "../../components/RunHistory.jsx";
+import {
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { AgentOutputCard } from "../../components/AgentOutputCard.jsx";
 import { Icon } from "../../components/icons.jsx";
 import { DiagramLegend } from "../../components/DiagramLegend.jsx";
@@ -22,7 +31,9 @@ import { runCounts, serverNow } from "../../lib/runState.js";
 
 // The diagram library is the heaviest part of the console; load it with this page only.
 const RunDiagram = lazy(() =>
-  import("../../components/RunDiagram.jsx").then((m) => ({ default: m.RunDiagram })),
+  import("../../components/RunDiagram.jsx").then((m) => ({
+    default: m.RunDiagram,
+  })),
 );
 
 const prefersReducedMotion = () =>
@@ -60,7 +71,8 @@ function runSummary(run, clock) {
   }
 }
 
-const badgeStatus = (run) => (run.status === "completed" && run.halted ? "failed" : run.status);
+const badgeStatus = (run) =>
+  run.status === "completed" && run.halted ? "failed" : run.status;
 
 /** Plain-language status changes for screen readers (rendered into an aria-live region). */
 function useAnnouncement(run, plan) {
@@ -71,19 +83,26 @@ function useAnnouncement(run, plan) {
     let next = null;
     if (run.status !== prev.status) {
       if (run.status === "running") next = "Run started.";
-      else if (run.status === "completed") next = run.halted ? "Run halted." : "Run completed.";
-      else if (run.status === "failed") next = `Run failed: ${run.error?.message ?? ""}`;
+      else if (run.status === "completed")
+        next = run.halted ? "Run halted." : "Run completed.";
+      else if (run.status === "failed")
+        next = `Run failed: ${run.error?.message ?? ""}`;
     } else {
       for (const agent of plan.agents) {
         const status = run.nodes[agent.id]?.status;
-        if (status !== prev.nodes[agent.id] && (status === "completed" || status === "failed")) {
+        if (
+          status !== prev.nodes[agent.id] &&
+          (status === "completed" || status === "failed")
+        ) {
           next = `${agentTitle(agent.id)} ${status}.`;
         }
       }
     }
     seen.current = {
       status: run.status,
-      nodes: Object.fromEntries(Object.entries(run.nodes).map(([id, n]) => [id, n.status])),
+      nodes: Object.fromEntries(
+        Object.entries(run.nodes).map(([id, n]) => [id, n.status]),
+      ),
     };
     if (next) setMessage(next);
   }, [run, plan]);
@@ -109,7 +128,11 @@ function InputPanel({ project, run, draftInput, onDraftInput, onStart }) {
       setParseError({ errorType: "Invalid JSON", message: e.message });
       return;
     }
-    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    if (
+      parsed === null ||
+      typeof parsed !== "object" ||
+      Array.isArray(parsed)
+    ) {
       setParseError({
         errorType: "Invalid input",
         message: 'The task input must be a JSON object, like {"request": "…"}.',
@@ -117,7 +140,11 @@ function InputPanel({ project, run, draftInput, onDraftInput, onStart }) {
       return;
     }
     setParseError(null);
-    onStart({ input: parsed, mode, agentId: mode === "agent" ? selectedAgent : null });
+    onStart({
+      input: parsed,
+      mode,
+      agentId: mode === "agent" ? selectedAgent : null,
+    });
   }
 
   return (
@@ -125,9 +152,18 @@ function InputPanel({ project, run, draftInput, onDraftInput, onStart }) {
       <Panel
         title="Input"
         footer={
-          <Button type="submit" variant="primary" loading={running} disabled={blocked || running}>
+          <Button
+            type="submit"
+            variant="primary"
+            loading={running}
+            disabled={blocked || running}
+          >
             {!running && <Icon name="play" size={14} />}
-            {running ? "Running…" : mode === "graph" ? "Run graph" : "Run agent"}
+            {running
+              ? "Running…"
+              : mode === "graph"
+                ? "Run graph"
+                : "Run agent"}
           </Button>
         }
       >
@@ -141,7 +177,11 @@ function InputPanel({ project, run, draftInput, onDraftInput, onStart }) {
               type="button"
               role="tab"
               aria-selected={mode === key}
-              className={mode === key ? "segmented__item segmented__item--on" : "segmented__item"}
+              className={
+                mode === key
+                  ? "segmented__item segmented__item--on"
+                  : "segmented__item"
+              }
               onClick={() => setMode(key)}
             >
               {label}
@@ -150,8 +190,14 @@ function InputPanel({ project, run, draftInput, onDraftInput, onStart }) {
         </div>
 
         {mode === "agent" && (
-          <Field label="Agent" hint="Runs this one agent on its own, without the rest of the team.">
-            <select value={selectedAgent} onChange={(e) => setAgentId(e.target.value)}>
+          <Field
+            label="Agent"
+            hint="Runs this one agent on its own, without the rest of the team."
+          >
+            <select
+              value={selectedAgent}
+              onChange={(e) => setAgentId(e.target.value)}
+            >
               {agents.map((a) => (
                 <option key={a.id} value={a.id}>
                   {agentTitle(a.id)} — {a.role}
@@ -180,7 +226,9 @@ function InputPanel({ project, run, draftInput, onDraftInput, onStart }) {
         {blocked && (
           <Callout tone="warn" title="Not compiled">
             The full graph needs a compiled plan.{" "}
-            <a href={paths.project(project.project_id, "compile")}>Go to Compile</a>
+            <a href={paths.project(project.project_id, "compile")}>
+              Go to Compile
+            </a>
           </Callout>
         )}
         {parseError && <ErrorCallout error={parseError} />}
@@ -189,10 +237,23 @@ function InputPanel({ project, run, draftInput, onDraftInput, onStart }) {
   );
 }
 
-function ResultsPanel({ project, run, clock, cardRefs, highlighted, draftInput, onRetry }) {
+function ResultsPanel({
+  project,
+  run,
+  clock,
+  cardRefs,
+  highlighted,
+  draftInput,
+  onRetry,
+}) {
   const graph = useMemo(() => buildGraph(project.plan), [project.plan]);
-  const byId = useMemo(() => Object.fromEntries(graph.agents.map((a) => [a.id, a])), [graph]);
-  const roleOf = Object.fromEntries(project.plan.agents.map((a) => [a.id, a.role]));
+  const byId = useMemo(
+    () => Object.fromEntries(graph.agents.map((a) => [a.id, a])),
+    [graph],
+  );
+  const roleOf = Object.fromEntries(
+    project.plan.agents.map((a) => [a.id, a.role]),
+  );
 
   // Cards in execution order: agents that produced output, then the one(s) working now,
   // then any that failed or were skipped.
@@ -214,22 +275,33 @@ function ResultsPanel({ project, run, clock, cardRefs, highlighted, draftInput, 
   const ranWith = run.input ? JSON.stringify(run.input) : null;
   let inputChanged = false;
   try {
-    inputChanged = ranWith != null && JSON.stringify(JSON.parse(draftInput)) !== ranWith;
+    inputChanged =
+      ranWith != null && JSON.stringify(JSON.parse(draftInput)) !== ranWith;
   } catch {
     inputChanged = ranWith != null;
   }
 
   return (
-    <section className="panel run-col run-results" aria-labelledby="results-title">
+    <section
+      className="panel run-col run-results"
+      aria-labelledby="results-title"
+    >
       <header className="panel__header">
         <h2 className="panel__title" id="results-title">
           Result
         </h2>
         <span className="panel__sub">
-          {run.mode === "agent" && run.status !== "idle" ? "Single agent" : "Full graph"}
+          {run.mode === "agent" && run.status !== "idle"
+            ? "Single agent"
+            : "Full graph"}
         </span>
         <div className="panel__spacer" />
-        {run.status !== "idle" && <StatusBadge status={badgeStatus(run)} label={runSummary(run, clock)} />}
+        {run.status !== "idle" && (
+          <StatusBadge
+            status={badgeStatus(run)}
+            label={runSummary(run, clock)}
+          />
+        )}
       </header>
       {ranWith && (
         <div className="ranwith">
@@ -237,7 +309,9 @@ function ResultsPanel({ project, run, clock, cardRefs, highlighted, draftInput, 
           <code className="ranwith__value" title={ranWith}>
             {ranWith}
           </code>
-          {inputChanged && <span className="ranwith__note">Input changed since this run</span>}
+          {inputChanged && (
+            <span className="ranwith__note">Input changed since this run</span>
+          )}
         </div>
       )}
       <UsageLine usage={run.usage} />
@@ -255,10 +329,13 @@ function ResultsPanel({ project, run, clock, cardRefs, highlighted, draftInput, 
         )}
         {ordered.length === 0 ? (
           run.status === "running" ? (
-            <Empty title="Waiting for the first agent…">Outputs appear here as each agent finishes.</Empty>
+            <Empty title="Waiting for the first agent…">
+              Outputs appear here as each agent finishes.
+            </Empty>
           ) : run.status === "idle" ? (
             <Empty title="No run yet">
-              Run the graph to see each agent's answer here, in the order they finish.
+              Run the graph to see each agent's answer here, in the order they
+              finish.
             </Empty>
           ) : null
         ) : (
@@ -273,7 +350,9 @@ function ResultsPanel({ project, run, clock, cardRefs, highlighted, draftInput, 
                 role={roleOf[id]}
                 color={byId[id]?.color}
                 node={run.nodes[id]}
-                isFinal={finals.has(id) && run.nodes[id]?.status === "completed"}
+                isFinal={
+                  finals.has(id) && run.nodes[id]?.status === "completed"
+                }
                 highlighted={highlighted === id}
               />
             ))}
@@ -284,7 +363,17 @@ function ResultsPanel({ project, run, clock, cardRefs, highlighted, draftInput, 
   );
 }
 
-export function RunStep({ project, run, draftInput, onDraftInput, onStart }) {
+export function RunStep({
+  project,
+  run,
+  runId,
+  runVersion,
+  history = [],
+  onOpenRun,
+  draftInput,
+  onDraftInput,
+  onStart,
+}) {
   const clock = useClock(run.status === "running");
   const cardRefs = useRef({});
   const flowRef = useRef(null);
@@ -295,7 +384,10 @@ export function RunStep({ project, run, draftInput, onDraftInput, onStart }) {
   const selectAgent = useCallback((id) => {
     const card = cardRefs.current[id];
     if (!card) return;
-    card.scrollIntoView({ behavior: prefersReducedMotion() ? "auto" : "smooth", block: "start" });
+    card.scrollIntoView({
+      behavior: prefersReducedMotion() ? "auto" : "smooth",
+      block: "start",
+    });
     card.focus({ preventScroll: true });
     setHighlighted(id);
     setTimeout(() => setHighlighted((h) => (h === id ? null : h)), 1600);
@@ -313,19 +405,27 @@ export function RunStep({ project, run, draftInput, onDraftInput, onStart }) {
   function retry() {
     if (!run.input) return;
     const agentId =
-      run.mode === "agent" ? Object.keys(run.nodes).find((id) => run.nodes[id].runs > 0) ?? null : null;
+      run.mode === "agent"
+        ? (Object.keys(run.nodes).find((id) => run.nodes[id].runs > 0) ?? null)
+        : null;
     startAndWatch({ input: run.input, mode: run.mode, agentId });
   }
 
   return (
     <>
       <div className="page run-page">
-        <section className="panel run-flow" aria-labelledby="flow-title" ref={flowRef}>
+        <section
+          className="panel run-flow"
+          aria-labelledby="flow-title"
+          ref={flowRef}
+        >
           <header className="panel__header">
             <h2 className="panel__title" id="flow-title">
               Orchestration
             </h2>
-            <span className="panel__sub">{project.plan.orchestration_pattern}</span>
+            <span className="panel__sub">
+              {project.plan.orchestration_pattern}
+            </span>
             <div className="panel__spacer" />
             {run.status !== "idle" && (
               <span className="run-flow__counts">
@@ -333,10 +433,22 @@ export function RunStep({ project, run, draftInput, onDraftInput, onStart }) {
                 {counts.failed > 0 && ` · ${counts.failed} failed`}
               </span>
             )}
-            <StatusBadge status={badgeStatus(run)} label={runSummary(run, clock)} />
+            <StatusBadge
+              status={badgeStatus(run)}
+              label={runSummary(run, clock)}
+            />
           </header>
-          <Suspense fallback={<div className="diagram diagram--loading" aria-busy="true" />}>
-            <RunDiagram plan={project.plan} run={run} clock={clock} onSelectAgent={selectAgent} />
+          <Suspense
+            fallback={
+              <div className="diagram diagram--loading" aria-busy="true" />
+            }
+          >
+            <RunDiagram
+              plan={project.plan}
+              run={run}
+              clock={clock}
+              onSelectAgent={selectAgent}
+            />
           </Suspense>
           <div className="run-flow__foot">
             <RunTimeline plan={project.plan} run={run} clock={clock} />
@@ -362,18 +474,33 @@ export function RunStep({ project, run, draftInput, onDraftInput, onStart }) {
             onRetry={retry}
           />
         </div>
+        {runVersion != null && runVersion !== project.plan_version && (
+          <p className="muted runhist__older" role="status">
+            This run used plan v{runVersion}; the plan is now v
+            {project.plan_version}.
+          </p>
+        )}
+        <RunHistory
+          runs={history}
+          selectedId={runId}
+          onSelect={onOpenRun}
+          note={`Last ${history.length} saved on the server — they stay when you leave this page`}
+        />
       </div>
 
       <p className="sr-only" aria-live="polite" role="status">
         {announcement}
       </p>
 
-      <ActionBar note="Results stay here while you move between steps; run history isn't saved yet.">
+      <ActionBar note="Runs are saved on the server: leave this page while one runs and come back to its result.">
         <LinkButton href={paths.project(project.project_id, "compile")}>
           <Icon name="arrowLeft" />
           Compile
         </LinkButton>
-        <LinkButton variant="primary" href={paths.project(project.project_id, "deploy")}>
+        <LinkButton
+          variant="primary"
+          href={paths.project(project.project_id, "deploy")}
+        >
           Deploy
           <Icon name="arrowRight" />
         </LinkButton>

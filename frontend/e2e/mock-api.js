@@ -147,6 +147,90 @@ async function streamRun(req, res, input) {
   res.end();
 }
 
+// ---- saved runs: like the real API, runs execute "on the server" (here: timers) and are
+// kept as records the console reopens from anywhere. Last 5 per project and kind.
+const savedRuns = { list: [], seq: 0 };
+const nowIso = () => new Date().toISOString();
+
+function newRun(kind, { input = {}, mode = "graph", agent_id = null }, planVersion) {
+  savedRuns.seq += 1;
+  const run = {
+    id: `run${savedRuns.seq}`, project_id: PROJECT_ID, kind, mode, agent_id, plan_version: planVersion,
+    status: "running", input, events: [], outputs: {}, errors: [], halted: false, error: null, usage: null,
+    timeout_s: plan.bounds.timeout_s, started_at: nowIso(), finished_at: null, updated_at: nowIso(),
+  };
+  savedRuns.list.unshift(run);
+  const ofKind = savedRuns.list.filter((r) => r.kind === kind);
+  for (const old of ofKind.slice(5)) savedRuns.list = savedRuns.list.filter((r) => r !== old);
+  return run;
+}
+
+function record(run, event, data) {
+  const { output, ...rest } = data;
+  if (event === "node_completed") run.outputs[data.node] = output;
+  run.events.push({ event, ...rest, at: Date.now() / 1000 });
+  run.updated_at = nowIso();
+}
+
+function finish(run, changes) {
+  Object.assign(run, { finished_at: nowIso(), updated_at: nowIso() }, changes);
+}
+
+// The same scripted run as /run/stream, saved instead of streamed.
+async function simulateRun(run, input) {
+  const out = outputs(input);
+  const step = Number(input.step_ms ?? 400);
+  const t0 = Date.now();
+  record(run, "run_started", { timeout_s: plan.bounds.timeout_s });
+  for (const [i, agent] of plan.agents.entries()) {
+    const started = Date.now();
+    record(run, "node_started", { node: agent.id });
+    if (input.scenario === "slow" && i === 1) await sleep(120_000);
+    if (input.scenario === "fail" && i === 1) {
+      await sleep(step);
+      const error = { error_type: "RunTimeout", message: "the run exceeded its 60s time limit", limit_s: 60 };
+      record(run, "run_failed", error);
+      return finish(run, { status: "failed", error });
+    }
+    await sleep(step * (i + 1));
+    record(run, "node_completed", { node: agent.id, duration_ms: Date.now() - started, attempts: 1, output: out[agent.id] });
+  }
+  record(run, "run_completed", { duration_ms: Date.now() - t0, outputs: out, usage: RUN_USAGE, errors: [], halted: false });
+  finish(run, { status: "completed", usage: RUN_USAGE });
+}
+
+async function simulateAgent(run, agentId, input) {
+  record(run, "run_started", { timeout_s: plan.bounds.timeout_s });
+  await sleep(500);
+  const output = outputs(input)[agentId];
+  record(run, "run_completed", { duration_ms: 500, outputs: { [agentId]: output }, errors: [], halted: false });
+  finish(run, { status: "completed", outputs: { [agentId]: output } });
+}
+
+async function simulateDeployed(run, input) {
+  await sleep(Number(input.step_ms ?? 1500));
+  finish(run, { status: "completed", outputs: outputs(input), usage: RUN_USAGE });
+}
+
+const runSummary = ({ events, outputs: outs, input, ...rest }) => ({ ...rest, agents_done: Object.keys(outs).length });
+
+async function streamSaved(req, res, run, after) {
+  res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
+  let open = true;
+  req.on("close", () => (open = false));
+  let index = after;
+  while (open) {
+    for (; index < run.events.length; index += 1) {
+      const { event, ...data } = run.events[index];
+      const body = event === "node_completed" ? { ...data, output: run.outputs[data.node] } : data;
+      res.write(`event: ${event}\ndata: ${JSON.stringify(body)}\n\n`);
+    }
+    if (run.status !== "running") break;
+    await sleep(100);
+  }
+  res.end();
+}
+
 // ---- usage: a fixed, realistic month of usage for the Usage page.
 const RUN_USAGE = {
   currency: "USD",
@@ -367,6 +451,7 @@ function reset() {
   knowledge.embedding = null;
   knowledge.documents = [];
   dataSources.list = [];
+  savedRuns.list = [];
   Object.assign(deploys, { available: false, current: null, count: 0 });
   created.last = null;
 }
@@ -741,6 +826,34 @@ const server = http.createServer(async (req, res) => {
     deploys.current = null;
     project.deployment = null;
     return send(res, 200, { deployment: null });
+  }
+  if (path === `${p}/runs` && req.method === "POST") {
+    const body = await readBody(req);
+    if ((body.mode ?? "graph") === "graph" && !project.compiled) {
+      return send(res, 409, { error_type: "NotCompiled", message: "compile the project first", details: null });
+    }
+    const run = newRun("local", body, project.plan_version);
+    if (body.mode === "agent") simulateAgent(run, body.agent_id, body.input ?? {});
+    else simulateRun(run, body.input ?? {});
+    return send(res, 202, { run });
+  }
+  if (path === `${p}/runs` && req.method === "GET") {
+    const kind = new URL(req.url, "http://x").searchParams.get("kind") ?? "local";
+    return send(res, 200, { runs: savedRuns.list.filter((r) => r.kind === kind).map(runSummary) });
+  }
+  const savedRun = path.match(new RegExp(`^${p}/runs/([^/]+)(/stream)?$`));
+  if (savedRun && req.method === "GET") {
+    const run = savedRuns.list.find((r) => r.id === savedRun[1]);
+    if (!run) return send(res, 404, { error_type: "RunNotFound", message: `run not found: ${savedRun[1]}`, details: null });
+    if (savedRun[2]) return streamSaved(req, res, run, Number(new URL(req.url, "http://x").searchParams.get("after") ?? 0));
+    return send(res, 200, { run });
+  }
+  if (path === `${p}/deployment/runs` && req.method === "POST") {
+    const body = await readBody(req);
+    if (!deploys.current) return send(res, 409, { error_type: "NotDeployed", message: "not deployed", details: null });
+    const run = newRun("deployed", body, deploys.current.live_plan_version);
+    simulateDeployed(run, body.input ?? {});
+    return send(res, 202, { run });
   }
   if (path === `${p}/run/stream` && req.method === "POST") {
     const body = await readBody(req);

@@ -116,6 +116,12 @@ async function stream(path, body, onEvent, signal) {
   await readEventStream(response, onEvent);
 }
 
+async function follow(path, onEvent, signal) {
+  const response = await send(path, { signal });
+  if (!response.ok) throw await failure(response);
+  await readEventStream(response, onEvent);
+}
+
 function filesForm(files) {
   const form = new FormData();
   for (const file of files) form.append("files", file, file.name);
@@ -255,6 +261,27 @@ export const api = {
   run: (id, input) =>
     request(`/projects/${id}/run`, { method: "POST", body: { input } }),
   // Same input as run(); onEvent receives { event, data } as each agent progresses.
+  // ---- saved runs: started in the background on the server, kept (last 5 per kind).
+  startRun: (id, { input, mode = "graph", agentId = null }) =>
+    request(`/projects/${id}/runs`, {
+      method: "POST",
+      body: { input, mode, ...(agentId ? { agent_id: agentId } : {}) },
+    }),
+  listRuns: (id, kind = "local") =>
+    request(`/projects/${id}/runs?kind=${kind}`),
+  getRun: (id, runId) => request(`/projects/${id}/runs/${runId}`),
+  // Replays a saved run's events from `after`, then follows it live until it ends.
+  followRun: (id, runId, after, onEvent, signal) =>
+    follow(
+      `/projects/${id}/runs/${runId}/stream?after=${after}`,
+      onEvent,
+      signal,
+    ),
+  startDeployedRun: (id, input) =>
+    request(`/projects/${id}/deployment/runs`, {
+      method: "POST",
+      body: { input },
+    }),
   runStream: (id, input, onEvent, signal) =>
     stream(`/projects/${id}/run/stream`, { input }, onEvent, signal),
   invokeAgent: (id, agentId, input, upstreamOutputs = {}) =>
