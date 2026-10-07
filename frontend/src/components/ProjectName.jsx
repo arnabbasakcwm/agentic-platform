@@ -27,7 +27,8 @@ export function ProjectName({
   function start(event) {
     event.preventDefault();
     event.stopPropagation();
-    setValue(project.named ? project.name : "");
+    // Start from the name as shown (in full), ready to edit.
+    setValue(project.name || projectTitle(project.brief, NAME_MAX));
     setEditing(true);
   }
 
@@ -71,6 +72,13 @@ export function ProjectName({
           aria-label="Project name"
           // Focus moves here as the field replaces the name the user just chose to edit.
           autoFocus
+          // Caret at the end, so the name can be edited rather than retyped.
+          onFocus={(e) =>
+            e.target.setSelectionRange(
+              e.target.value.length,
+              e.target.value.length,
+            )
+          }
           disabled={save.busy}
         />
         <button

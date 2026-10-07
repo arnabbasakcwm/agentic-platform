@@ -37,7 +37,12 @@ for (const scheme of ["light", "dark"]) {
     await page.getByLabel("Project name").press("Escape");
     await expect(header.getByRole("heading", { level: 1 })).toHaveText("Travel agent for finding cheap flights");
 
+    // The field starts with the current name, caret at the end, ready to edit.
     await header.getByRole("button", { name: /^Rename/ }).click();
+    await expect(page.getByLabel("Project name")).toHaveValue("Travel agent for finding cheap flights");
+    await page.getByLabel("Project name").press("End");
+    await page.getByLabel("Project name").pressSequentially(" (Diwali)");
+    await expect(page.getByLabel("Project name")).toHaveValue("Travel agent for finding cheap flights (Diwali)");
     await page.getByLabel("Project name").fill("Diwali flights");
     await page.screenshot({ path: `e2e/screenshots/rename-editing-${scheme}.png` });
     expect(await axeProblems(page, "editing")).toEqual([]);
@@ -85,7 +90,9 @@ test("name a project when creating it, and rename it from the reply", async ({ p
   await expect(page.getByLabel("Name", { exact: true })).toHaveValue("");
 
   await reply.getByRole("button", { name: "Rename Goa getaway" }).click();
-  await reply.getByLabel("Project name").fill("Goa in December");
+  await expect(reply.getByLabel("Project name")).toHaveValue("Goa getaway");
+  await reply.getByLabel("Project name").pressSequentially(" in December");
+  await expect(reply.getByLabel("Project name")).toHaveValue("Goa getaway in December");
   await reply.getByLabel("Project name").press("Enter");
-  await expect(reply).toContainText("Goa in December");
+  await expect(reply).toContainText("Goa getaway in December");
 });
