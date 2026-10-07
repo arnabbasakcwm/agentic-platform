@@ -267,8 +267,9 @@ signed-in user's projects. Interactive docs: http://127.0.0.1:8000/docs.
 |---|---|
 | `POST /auth/register`, `POST /auth/login`, `GET /auth/me` | Accounts and sign-in |
 | `GET /health`, `GET /tools`, `GET /providers` | Status, tool registry, model options (public) |
-| `POST /projects` | Plan a new project from a brief (`agent_count` optional) |
+| `POST /projects` | Plan a new project from a brief (`agent_count` and `name` optional) |
 | `GET /projects`, `GET /projects/{id}` | List your projects / fetch one with its plan and conversation |
+| `PATCH /projects/{id}` | Rename a project (`{"name": "…"}`; empty goes back to the brief's first line) |
 | `POST /projects/{id}/revise` | Change the brief or plan by asking in plain language |
 | `DELETE /projects/{id}` | Delete a project; its files stay in your library (refused while it's deployed) |
 | `PUT /projects/{id}/agents` | Change agents' model and tools (turning on an external tool is the project's opt-in) |
