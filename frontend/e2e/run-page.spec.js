@@ -208,8 +208,11 @@ test("clicking a node scrolls to its output card", async ({ page }) => {
 test("reduced motion turns the animations off", async ({ page }) => {
   await openRunPage(page, { reducedMotion: "reduce" });
   await startRun(page, { ...KOLKATA, scenario: "slow" });
-  const running = page.locator(".flow-node--running");
+  // Price Analyzer stays running in the slow scenario; the first agent is running only
+  // for a moment, and reading its glow just as it finishes was a race.
+  const running = page.locator(".flow-node--running", { hasText: "Price Analyzer" });
   await expect(running).toHaveCount(1);
+  await expect(page.locator(".flow-edge__dash")).toHaveCount(1);
   const glow = await running.evaluate((el) => getComputedStyle(el, "::after").animationName);
   const dash = await page.locator(".flow-edge__dash").evaluate((el) => getComputedStyle(el).animationName);
   expect(glow).toBe("none");

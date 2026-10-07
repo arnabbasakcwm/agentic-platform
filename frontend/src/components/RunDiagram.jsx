@@ -9,7 +9,7 @@ import {
   getBezierPath,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { END, START, buildGraph } from "../lib/flow.js";
 import { formatDuration } from "../lib/format.js";
 import { serverNow } from "../lib/runState.js";
@@ -30,11 +30,22 @@ const STATE_LABEL = {
   skipped: "Skipped",
 };
 
-const STATE_ICON = { queued: "clock", completed: "check", failed: "close", skipped: "skip" };
+const STATE_ICON = {
+  queued: "clock",
+  completed: "check",
+  failed: "close",
+  skipped: "skip",
+};
 
 function layoutGraph(graph, direction) {
   const g = new graphlib.Graph();
-  g.setGraph({ rankdir: direction, nodesep: 28, ranksep: direction === "LR" ? 64 : 44, marginx: 12, marginy: 12 });
+  g.setGraph({
+    rankdir: direction,
+    nodesep: 28,
+    ranksep: direction === "LR" ? 64 : 44,
+    marginx: 12,
+    marginy: 12,
+  });
   g.setDefaultEdgeLabel(() => ({}));
   // dagre writes each node's position into the label object it is given, so every node
   // needs its own copy — a shared object would leave all nodes at the last position.
@@ -76,7 +87,18 @@ function edgeState(edge, run) {
 }
 
 function AgentNode({ data }) {
-  const { title, role, color, state, durationMs, liveMs, error, direction, onSelect, isRouter } = data;
+  const {
+    title,
+    role,
+    color,
+    state,
+    durationMs,
+    liveMs,
+    error,
+    direction,
+    onSelect,
+    isRouter,
+  } = data;
   const time = state === "running" ? liveMs : durationMs;
   const label = `${title}: ${STATE_LABEL[state].toLowerCase()}${time != null ? `, ${formatDuration(time)}` : ""}. Show its output.`;
   return (
@@ -96,7 +118,11 @@ function AgentNode({ data }) {
         }
       }}
     >
-      <Handle type="target" position={direction === "LR" ? Position.Left : Position.Top} isConnectable={false} />
+      <Handle
+        type="target"
+        position={direction === "LR" ? Position.Left : Position.Top}
+        isConnectable={false}
+      />
       <span className="flow-node__stripe" aria-hidden="true" />
       <div className="flow-node__main">
         <span className="flow-node__title">
@@ -113,7 +139,11 @@ function AgentNode({ data }) {
         )}
         <span>{time != null ? formatDuration(time) : STATE_LABEL[state]}</span>
       </span>
-      <Handle type="source" position={direction === "LR" ? Position.Right : Position.Bottom} isConnectable={false} />
+      <Handle
+        type="source"
+        position={direction === "LR" ? Position.Right : Position.Bottom}
+        isConnectable={false}
+      />
     </div>
   );
 }
@@ -122,23 +152,53 @@ function TerminalNode({ data }) {
   return (
     <div className={`flow-terminal flow-terminal--${data.state}`}>
       {data.kind === END && (
-        <Handle type="target" position={data.direction === "LR" ? Position.Left : Position.Top} isConnectable={false} />
+        <Handle
+          type="target"
+          position={data.direction === "LR" ? Position.Left : Position.Top}
+          isConnectable={false}
+        />
       )}
       <Icon name={data.kind === START ? "play" : "flag"} size={12} />
       {data.kind === START ? "Start" : "End"}
       {data.kind === START && (
-        <Handle type="source" position={data.direction === "LR" ? Position.Right : Position.Bottom} isConnectable={false} />
+        <Handle
+          type="source"
+          position={data.direction === "LR" ? Position.Right : Position.Bottom}
+          isConnectable={false}
+        />
       )}
     </div>
   );
 }
 
-function FlowEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, data, markerEnd }) {
-  const [path] = getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition });
+function FlowEdge({
+  id,
+  sourceX,
+  sourceY,
+  targetX,
+  targetY,
+  sourcePosition,
+  targetPosition,
+  data,
+  markerEnd,
+}) {
+  const [path] = getBezierPath({
+    sourceX,
+    sourceY,
+    targetX,
+    targetY,
+    sourcePosition,
+    targetPosition,
+  });
   return (
-    <g className={`flow-edge flow-edge--${data.state}`} style={{ "--edge-color": data.color }}>
+    <g
+      className={`flow-edge flow-edge--${data.state}`}
+      style={{ "--edge-color": data.color }}
+    >
       <BaseEdge id={id} path={path} markerEnd={markerEnd} />
-      {data.state === "active" && <path className="flow-edge__dash" d={path} fill="none" />}
+      {data.state === "active" && (
+        <path className="flow-edge__dash" d={path} fill="none" />
+      )}
     </g>
   );
 }
@@ -167,12 +227,32 @@ export function RunDiagram({ plan, run, clock, onSelectAgent }) {
     return () => observer.disconnect();
   }, []);
 
-  const positions = useMemo(() => layoutGraph(graph, direction), [graph, direction]);
+  const positions = useMemo(
+    () => layoutGraph(graph, direction),
+    [graph, direction],
+  );
   const colorOf = useMemo(
     () => Object.fromEntries(graph.agents.map((a) => [a.id, a.color])),
     [graph],
   );
   const now = serverNow(run, clock);
+
+  // React Flow measures each node and keeps where its handles are, but only while the node
+  // objects it gets back carry `measured`: a new object without it (every run update makes
+  // new ones) drops the handle positions, and edges vanish until the node happens to
+  // resize. Keep the measurements it reports and pass them back with every node.
+  const [measured, setMeasured] = useState({});
+  const onNodesChange = useCallback((changes) => {
+    const sized = changes.filter(
+      (c) => c.type === "dimensions" && c.dimensions,
+    );
+    if (sized.length === 0) return;
+    setMeasured((current) => {
+      const next = { ...current };
+      for (const c of sized) next[c.id] = c.dimensions;
+      return next;
+    });
+  }, []);
 
   const nodes = useMemo(
     () => [
@@ -181,6 +261,7 @@ export function RunDiagram({ plan, run, clock, onSelectAgent }) {
         type: "terminal",
         position: positions[kind],
         data: { kind, state: terminalState(kind, run), direction },
+        measured: measured[kind],
         selectable: false,
         focusable: false,
       })),
@@ -190,6 +271,7 @@ export function RunDiagram({ plan, run, clock, onSelectAgent }) {
           id: agent.id,
           type: "agent",
           position: positions[agent.id],
+          measured: measured[agent.id],
           selectable: false,
           focusable: false,
           data: {
@@ -197,7 +279,9 @@ export function RunDiagram({ plan, run, clock, onSelectAgent }) {
             state: node?.status ?? "idle",
             durationMs: node?.durationMs,
             liveMs:
-              node?.status === "running" && node.startedAt != null && now != null
+              node?.status === "running" &&
+              node.startedAt != null &&
+              now != null
                 ? Math.max(0, (now - node.startedAt) * 1000)
                 : null,
             error: node?.error,
@@ -207,14 +291,15 @@ export function RunDiagram({ plan, run, clock, onSelectAgent }) {
         };
       }),
     ],
-    [graph, positions, run, direction, now, onSelectAgent],
+    [graph, positions, run, direction, now, onSelectAgent, measured],
   );
 
   const edges = useMemo(
     () =>
       graph.edges.map((edge) => {
         const state = edgeState(edge, run);
-        const color = colorOf[edge.target] ?? colorOf[edge.source] ?? "var(--accent)";
+        const color =
+          colorOf[edge.target] ?? colorOf[edge.source] ?? "var(--accent)";
         return {
           ...edge,
           type: "flow",
@@ -223,7 +308,12 @@ export function RunDiagram({ plan, run, clock, onSelectAgent }) {
             type: MarkerType.ArrowClosed,
             width: 16,
             height: 16,
-            color: state === "idle" ? "var(--border-strong)" : state === "failed" ? "var(--danger)" : color,
+            color:
+              state === "idle"
+                ? "var(--border-strong)"
+                : state === "failed"
+                  ? "var(--danger)"
+                  : color,
           },
         };
       }),
@@ -251,6 +341,7 @@ export function RunDiagram({ plan, run, clock, onSelectAgent }) {
         zoomOnScroll={false}
         preventScrolling={false}
         colorMode={theme}
+        onNodesChange={onNodesChange}
         onNodeClick={(_event, node) => {
           if (node.type === "agent") onSelectAgent(node.id);
         }}
