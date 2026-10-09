@@ -119,6 +119,10 @@ test("Try it on the deployment keeps its result across steps", async ({ page, re
   await page.goto(`/#/projects/${PROJECT}/deploy`);
   await page.getByRole("button", { name: "Deploy to AgentCore" }).click();
   const tryIt = page.locator("form", { hasText: "Try the live deployment" });
+  // Try it starts from the plan's example input, like the Run page; so do the snippets.
+  const example = { origin: "Kolkata (CCU)", destination: "New Delhi (DEL)", month: "October" };
+  await expect(tryIt.getByLabel("Task input (JSON)")).toHaveValue(JSON.stringify(example, null, 2));
+  await expect(page.locator(".codeblock").first()).toContainText(JSON.stringify({ input: example }));
   await tryIt.getByLabel("Task input (JSON)").fill(JSON.stringify({ ...TRIP, step_ms: 1500 }));
   await tryIt.getByRole("button", { name: "Run on AgentCore" }).click();
   const result = page.locator("section.panel", { hasText: "From the live deployment" });

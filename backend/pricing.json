@@ -53,21 +53,63 @@
       "input_per_1m": 0.72,
       "output_per_1m": 3.6,
       "source_url": "https://aws.amazon.com/bedrock/pricing/",
-      "checked_on": "2026-10-06",
+      "checked_on": "2026-10-09",
       "notes": "Amazon Bedrock on-demand, Asia Pacific (Mumbai)."
+    },
+    "bedrock/global.anthropic.claude-sonnet-4-6": {
+      "input_per_1m": 3.0,
+      "output_per_1m": 15.0,
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/ap-south-1/index.json",
+      "checked_on": "2026-10-09",
+      "notes": "Claude Sonnet 4.6, global cross-Region profile, standard on-demand. Same prices as https://aws.amazon.com/bedrock/pricing/, which renders this table in the browser; taken from AWS's official Price List for Asia Pacific (Mumbai)."
+    },
+    "bedrock/in.anthropic.claude-haiku-4-5-20251001-v1:0": {
+      "input_per_1m": 1.1,
+      "output_per_1m": 5.5,
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/ap-south-1/index.json",
+      "checked_on": "2026-10-09",
+      "notes": "Claude Haiku 4.5, in-country (India) profile, standard on-demand; the global profile is $1.00 / $5.00. Same prices as https://aws.amazon.com/bedrock/pricing/, which renders this table in the browser; taken from AWS's official Price List for Asia Pacific (Mumbai)."
+    },
+    "bedrock/apac.amazon.nova-pro-v1:0": {
+      "input_per_1m": 0.94,
+      "output_per_1m": 3.76,
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/ap-south-1/index.json",
+      "checked_on": "2026-10-09",
+      "notes": "Amazon Nova Pro, Mumbai on-demand rate; the APAC cross-Region profile is costed at the source Region's (Mumbai) rate. Same prices as https://aws.amazon.com/bedrock/pricing/, which renders this table in the browser; taken from AWS's official Price List for Asia Pacific (Mumbai)."
+    },
+    "bedrock/apac.amazon.nova-lite-v1:0": {
+      "input_per_1m": 0.071,
+      "output_per_1m": 0.284,
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/ap-south-1/index.json",
+      "checked_on": "2026-10-09",
+      "notes": "Amazon Nova Lite, Mumbai on-demand rate; the APAC cross-Region profile is costed at the source Region's (Mumbai) rate. Same prices as https://aws.amazon.com/bedrock/pricing/, which renders this table in the browser; taken from AWS's official Price List for Asia Pacific (Mumbai)."
+    },
+    "bedrock/openai.gpt-oss-120b-1:0": {
+      "input_per_1m": 0.18,
+      "output_per_1m": 0.71,
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/ap-south-1/index.json",
+      "checked_on": "2026-10-09",
+      "notes": "OpenAI gpt-oss-120b, Mumbai standard on-demand. Same prices as https://aws.amazon.com/bedrock/pricing/, which renders this table in the browser; taken from AWS's official Price List for Asia Pacific (Mumbai)."
+    },
+    "bedrock/amazon.titan-embed-text-v2:0": {
+      "input_per_1m": 0.024,
+      "output_per_1m": 0,
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/ap-south-1/index.json",
+      "checked_on": "2026-10-09",
+      "notes": "Embedding model: input tokens only. Titan Text Embeddings V2, Mumbai on-demand. Same prices as https://aws.amazon.com/bedrock/pricing/, which renders this table in the browser; taken from AWS's official Price List for Asia Pacific (Mumbai)."
+    },
+    "bedrock/global.cohere.embed-v4:0": {
+      "input_per_1m": 0.12,
+      "output_per_1m": 0,
+      "source_url": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/ap-south-1/index.json",
+      "checked_on": "2026-10-09",
+      "notes": "Embedding model: input tokens only. Cohere Embed 4, Mumbai on-demand (one rate listed; no separate global rate). Same prices as https://aws.amazon.com/bedrock/pricing/, which renders this table in the browser; taken from AWS's official Price List for Asia Pacific (Mumbai)."
     }
   },
   "unpriced": {
     "google_genai/gemini-embedding-001": "Not listed on the Gemini API pricing page on 2026-10-05 (it lists Gemini Embedding 2 instead); add its price here once confirmed.",
     "moonshot/kimi-k3": "Not checked; add from Moonshot's pricing page before relying on cost.",
     "groq/llama-3.3-70b-versatile": "Enterprise-only on Groq since at least 2026-10-06 (pricing 'contact sales'); standard keys get model_not_found.",
-    "bedrock/global.anthropic.claude-sonnet-4-6": "Bedrock price for Asia Pacific (Mumbai) not confirmed on aws.amazon.com/bedrock/pricing on 2026-10-06 (the page only partly loaded); add it from the AWS pricing calculator.",
-    "bedrock/in.anthropic.claude-haiku-4-5-20251001-v1:0": "Bedrock price for Asia Pacific (Mumbai) not confirmed on aws.amazon.com/bedrock/pricing on 2026-10-06 (the page only partly loaded); add it from the AWS pricing calculator.",
-    "bedrock/apac.amazon.nova-pro-v1:0": "Bedrock price for Asia Pacific (Mumbai) not confirmed on aws.amazon.com/bedrock/pricing on 2026-10-06 (the page only partly loaded); add it from the AWS pricing calculator.",
-    "bedrock/apac.amazon.nova-lite-v1:0": "Bedrock price for Asia Pacific (Mumbai) not confirmed on aws.amazon.com/bedrock/pricing on 2026-10-06 (the page only partly loaded); add it from the AWS pricing calculator.",
-    "bedrock/openai.gpt-oss-120b-1:0": "Bedrock price for Asia Pacific (Mumbai) not confirmed on aws.amazon.com/bedrock/pricing on 2026-10-06 (the page only partly loaded); add it from the AWS pricing calculator.",
-    "bedrock/amazon.titan-embed-text-v2:0": "Bedrock price for Asia Pacific (Mumbai) not confirmed on aws.amazon.com/bedrock/pricing on 2026-10-06 (the page only partly loaded); add it from the AWS pricing calculator.",
-    "bedrock/global.cohere.embed-v4:0": "Bedrock price for Asia Pacific (Mumbai) not confirmed on aws.amazon.com/bedrock/pricing on 2026-10-06 (the page only partly loaded); add it from the AWS pricing calculator.",
     "bigquery/on-demand": "BigQuery on-demand price per TiB not confirmed on cloud.google.com/bigquery/pricing on 2026-10-06 (the page only partly loaded). Add it as {\"per_tib\": <USD>} with source_url and checked_on. The project is in the BigQuery sandbox, where queries are free within its limits."
   }
 }

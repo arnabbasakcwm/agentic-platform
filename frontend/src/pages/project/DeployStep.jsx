@@ -1,5 +1,6 @@
 import { RunHistoryDrawer } from "../../components/RunHistory.jsx";
 import { useDeployedRuns } from "../../lib/useDeployedRuns.js";
+import { defaultInput } from "../../lib/useProjectRun.js";
 import { useEffect, useState } from "react";
 import { Icon } from "../../components/icons.jsx";
 import {
@@ -35,7 +36,6 @@ const PROGRESS = [
     "Creating the AgentCore runtime and waiting for it to start",
   ],
 ];
-const SAMPLE = '{\n  "question": "What is the speed of light?"\n}';
 
 function Progress({ status }) {
   const current = PROGRESS.findIndex(([key]) => key === status);
@@ -267,9 +267,11 @@ function TryIt({ project }) {
   const [parseError, setParseError] = useState(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const shown = deployed.shown;
-  // The input box shows what you're typing, else the shown run's input, else a sample.
+  // The input box shows what you're typing, else the shown run's input, else the plan's
+  // example input: the same starting point as the Run page.
   const input =
-    draft ?? (shown ? JSON.stringify(shown.input, null, 2) : SAMPLE);
+    draft ??
+    JSON.stringify(shown ? shown.input : defaultInput(project.plan), null, 2);
 
   async function execute(event) {
     event.preventDefault();
@@ -369,16 +371,19 @@ function TryIt({ project }) {
 }
 
 function CallIt({ project, deployment }) {
+  // The snippets send the plan's example input, the same one Run and Try it start with.
+  const body = JSON.stringify({ input: defaultInput(project.plan) });
+  const shellBody = body.replaceAll("'", "'\\''"); // safe inside a single-quoted shell arg
   const curl = `curl -X POST ${API_URL}/projects/${project.project_id}/deployment/invoke \\
   -H "Authorization: Bearer <your token>" \\
   -H "Content-Type: application/json" \\
-  -d '{"input": {"question": "..."}}'`;
+  -d '${shellBody}'`;
   const boto = `import boto3, json, uuid
 client = boto3.client("bedrock-agentcore", region_name="${deployment.region}")
 response = client.invoke_agent_runtime(
     agentRuntimeArn="${deployment.runtime_arn}",
     runtimeSessionId=uuid.uuid4().hex + uuid.uuid4().hex,
-    payload=json.dumps({"input": {"question": "..."}}),
+    payload=${JSON.stringify(body)},
 )
 print(json.loads(response["response"].read()))`;
   return (
