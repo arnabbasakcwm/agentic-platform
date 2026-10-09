@@ -78,10 +78,13 @@ wait_healthy() {
 cmd_up() {
   preflight
   local tag
-  tag=$(env_value IMAGE_TAG)
+  tag=${IMAGE_TAG:-$(env_value IMAGE_TAG)}
   if [[ -z $tag ]]; then
-    tag=$(git rev-parse --short HEAD 2>/dev/null || date +%Y%m%d%H%M%S)
-    git diff --quiet HEAD 2>/dev/null || tag="$tag-dirty"
+    if tag=$(git rev-parse --short HEAD 2>/dev/null); then
+      git diff --quiet HEAD || tag="$tag-dirty"
+    else
+      tag=$(date +%Y%m%d%H%M%S)
+    fi
   fi
   export IMAGE_TAG=$tag
 
