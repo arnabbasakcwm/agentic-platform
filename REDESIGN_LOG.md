@@ -234,3 +234,76 @@ Columns: Adh = adherence to design.md, Hier = hierarchy, Cons = consistency, Spa
 - Sweep `iter4`: 60 page views plus 12 overlay views. 0 serious axe violations, 0 overflow, 0 page errors.
 - Assistant specs 12/12 across three repeats.
 - Token audit 0 / 0 / 0 / 0.
+
+### Iteration 5: Final polish and verification
+
+**Changed**
+- **New-project welcome heading:** now heading-2 (26/700/−0.625px), consistent with page titles. It was 22/600.
+- **Markdown in agent output:** `h1` is heading-3, so it no longer matches `h2`.
+- **Segmented controls everywhere:** labels stay on one line, and the strip scrolls sideways on narrow screens. At 375px the Resources tabs used to wrap "MCP tools" onto a second row.
+
+**Self-critique, two final rounds**
+- **Round A** found the welcome heading out of step with the other titles (moderate). Fixed.
+- **Round B** found the Resources tabs wrapping (minor). Fixed.
+
+**Remaining issues, all minor**
+- The assistant panel renders one frame at 317px during page load before settling at its saved width.
+- Run-diagram node text is small at fit-to-view (React Flow zoom).
+- Stepper labels truncate at 768px ("Reso…", "Com…"); the step number and tick still identify each step.
+- The sign-in status pill sits close to the brand on phones.
+- `npm run build` warns about a JS chunk over 500 kB. It isn't caused by the redesign, which added no JS dependencies.
+
+**Verified**
+- Lint is clean, and unit tests pass (84).
+- Token audit `{"colors":0,"fontSizes":0,"spacing":0,"inlineStyles":0}`.
+- Full e2e suite: 102 passing across the final runs. That includes the strict sweep (`SWEEP_STRICT=1`) of 15 pages × 4 views plus 4 overlays × 3 views: 0 serious axe violations, 0 sideways scroll, 0 page errors.
+- Production build succeeds.
+
+## Final checklist status
+
+| # | Status |
+|---|---|
+| C1 | Overridden by the user (D14): the canvas is a neutral grey, not warm paper. Cards, fields and the nav are white ✓ |
+| C2 | ✓ 1px hairline (neutral `#e3e5e8` per D14) |
+| C3 | ✓ near-black ink at 92–95%. The secondary, muted and faint greys are neutral per D14. All ≥ 4.5:1 |
+| C4 | ✓ blue only for primary actions, links, the active tab and focus. Disabled primaries are neutral |
+| C5 | ✓ pressed `#005bab` |
+| C6 | ✓ the sticker palette is reduced to teal for charts (D10, D15). Agent colours per D11 |
+| C7 | ✓ a single night band (sign-in intro) |
+| C8 | ✓ Inter with `lnum`. Mono only for code, ids and table headers (D5) |
+| C9 | ✓ the full scale is tokenised. Page titles are heading-2 700/−0.625. Body is 400 |
+| C10 | ✓ buttons are 16/500 (small buttons 14, logged) |
+| C11 | ✓ the 4–32 scale plus the logged extras (D8) |
+| C12 | ✓ inputs 4, status pills 5, utility buttons 8, cards 12, primary and badges full |
+| C13 | ✓ white, 1px field border (neutral `#d5d8dc` per D14), radius 4, padding 6, 15px. Focus is a blue border, ring and level-1 shadow |
+| C14 | ✓ flat cards. Level 1 for raised surfaces, level 2 for popovers and drawers |
+| C15 | ✓ |
+| C16 | ✓ `pill--accent` |
+| C17 | ✓ |
+| C18 | ✓ |
+| C19 | ✓ 1200px |
+| C20 | ✓ ≤600px single column, 44px targets, full-width action bar. Tables stack |
+| C21 | ✓ 0 serious axe violations across every page and overlay at three widths and dark mode |
+| C22 | ✓ audit at zero |
+
+## Final scores (1–5)
+
+Columns as in the baseline: Adh = adherence to design.md, Hier = hierarchy, Cons = consistency, Space = spacing and alignment, Resp = responsiveness, A11y = accessibility, States = hover, empty, error and similar.
+
+| Page | Adh | Hier | Cons | Space | Resp | A11y | States |
+|---|---|---|---|---|---|---|---|
+| Sign in | 5 | 5 | 5 | 4 | 4 | 5 | 5 |
+| New project | 5 | 5 | 5 | 4 | 4 | 5 | 4 |
+| Projects | 5 | 4 | 5 | 5 | 5 | 5 | 4 |
+| Brief | 5 | 4 | 5 | 4 | 4 | 5 | 4 |
+| Resources (3 tabs) | 5 | 4 | 5 | 4 | 4 | 5 | 4 |
+| Plan | 5 | 4 | 5 | 4 | 4 | 5 | 4 |
+| Compile | 5 | 4 | 5 | 4 | 4 | 5 | 4 |
+| Run | 4 | 4 | 5 | 4 | 4 | 5 | 5 |
+| Deploy | 5 | 4 | 5 | 4 | 4 | 5 | 4 |
+| Knowledge | 5 | 4 | 5 | 4 | 4 | 5 | 4 |
+| Data sources | 5 | 5 | 5 | 4 | 5 | 5 | 5 |
+| MCP servers | 5 | 5 | 5 | 4 | 5 | 5 | 5 |
+| Usage | 5 | 4 | 5 | 4 | 4 | 5 | 4 |
+
+Run's adherence is 4 because of the small diagram text at fit-to-view, which is minor.

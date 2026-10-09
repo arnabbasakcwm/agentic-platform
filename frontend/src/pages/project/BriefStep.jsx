@@ -334,9 +334,6 @@ export function BriefStep({ project, tools, providers, onSaved }) {
   // Kept here, not in the editor (which starts fresh for each plan version), so the
   // "Saved" confirmation survives the save.
   const [savedVersion, setSavedVersion] = useState(null);
-  const models = unique(plan.agents.map((a) => a.llm.model));
-  const toolsInUse = unique(plan.agents.flatMap((a) => a.tools));
-  const external = project.side_effect_tools_enabled ?? [];
 
   return (
     <>
@@ -379,34 +376,6 @@ export function BriefStep({ project, tools, providers, onSaved }) {
                     <span key="Agents" className="mono">
                       {plan.agents.length}
                     </span>,
-                  ],
-                  ["Models", models.map((m) => <Pill key={m}>{m}</Pill>)],
-                  [
-                    "Tools in use",
-                    toolsInUse.length > 0 ? (
-                      toolsInUse.map((t) => (
-                        <Pill
-                          key={t}
-                          tone={external.includes(t) ? "warn" : undefined}
-                        >
-                          {t}
-                        </Pill>
-                      ))
-                    ) : (
-                      <span className="muted">None</span>
-                    ),
-                  ],
-                  [
-                    "External access",
-                    external.length > 0 ? (
-                      external.map((t) => (
-                        <Pill key={t} tone="warn">
-                          {t}
-                        </Pill>
-                      ))
-                    ) : (
-                      <span className="muted">None allowed</span>
-                    ),
                   ],
                 ]}
               />

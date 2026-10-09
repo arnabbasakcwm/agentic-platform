@@ -24,8 +24,9 @@ import { ResourcesStep } from "./project/ResourcesStep.jsx";
 import { PlanStep } from "./project/PlanStep.jsx";
 import { RunStep } from "./project/RunStep.jsx";
 
-// The steps where the brief and plan can still change, so where the assistant is offered.
-const ASSISTANT_STEPS = ["brief", "resources", "plan", "compile"];
+// The assistant is offered on every step. A change made from Run or Deploy is a new plan
+// version, which needs compiling (and redeploying) like any other plan change.
+const ASSISTANT_STEPS = ["brief", "resources", "plan", "compile", "run", "deploy"];
 const ASSISTANT_KEY = "agentic-platform.assistant-open";
 
 // Open by default where there's room for it beside the page; remembered per browser.

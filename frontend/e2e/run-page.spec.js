@@ -22,8 +22,12 @@ test.beforeEach(async ({ page, request }) => {
   page.on("response", (res) => {
     if (res.status() >= 400) consoleErrors.push(`HTTP ${res.status()} ${res.url()}`);
   });
-  // A signed-in session, as the app restores it on load.
-  await page.addInitScript(() => sessionStorage.setItem("agentic-platform.token", "e2e-token"));
+  // A signed-in session, as the app restores it on load, with the assistant closed:
+  // these checks are about the Run page itself (the assistant has its own spec).
+  await page.addInitScript(() => {
+    sessionStorage.setItem("agentic-platform.token", "e2e-token");
+    localStorage.setItem("agentic-platform.assistant-open", "0");
+  });
 });
 
 test.afterEach(() => {

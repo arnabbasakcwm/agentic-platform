@@ -142,6 +142,8 @@ for (const scheme of ["light", "dark"]) {
     await editor.getByRole("button", { name: "Save changes" }).click();
     await expect(page.getByText("Saved as plan v3")).toBeVisible();
     await expect(page.locator(".stepper").getByRole("link", { name: /Compile/ })).toContainText("Not compiled");
-    await expect(page.locator(".panel", { hasText: "Details" })).toContainText("gpt-4o-mini");
+    await expect(editor.getByRole("button", { name: /^Model for price_analyzer/ })).toContainText("gpt-4o-mini");
+    // The Details panel no longer lists models or tools; the editor above is where they are.
+    await expect(page.locator(".panel", { hasText: "Details" })).not.toContainText("gpt-4o-mini");
   });
 }

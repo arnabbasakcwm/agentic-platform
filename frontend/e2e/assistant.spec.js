@@ -120,3 +120,19 @@ test("narrow screens: the panel overlays the page and can still be resized", asy
   expect(await widthOf(panel(page))).toBeGreaterThan(before + 100);
   expect(await fits(page)).toBe(true);
 });
+
+test("the assistant is offered on every step, Run and Deploy included", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("agentic-platform.assistant-open", "0"));
+  for (const step of ["brief", "resources", "plan", "compile", "run", "deploy"]) {
+    await page.goto("about:blank");
+    await page.goto(`/#/projects/e2e0travel0project/${step}`);
+    const open = page.getByRole("button", { name: "Assistant" });
+    await expect(open, step).toBeVisible();
+    if (step === "run" || step === "deploy") {
+      await open.click();
+      await expect(panel(page)).toBeVisible();
+      await panel(page).getByRole("button", { name: /Close/ }).click();
+      await expect(panel(page)).toHaveCount(0);
+    }
+  }
+});
