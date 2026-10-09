@@ -29,6 +29,8 @@ test.beforeEach(async ({ page }) => {
 
 /** A server's card, and a way to open one of its tabs. */
 const card = (page, name) => page.getByRole("region", { name, exact: true });
+/** The card header's count of approved tools. */
+const approved = (panel, n) => expect(panel.locator(".itemcard__summary")).toContainText(`${n} approved`);
 const tab = (panel, name) => panel.getByRole("tab", { name: new RegExp(`^${name}`) }).click();
 
 async function connect(page, url, name = "Zoho CRM") {
@@ -68,7 +70,7 @@ for (const scheme of ["light", "dark"]) {
     await expect(page.locator("body")).not.toContainText(KEY);
     await expect(panel.getByText("Reads only", { exact: true })).toBeVisible();
     await expect(panel.getByText("May change data", { exact: true })).toBeVisible();
-    await expect(panel.getByText("Approved", { exact: true })).toHaveCount(0);
+    await approved(panel, 0);
 
     // Approving a tool that may change data asks first.
     await panel.getByRole("checkbox", { name: "search_records" }).check();
@@ -78,7 +80,7 @@ for (const scheme of ["light", "dark"]) {
     await panel.getByRole("button", { name: "Cancel", exact: true }).click();
     await panel.getByRole("checkbox", { name: "send_email" }).uncheck();
     await panel.getByRole("button", { name: "Save approvals" }).click();
-    await expect(panel.getByText("Approved", { exact: true })).toHaveCount(1);
+    await approved(panel, 1);
 
     // Try the approved tool: the output is fenced as data.
     await tab(panel, "Try a tool");
@@ -112,7 +114,7 @@ for (const scheme of ["light", "dark"]) {
     await panel.getByRole("button", { name: "Refresh tools" }).click();
     await expect(panel.getByText("1 changed")).toBeVisible();
     await expect(panel.getByText("Changed — review")).toBeVisible();
-    await expect(panel.getByText("Approved", { exact: true })).toHaveCount(0);
+    await approved(panel, 0);
     expect(errors).toEqual([]);
   });
 }
@@ -123,7 +125,7 @@ test("a new project can start with an MCP server's tools", async ({ page }) => {
   const panel = card(page, "CRM");
   await panel.getByRole("checkbox", { name: "search_records" }).check();
   await panel.getByRole("button", { name: "Save approvals" }).click();
-  await expect(panel.getByText("Approved", { exact: true })).toHaveCount(1);
+  await approved(panel, 1);
 
   await page.goto("/#/new");
   await page.getByRole("button", { name: "Add MCP" }).click();

@@ -414,8 +414,9 @@ function ToolApproval({ server, onSaved }) {
               <span className="mono mcptools__name">{t.name}</span>
             </label>
             <span className="mcptools__tags">
+              {/* Approval shows in the checkbox (and the card's count); only a changed
+                  tool needs a word. */}
               {t.changed && <Pill tone="warn">Changed — review</Pill>}
-              {!t.changed && t.usable && <Pill tone="success">Approved</Pill>}
               {t.read_only_hint ? (
                 <Pill>Reads only</Pill>
               ) : (
@@ -424,12 +425,13 @@ function ToolApproval({ server, onSaved }) {
             </span>
             <button
               type="button"
-              className="linkbtn mcptools__more"
+              className="iconbtn mcptools__more"
               aria-expanded={open === t.name}
               aria-label={`${open === t.name ? "Hide" : "Show"} details of ${t.name}`}
+              title={open === t.name ? "Hide details" : "Show details"}
               onClick={() => setOpen((o) => (o === t.name ? null : t.name))}
             >
-              {open === t.name ? "Hide details" : "Details"}
+              <Icon name="chevronDown" size={16} />
             </button>
             {t.description && (
               <p className="mcptools__desc muted">{t.description}</p>
@@ -720,9 +722,16 @@ function ServerPanel({ server, projects, open, onToggle, onChanged, onDeleted })
       }
       actions={
         <>
-          <Button size="sm" onClick={doRefresh} loading={refresh.busy}>
-            Refresh tools
-          </Button>
+          <button
+            type="button"
+            className={refresh.busy ? "iconbtn iconbtn--busy" : "iconbtn"}
+            onClick={doRefresh}
+            disabled={refresh.busy}
+            aria-label="Refresh tools"
+            title="Refresh tools"
+          >
+            <Icon name="refresh" size={16} />
+          </button>
           <DeleteButton
             name={server.name}
             prompt="Remove this server?"

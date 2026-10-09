@@ -1749,6 +1749,15 @@ code {
   }
 }
 
+/* An icon button whose action is running (e.g. Refresh tools): its icon turns. */
+.iconbtn--busy {
+  cursor: progress;
+}
+
+.iconbtn--busy .icon {
+  animation: spin 0.8s linear infinite;
+}
+
 /* ---------------------------------------------------------------- project workspace */
 /* The step pages and the assistant side by side, each scrolling on its own. */
 .workspace {
@@ -5766,14 +5775,29 @@ body.is-resizing {
   grid-template-columns: minmax(0, 1fr) auto auto;
 }
 
+/* Details: a small down arrow that flips up while the row is open. */
 .mcptools__more {
   grid-column: auto;
   justify-self: end;
+  width: 28px;
+  height: 28px;
   margin: 0;
-  white-space: nowrap;
+  color: var(--text-muted);
 }
 
+.mcptools__more .icon {
+  transition: transform 0.15s;
+}
+
+.mcptools__item--open .mcptools__more .icon {
+  transform: rotate(180deg);
+}
+
+/* The description stays in the name column, so it ends before the tags and the arrow,
+   and never runs longer than a comfortable line. */
 .mcptools__desc {
+  grid-column: 1 / 2;
+  max-width: 80ch;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
