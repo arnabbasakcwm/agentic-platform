@@ -90,8 +90,7 @@ export function PlanStep({ project, onSaved }) {
             }
           >
             <textarea
-              className="mono"
-              style={{ minHeight: 460 }}
+              className="mono minh-plan-json"
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               aria-label="Plan JSON"
@@ -102,7 +101,7 @@ export function PlanStep({ project, onSaved }) {
               change means the project must be compiled again.
             </span>
             {(parseError || save.error) && (
-              <div style={{ marginTop: 12 }}>
+              <div className="mt-sm">
                 <ErrorCallout error={parseError ?? save.error} />
               </div>
             )}

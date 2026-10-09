@@ -53,3 +53,105 @@ def _no_live_model_checks(monkeypatch):
 
     monkeypatch.setattr(app_module, "_capabilities", InMemoryModelCapabilityStore())
     monkeypatch.setattr(caps, "probe_tool_calling", lambda provider, model, usage=None: None)
+
+
+# ---------------------------------------------------------------------------- MCP test server
+MCP_KEY = "k3yInTheUrl0123456789abcdef"
+MCP_HEADER_KEY = "header-secret-value"
+MCP_TOKEN = "tok_0123456789abcdefSECRET"
+
+
+def _mcp_test_app():
+    """One real MCP server (the SDK's own), reachable four ways, one per auth pattern:
+    /open/mcp (no auth), /hdr/mcp (X-API-Key header), /key/<key>/mcp (key in the URL) and
+    /oauth/mcp (always asks for OAuth); /tok/mcp takes an access token
+    (Authorization: Bearer)."""
+    from mcp.server.mcpserver import MCPServer
+    from mcp_types import ToolAnnotations
+
+    server = MCPServer("test-tools")
+
+    @server.tool(annotations=ToolAnnotations(readOnlyHint=True))
+    def add(a: int, b: int) -> int:
+        """Add two whole numbers."""
+        return a + b
+
+    @server.tool()
+    def create_note(text: str) -> str:
+        """Create a note (changes data)."""
+        return f"created: {text}"
+
+    @server.tool()
+    def boom() -> str:
+        """Always fails."""
+        raise ValueError("kaboom")
+
+    @server.tool()
+    def needs_signin() -> str:
+        """Answers with a sign-in link, like a per-user OAuth server."""
+        return "Please authorize access first: https://accounts.example.com/oauth/authorize?client=x"
+
+    @server.tool()
+    def big() -> str:
+        """Returns a very long text."""
+        return "x" * 50_000
+
+    inner = server.streamable_http_app()
+
+    async def app(scope, receive, send):
+        if scope["type"] == "lifespan":
+            return await inner(scope, receive, send)
+        if scope["type"] != "http":
+            return await inner(scope, receive, send)
+        path = scope["path"]
+        headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
+        allowed = (
+            path.startswith("/open/")
+            or (path.startswith("/hdr/") and headers.get("x-api-key") == MCP_HEADER_KEY)
+            or (path.startswith("/tok/") and headers.get("authorization") == f"Bearer {MCP_TOKEN}")
+            or path.startswith(f"/key/{MCP_KEY}/")
+        )
+        if not allowed:
+            challenge = (
+                b'Bearer resource_metadata="http://127.0.0.1/.well-known/oauth-protected-resource"'
+                if path.startswith("/oauth/") else b"Bearer"
+            )
+            await send({
+                "type": "http.response.start", "status": 401,
+                "headers": [(b"www-authenticate", challenge), (b"content-type", b"application/json")],
+            })
+            return await send({"type": "http.response.body", "body": b'{"error":"unauthorized"}'})
+        return await inner(dict(scope, path="/mcp", raw_path=b"/mcp"), receive, send)
+
+    return app
+
+
+@pytest.fixture(scope="session")
+def mcp_server():
+    """A local MCP server for the whole session; yields its base URL (http://127.0.0.1:port)."""
+    import socket
+    import threading
+    import time
+
+    import uvicorn
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    server = uvicorn.Server(uvicorn.Config(_mcp_test_app(), host="127.0.0.1", port=port, log_level="warning"))
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    deadline = time.time() + 10
+    while not server.started and time.time() < deadline:
+        time.sleep(0.05)
+    yield f"http://127.0.0.1:{port}"
+    server.should_exit = True
+    thread.join(timeout=5)
+
+
+@pytest.fixture
+def mcp_local(monkeypatch):
+    """Allow plain http to this machine (the test server), as MCP_ALLOW_INSECURE_LOCAL does."""
+    import agentic_platform.mcp_client as mc
+
+    monkeypatch.setattr(mc, "MCP_ALLOW_INSECURE_LOCAL", True)

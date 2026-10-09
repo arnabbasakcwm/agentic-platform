@@ -307,8 +307,8 @@ for (const scheme of ["light", "dark"]) {
 // ---------------------------------------------------------------- theme toggle
 test("the theme toggle switches light and dark, overrides the system, and is remembered", async ({ page }) => {
   const background = () => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
-  const LIGHT = "rgb(248, 250, 252)";
-  const DARK = "rgb(11, 17, 32)";
+  const LIGHT = "rgb(245, 246, 248)";
+  const DARK = "rgb(24, 25, 27)";
 
   // System light: the console starts light and offers dark.
   await openRunPage(page, { scheme: "light" });

@@ -509,3 +509,76 @@ def test_other_provider_errors_still_go_to_the_agent_retry_loop(monkeypatch):
     monkeypatch.setattr(gb.time, "sleep", lambda s: None)
     result = compile_graph(_web_agent_plan()).invoke(initial_state({"q": "x"}))
     assert result["errors"][0]["attempts"] == 3 and "503" in result["errors"][0]["error"]
+
+
+# ------------------------------------------------------------------ stopping runs
+def test_single_agent_runs_stop_at_their_time_limit_and_make_no_more_calls(monkeypatch):
+    import threading
+    import time as _time
+
+    calls = []
+
+    class SlowFailing:
+        def invoke(self, messages, config=None):
+            calls.append(1)
+            threading.Event().wait(0.4)
+            raise ValueError("slow and wrong")
+
+    monkeypatch.setattr(gb, "get_llm", lambda cfg: _FakeLLM(SlowFailing()))
+    monkeypatch.setattr(gb, "_NODE_BACKOFF_S", 0.05)
+    plan = AgentPlan(agents=[_spec("a", "m")], orchestration_pattern="sequential",
+                     bounds=RunBounds(timeout_s=0.2, max_retries=3))
+    started = _time.monotonic()
+    try:
+        gb.run_single_agent(plan, "a", {"q": "x"})
+        raise AssertionError("expected a timeout")
+    except TimeoutError as e:
+        assert "0.2s time limit" in str(e)
+    assert _time.monotonic() - started < 0.4
+    threading.Event().wait(1.0)  # long enough for two more attempts, had it retried
+    assert len(calls) == 1
+
+
+def test_a_stopped_run_ends_at_once_and_tells_its_worker():
+    import threading
+
+    from agentic_platform.graph_builder import run_graph_events
+
+    told = threading.Event()
+
+    class Waiting:
+        def invoke(self, state, config):
+            if config["configurable"]["stop"].wait(5):
+                told.set()
+
+    asked = {"stop": False}
+    events = run_graph_events(Waiting(), {}, RunBounds(timeout_s=30), should_stop=lambda: asked["stop"])
+    assert next(events)[0] == "run_started"
+    asked["stop"] = True
+    rest = list(events)
+    assert [e for e, _ in rest] == ["run_failed"] and rest[0][1]["error_type"] == "RunStopped"
+    assert told.wait(2)
+
+
+def test_agent_events_stream_one_agent_and_reject_unknown_ids(monkeypatch):
+    monkeypatch.setattr(gb, "get_llm", lambda cfg: _FakeLLM(_Structured([AgentOutput(content="solo")])))
+    plan = AgentPlan(agents=[_spec("a", "m"), _spec("b", "m", depends_on=["a"])], orchestration_pattern="sequential")
+    events = list(gb.run_agent_events(plan, "b", {"q": "x"}, {"a": {"content": "given"}}))
+    assert [(e, d.get("node")) for e, d in events] == [
+        ("run_started", None), ("node_started", "b"), ("node_completed", "b"), ("run_completed", None)]
+    assert events[-1][1]["outputs"] == {"b": {"content": "solo", "data": {}}}
+    try:
+        gb.run_agent_events(plan, "ghost", {})
+        raise AssertionError("expected KeyError")
+    except KeyError:
+        pass
+
+
+def test_model_requests_have_a_timeout(monkeypatch):
+    from agentic_platform.config import LLM_REQUEST_TIMEOUT_S, PROVIDER_ENV_VARS
+
+    monkeypatch.setenv(PROVIDER_ENV_VARS["google_genai"][0], "test-key")
+    llm = gb.get_llm(LLMConfig(provider="google_genai", model="gemini-3.1-pro-preview"))
+    assert llm.timeout == LLM_REQUEST_TIMEOUT_S
+    custom = gb.get_llm(LLMConfig(provider="google_genai", model="gemini-3.1-pro-preview", extra_params={"timeout": 30}))
+    assert custom.timeout == 30

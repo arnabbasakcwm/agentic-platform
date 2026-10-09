@@ -1,0 +1,40 @@
+# {$DOMAIN} is a real hostname (Caddy gets a Let's Encrypt certificate for it
+# automatically) or ":80" for plain HTTP, e.g. behind a load balancer that terminates TLS.
+{$DOMAIN} {
+	encode zstd gzip
+
+	# Uploads: up to 10 files of 20 MB per request (knowledge limits), with headroom.
+	request_body {
+		max_size 250MB
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		-Server
+	}
+
+	# The API, under /api with the prefix stripped (uvicorn runs with --root-path /api).
+	# flush_interval -1 streams Server-Sent Events (live runs) without buffering.
+	handle_path /api/* {
+		reverse_proxy api:8000 {
+			flush_interval -1
+			transport http {
+				read_timeout 15m
+				write_timeout 15m
+			}
+		}
+	}
+
+	# The console: a single-page app with hash routing.
+	handle {
+		root * /srv
+		@assets path /assets/*
+		header @assets Cache-Control "public, max-age=31536000, immutable"
+		try_files {path} /index.html
+		file_server
+	}
+}

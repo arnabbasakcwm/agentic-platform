@@ -3,7 +3,7 @@ import { formatBytes } from "../lib/knowledge.js";
 import { Icon } from "./icons.jsx";
 import { Button } from "./ui.jsx";
 
-// Shared by the project's Knowledge step and the workspace Knowledge page.
+// Shared by the project's Resources step (Documents tab) and the workspace Knowledge page.
 
 /** Drag-and-drop area plus a file picker; `limits` is the API's knowledge limits. */
 export function UploadArea({ limits, onFiles, uploading, disabled }) {

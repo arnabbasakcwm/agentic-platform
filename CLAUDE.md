@@ -10,9 +10,9 @@ parallel, supervisor), tool registry, FastAPI serving layer, project persistence
 (MongoDB), user accounts with JWT sign-in, plan revision by conversation, deployment
 to Bedrock AgentCore Runtime (not yet exercised against a real AWS account), project
 knowledge bases (uploaded documents agents search with `knowledge_search`), saved runs
-(the last 5 per project), and a React console. Not yet built: background workers,
-per-project API keys, rate limiting, and observability. Full architecture
-reference lives in `docs/systemDescription.md`; `README.md` is the quick start; this file
+(the last 10 per project), tools from approved MCP servers, and a React console. Not yet
+built: background workers, per-project API keys, rate limiting, and observability. Full
+architecture reference lives in `docs/systemDescription.md`; `README.md` is the quick start; this file
 is the operating contract for whoever (human or AI) writes code here. Decisions that
 changed or extended this contract are recorded, with their reasons, in the
 **Architecture decision log** near the end of this file.
@@ -136,7 +136,7 @@ backend/
     tools.py                # Closed, vetted tool registry + side-effect opt-in rules
     config.py               # Env loading, provider/model defaults
     errors.py               # Typed platform errors
-    stores.py               # ProjectStore/UserStore/KnowledgeStore interfaces + in-memory and MongoDB implementations
+    stores.py               # Store interfaces (projects, users, knowledge, data sources, MCP servers, …) + in-memory and MongoDB implementations
     knowledge.py            # Knowledge libraries: extract/chunk documents, index, search, deploy snapshot
     usage.py                # Usage accounting: token collector, LangChain callback, pricing, dashboard totals
     auth.py                 # Password hashing (Argon2id) + JWT access tokens
@@ -145,6 +145,8 @@ backend/
     agentcore.py            # AWS wrapper: S3, IAM role, AgentCore runtime create/update/invoke
     bedrock_catalog.py      # Live, cached list of the account's Bedrock chat models / inference profiles
     datasources.py          # BigQuery data sources: federation sign-in, SQL guardrails, sql_schema/sql_query context
+    mcp_client.py           # Remote MCP servers: URL guard, list/call tools, McpContext, deploy snapshot
+    secrets_box.py          # Encrypts stored user secrets (MCP URLs and headers) with PLATFORM_SECRET_KEY
     capabilities.py         # Measures whether a model can call tools (one-time probe per model)
     app.py                  # FastAPI serving layer
   tests/                    # Offline, fully mocked suite
@@ -579,7 +581,8 @@ whenever a change departs from or extends the contract above — don't silently 
     /projects/{id}/runs`, `/run`, `/run/stream`, single-agent invoke, deployed Try-it
     (`POST …/deployment/runs`) and `…/deployment/invoke`. Run inputs and outputs are
     user data: owner-only (someone else's run is a 404) and deleted with the project.
-  - **Kept:** the 5 newest `local` and 5 newest `deployed` runs per project; older ones
+  - **Kept:** the 10 newest `local` and 10 newest `deployed` runs per project (`RUNS_KEPT`;
+    raised from 5 on 2026-10-08); older ones
     are deleted when a new one starts.
   - **Reconnecting:** `GET …/runs/{id}/stream?after=N` replays stored events from N, then
     follows the run until it ends, so the console reconnects from any page, after a
@@ -591,7 +594,7 @@ whenever a change departs from or extends the contract above — don't silently 
   - **Known deviation:** background runs are in-process daemon threads (one per run),
     which a restart cuts off. Move them to the job queue when it exists.
   - **Console:** the Run and Deploy steps load the latest run of the current plan version,
-    follow it if it's still going, and list the last 5 to reopen. Opening one puts its
+    follow it if it's still going, and list the last 10 to reopen. Opening one puts its
     input back in the editor.
 
 ### 2026-10-07 — Projects have names
@@ -605,6 +608,170 @@ whenever a change departs from or extends the contract above — don't silently 
   `plan_version`. In the console, `components/ProjectName.jsx` shows the name with a
   pencil to rename it in place (the project page header, the Projects list, the
   new-project reply), and the new-project settings have an optional Name field.
+
+### 2026-10-07 — Agents may use tools from approved MCP servers
+- **Why:** users want agents to work with their own services (Zoho, GitHub, in-house
+  tools) without each integration being hand-written into the registry.
+- **Rule:** this opens the closed registry (principle 5) to servers the user chooses,
+  under limits the platform enforces:
+  - **Remote only:** Streamable HTTP (and legacy SSE) over https, through the official
+    `mcp` SDK (`mcp_client.py`). No stdio servers, so the platform never runs a program for
+    a server.
+  - **SSRF guard:** `check_url` refuses private, loopback, link-local, metadata and other
+    non-global addresses before every request (an httpx hook). Plain http only to this
+    machine with `MCP_ALLOW_INSECURE_LOCAL`, for development. Known gap: DNS is resolved
+    again by the HTTP client, so a rebinding window remains.
+  - **Secrets:** a URL can carry the server's key, so the URL and header values are sealed
+    with Fernet (`secrets_box.py`, `PLATFORM_SECRET_KEY`) and stored only encrypted. The
+    API shows a masked `display_url` and header *names*. Errors name the host only. While
+    a call runs, a filter on the `mcp`/`httpx`/`httpcore` loggers masks its secrets,
+    because those libraries log request URLs. KMS envelope encryption can replace Fernet
+    behind the same two functions.
+  - **Per-tool approval:** a new server's tools are all unapproved. Approving pins each
+    tool's definition hash (name, description, arguments). A refresh that changes an
+    approved tool marks it `changed`, and it's unusable until approved again. Only approved,
+    unchanged tools are offered to the planner, the assistant, the Brief editor or an agent.
+  - **Opt-in:** attaching a server to a project is that project's opt-in. Exposed tool
+    names are `mcp__<slug>__<tool>`. `PUT /agents`, revisions and `POST /projects`
+    (`mcp_server_ids`) accept only approved tools of attached servers. The planner gets
+    names and descriptions only, quoted as descriptions, not instructions.
+  - **Calls:** read at call time through `McpContext`, so detaching or unapproving stops a
+    tool at once (compile then fails with `McpUnavailable`). Arguments are checked against
+    the approved schema before the call. Results are fenced, cut at
+    `MCP_MAX_RESULT_CHARS`, and bounded by `MCP_CALL_TIMEOUT_S`. A sign-in link instead of
+    data is reported as `McpAuthorizationRequired`, never passed to the agent; an OAuth
+    challenge is `McpOAuthRequired`.
+  - **Usage:** each call records `kind="mcp_call"`, counted but never priced.
+  - **Deploys:** the package carries `mcp_servers.json` (approved definitions, no
+    secrets). Each used server's URL and headers go to the runtime as `MCP_SECRET_<SLUG>`.
+    That is the same known deviation as provider keys; move to Secrets Manager / AgentCore
+    Identity before multi-tenant use.
+  - **Not yet built:** OAuth sign-in for MCP servers. Server presets
+    (`frontend/src/lib/mcp.js`) are display help only and never change validation.
+  - **Tests:** the offline suite runs a real MCP server in-process (`tests/conftest.py`
+    `mcp_server`), one endpoint per auth pattern. Setup: `docs/mcp_setup.md`.
+
+### 2026-10-07 — One Resources step replaces the Knowledge and Data steps
+- **Why:** Knowledge (documents) and Data (BigQuery) were two project steps doing the same
+  job, and MCP servers sat inside Data where nobody looked for tools. All three answer one
+  question: what can this project's agents use?
+- **Rule:** the project stepper is Brief · Resources · Plan · Compile · Run · Deploy.
+  Resources (`pages/project/ResourcesStep.jsx`) has three tabs, Documents
+  (`KnowledgeStep`), Databases (`DataStep`) and MCP tools (`McpTab`), with one page wrapper
+  and one action bar. The tab is in the URL (`#/projects/<id>/resources/<tab>`). Old
+  `…/knowledge` and `…/data` links map to their tabs, so bookmarks keep working. The
+  sidebar and the workspace library pages (Knowledge, Data sources, MCP servers) are
+  unchanged, and the API is unchanged. This supersedes the "Data step (between Knowledge
+  and Plan)" wording in earlier entries.
+
+### 2026-10-07 — New projects start with a conversation; planning is the user's step
+- **Why:** every message on the New project page went straight to the planner, so "hello"
+  created a project with a "greeter" agent and vague requests got guessed teams.
+- **Rule:**
+  - **Talking creates nothing.** `POST /brief/chat` returns a structured `BriefTurn`
+    (`discuss_brief()` in `meta_planner_prompt.py`, through the same retry loop): a reply,
+    at most 3 clarifying questions with quick-answer options, the brief so far, `ready`,
+    an optional name, and `plan_now`. It's stateless (the console holds the conversation)
+    and sees only attachment names, like the planner. Usage is counted as `assistant`.
+  - **Planning only on the user's word:** the **Create plan** button on the brief card, or
+    a clear "go ahead" in the chat (`plan_now`, which needs a brief, checked server-side).
+    The model never plans on its own. When `ready` is true the reply asks whether to plan,
+    and the card shows "Ready to plan".
+  - **The conversation is kept:** `POST /projects` takes `intake` and stores it as the
+    project's conversation; the planner gets the brief the user confirmed (editable).
+
+### 2026-10-08 — Every run is bounded, single agents included, and can be stopped
+- **Why:** a single-agent run on the Run page showed "Running" for over 5 minutes. That
+  path called the agent directly with no time limit, saved nothing until it returned
+  (even `run_started` sat in the write buffer), and model clients had no request timeout.
+  Users also had no way to end a run they no longer wanted.
+- **Rule:**
+  - **One bounded runner:** full-graph and single-agent runs go through the same runner
+    (`run_graph_events` / `run_agent_events`, `run_graph` / `run_single_agent`), so both
+    have the plan's `timeout_s`, live events and a typed `RunTimeout`. The runtime app
+    answers a single agent past its limit with `504 RunTimeout` too.
+  - **Model requests time out:** `get_llm()` passes `timeout=LLM_REQUEST_TIMEOUT_S` (180 s)
+    to every provider except Ollama. A stalled call becomes an error the agent's retry loop
+    sees; `extra_params` can override it.
+  - **Stop:** `POST /projects/{id}/runs/{run_id}/stop` (owner-scoped; someone else's run is
+    a 404) sets `stop_requested` on the saved run and the in-process flag. The run ends
+    within about two seconds as `failed` with `RunStopped`, keeping finished outputs and
+    usage. A run in another worker process sees the request by polling its saved record
+    every `STOP_POLL_S` (2 s). A run asked to stop that is still "running" 30 s later had
+    lost its process and reads as stopped. Stopping a finished run returns it unchanged.
+    Deployed runs execute on AWS and are refused (`409 RunNotStoppable`).
+  - **Abandoned workers stop spending:** threads can't be killed, so a stopped or
+    timed-out run sets a `threading.Event` passed in LangGraph config (like `emit`).
+    Agents check it before every model and tool call (`RunStoppedError`, never retried),
+    and the supervisor before routing. The one call already in flight finishes.
+  - **Known gap:** tokens from that in-flight call arrive after the run's usage was
+    recorded, so they're not counted.
+  - **Console:** a Stop button beside "Running…" and in the diagram header, only while a
+    run is running. A stopped run reads "Stopped after …" (not "Failed"); the agent cut off
+    shows as skipped, and the history says Stopped. Single-agent runs now stream the same
+    events as full runs instead of polling.
+
+### 2026-10-09 — Library pages list items as collapsible cards with tabs
+- **Why:** on Data sources and MCP servers every item was a full-height panel with all
+  its sections stacked, so a few items filled several screens and were hard to tell
+  apart or move around in.
+- **Rule:** each source or server is a `components/ItemCard.jsx`: a one-line header
+  (name, a summary of counts, status, actions) that expands to its parts as tabs —
+  Tables · Projects · Test query, or Tools · Projects · Try a tool · Credentials.
+  `components/ItemsToolbar.jsx` adds a count, a filter (4+ items) and Expand / Collapse
+  all; long tool lists get their own filter (9+ tools), and each tool's description and
+  arguments sit behind Details. Which cards are open is remembered per browser
+  (`lib/expanded.js`, localStorage, a convenience only); on a first visit a lone item
+  opens, otherwise only items needing attention (sign-in failed, changed tools, no
+  tables). A just-connected item opens. "Connect a source/server" lives in the page
+  header. Frontend only: the API and the project Resources step are unchanged.
+
+### 2026-10-09 — The console's visual system comes from docs/design.md, through tokens
+- **Why:** the console looked like a generic template, with values scattered through
+  the stylesheet. `docs/design.md` is now the design system. The redesign and every
+  decision where design.md was silent (or where the user overrode it) are in
+  `REDESIGN_LOG.md`.
+- **Rule:**
+  - **Tokens only:** every colour, font size, spacing value and radius in
+    `frontend/src/styles.css` is a token from its `:root` / dark blocks.
+    `node scripts/audit-tokens.mjs` (from `frontend/`) must report zero, and no inline
+    `style` may carry a literal design value (data-driven custom properties are fine).
+  - **One accent:** blue (`--primary`, `#0075de`) paints actions, links (`--link`) and
+    focus only. Disabled is not an action, so it isn't blue.
+  - **Page background:** neutral grey, not design.md's warm paper (user decision).
+    Status colours are a muted semantic set, and info is neutral.
+  - **Colours not to use:** no pink or purple (user decision). Agent identity colours are
+    `--agent-1…6` (indigo, emerald, sky, lime, teal, cyan): no orange or purples.
+  - **Type:** Inter, with headings at 700 and negative tracking. Mono is for code, ids,
+    JSON and table headers only.
+  - **Shapes:** the primary button is a pill, utility buttons are 8px, inputs 4px,
+    cards 12px.
+  - **Phones (≤600px):** single column, 44px touch targets, full-width action buttons,
+    the breadcrumb shows only the current page, and data tables can stack
+    (`.table--stack`).
+  - **Checks:** `e2e/redesign-sweep.spec.js` screenshots every page and overlay at 375,
+    768 and 1440 px (plus dark). With `SWEEP_STRICT=1` it fails on any serious axe
+    violation, sideways scroll or page error.
+
+### 2026-10-09 — The platform itself runs on one server with Docker Compose
+- **Why:** the user wanted to deploy the platform (API, console, database) to a single
+  Linux server, with MongoDB in the stack. AgentCore stays the target for the agent
+  teams the platform builds, not for the platform.
+- **Rule:**
+  - **Containers:** `docker-compose.prod.yml` runs three containers: `web` (Caddy serving
+    the built console, TLS, `/api` proxied with the prefix stripped), `api` and `mongo`.
+    `api` runs uvicorn with `--root-path /api`; `mongo` has auth on and no published port.
+  - **Same origin:** the console and API share one origin, so production needs no CORS
+    change.
+  - **One worker:** `api` runs a single uvicorn worker, because runs, deploys, indexing
+    and usage sync are in-process jobs. Raise it only once the job queue exists.
+  - **API image layout:** the image keeps the `src/` layout with `pyproject.toml`,
+    `uv.lock`, `pricing.json` and `uv`. `deploy.py` packages AgentCore runtimes from
+    there, and `.deploy-cache` is a volume.
+  - **Secrets:** secrets live only in `.env.production` on the server (gitignored, and
+    the image's `.dockerignore` keeps `.env*` out). `deploy.sh` refuses to start without
+    `DOMAIN`, `MONGO_ROOT_*`, `JWT_SECRET` and `PLATFORM_SECRET_KEY`.
+  - **Setup guide:** `docs/deployment.md`.
 
 ## Working style — verify-and-retry, always
 

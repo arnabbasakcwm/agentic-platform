@@ -79,7 +79,9 @@ test("name a project when creating it, and rename it from the reply", async ({ p
   await page.getByRole("button", { name: /Auto team size/ }).click();
   await page.getByLabel("Name", { exact: true }).fill("Goa getaway");
   await page.getByLabel("Task description").fill("Find cheap flights to Goa");
-  await page.getByRole("button", { name: "Plan this team" }).click();
+  // Sending talks it through first; planning is the explicit Create plan step.
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await page.getByRole("region", { name: "Task brief" }).getByRole("button", { name: "Create plan" }).click();
   const reply = page.locator(".msg--assistant").last();
   await expect(reply).toContainText("Goa getaway");
   expect((await (await request.get(`${API}/__last_create`)).json()).name).toBe("Goa getaway");

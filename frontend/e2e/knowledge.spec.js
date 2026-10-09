@@ -30,9 +30,11 @@ for (const scheme of ["light", "dark"]) {
     await page.setViewportSize({ width: 1280, height: 860 });
     await page.emulateMedia({ colorScheme: scheme });
 
+    // The old Knowledge step URL lands on the Resources step's Documents tab.
     await page.goto(`/#/projects/${PROJECT}/knowledge`);
+    await expect(page.getByRole("tab", { name: /Documents/ })).toHaveAttribute("aria-selected", "true");
     await expect(page.getByText("No files attached")).toBeVisible();
-    await expect(page.locator(".stepper").getByRole("link", { name: /Knowledge/ })).toContainText("Optional");
+    await expect(page.locator(".stepper").getByRole("link", { name: /Resources/ })).toContainText("Optional");
     await expect(page.getByText("Agents can't use these files yet")).toBeVisible();
     await expect(page.getByRole("button", { name: "Give agents access" })).toBeDisabled();
     expect(await axeProblems(page, "empty")).toEqual([]);
@@ -56,7 +58,7 @@ for (const scheme of ["light", "dark"]) {
     // Polling picks up the finished indexing.
     await expect(files.locator(".badge", { hasText: "Ready" })).toBeVisible({ timeout: 10_000 });
     await expect(files.getByText("4 passages")).toBeVisible();
-    await expect(page.locator(".stepper").getByRole("link", { name: /Knowledge/ })).toContainText("1 of 2 ready");
+    await expect(page.locator(".stepper").getByRole("link", { name: /Resources/ })).toContainText("1/2 docs ready");
     await expect(page.getByText(/sent to\s+Google Gemini/)).toBeVisible();
 
     await page.getByLabel("Search the knowledge base").fill("hotel cap in Delhi");
@@ -76,7 +78,7 @@ for (const scheme of ["light", "dark"]) {
     // Detaching keeps the file in the library, offered under "Add from your library".
     await page.getByRole("button", { name: "Detach scan.pdf from this project" }).click();
     await expect(files.getByText("scan.pdf")).toHaveCount(0);
-    await expect(page.locator(".stepper").getByRole("link", { name: /Knowledge/ })).toContainText("1 file");
+    await expect(page.locator(".stepper").getByRole("link", { name: /Resources/ })).toContainText("1 doc");
     const library = page.locator(".panel", { hasText: "Add from your library" });
     await expect(library.getByText("scan.pdf")).toBeVisible();
     await library.getByRole("button", { name: "Attach scan.pdf" }).click();

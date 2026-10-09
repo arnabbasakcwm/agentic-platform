@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { AuthIntro } from "./components/AuthIntro.jsx";
 import { AuthPanel } from "./components/AuthPanel.jsx";
 import { Icon } from "./components/icons.jsx";
 import { Sidebar } from "./components/Sidebar.jsx";
@@ -9,17 +10,18 @@ import { navigate, paths, useRoute } from "./lib/router.js";
 import { ThemeContext, useThemeState } from "./lib/theme.js";
 import { useAction } from "./lib/useAction.js";
 import { DataSourcesPage } from "./pages/DataSourcesPage.jsx";
+import { McpServersPage } from "./pages/McpServersPage.jsx";
 import { KnowledgePage } from "./pages/KnowledgePage.jsx";
 import { NewProjectPage } from "./pages/NewProjectPage.jsx";
 import { ProjectWorkspace } from "./pages/ProjectWorkspace.jsx";
 import { ProjectsPage } from "./pages/ProjectsPage.jsx";
 import { UsagePage } from "./pages/UsagePage.jsx";
+import { ErrorBoundary } from "./components/ErrorBoundary.jsx";
 
 const COLLAPSED_KEY = "agentic-platform.sidebar-collapsed";
 const STEP_LABELS = {
   brief: "Brief",
-  knowledge: "Knowledge",
-  data: "Data",
+  resources: "Resources",
   plan: "Plan",
   compile: "Compile",
   run: "Run",
@@ -41,6 +43,7 @@ function crumbsFor(route, projects) {
   if (route.page === "new") return [root, { label: "New project" }];
   if (route.page === "knowledge") return [{ label: "Knowledge" }];
   if (route.page === "data") return [{ label: "Data sources" }];
+  if (route.page === "mcp") return [{ label: "MCP servers" }];
   if (route.page === "usage") return [{ label: "Usage" }];
   if (route.page === "project") {
     const known = projects?.find((p) => p.project_id === route.id);
@@ -165,26 +168,31 @@ function Console() {
   if (!user) {
     return (
       <div className="authscreen">
-        <div className="brand">
-          <span className="brand__mark">
-            <Icon name="brand" size={15} />
-          </span>
-          <span className="brand__name">Agentic Platform</span>
-        </div>
-        {user === null && (
-          <AuthPanel
-            onLogin={(c) => authenticate(api.login, c)}
-            onRegister={(c) => authenticate(api.register, c)}
-            busy={auth.busy}
-            error={auth.error}
-            notice={authNotice}
-            disabled={health === "offline"}
-          />
-        )}
-        <div className="authscreen__status row">
-          <HealthPill health={health} />
-          <ThemeToggle />
-        </div>
+        <AuthIntro />
+        <main className="authscreen__main">
+          <div className="authscreen__status row">
+            <HealthPill health={health} />
+            <ThemeToggle />
+          </div>
+          <div className="authscreen__form">
+            <div className="brand authscreen__brand">
+              <span className="brand__mark">
+                <Icon name="brand" size={15} />
+              </span>
+              <span className="brand__name">Agentic Platform</span>
+            </div>
+            {user === null && (
+              <AuthPanel
+                onLogin={(c) => authenticate(api.login, c)}
+                onRegister={(c) => authenticate(api.register, c)}
+                busy={auth.busy}
+                error={auth.error}
+                notice={authNotice}
+                disabled={health === "offline"}
+              />
+            )}
+          </div>
+        </main>
       </div>
     );
   }
@@ -211,41 +219,45 @@ function Console() {
         )}
 
         <main className="content">
-          {route.page === "projects" && (
-            <ProjectsPage
-              projects={projects}
-              error={projectsError}
-              onRetry={refreshProjects}
-              onRenamed={refreshProjects}
-              onDeleted={() => {
-                refreshProjects();
-                refreshKnowledgeCount();
-              }}
-            />
-          )}
-          {route.page === "knowledge" && (
-            <KnowledgePage onCountChanged={setKnowledgeCount} />
-          )}
-          {route.page === "data" && <DataSourcesPage />}
-          {route.page === "usage" && <UsagePage projects={projects} />}
-          {route.page === "new" && (
-            <NewProjectPage
-              tools={tools}
-              providers={providers}
-              disabled={health === "offline"}
-              onCreated={refreshProjects}
-            />
-          )}
-          {route.page === "project" && (
-            <ProjectWorkspace
-              key={route.id}
-              tools={tools}
-              providers={providers}
-              id={route.id}
-              step={route.step}
-              onChanged={refreshProjects}
-            />
-          )}
+          <ErrorBoundary key={window.location.hash}>
+            {route.page === "projects" && (
+              <ProjectsPage
+                projects={projects}
+                error={projectsError}
+                onRetry={refreshProjects}
+                onRenamed={refreshProjects}
+                onDeleted={() => {
+                  refreshProjects();
+                  refreshKnowledgeCount();
+                }}
+              />
+            )}
+            {route.page === "knowledge" && (
+              <KnowledgePage onCountChanged={setKnowledgeCount} />
+            )}
+            {route.page === "data" && <DataSourcesPage />}
+            {route.page === "mcp" && <McpServersPage />}
+            {route.page === "usage" && <UsagePage projects={projects} />}
+            {route.page === "new" && (
+              <NewProjectPage
+                tools={tools}
+                providers={providers}
+                disabled={health === "offline"}
+                onCreated={refreshProjects}
+              />
+            )}
+            {route.page === "project" && (
+              <ProjectWorkspace
+                key={route.id}
+                tools={tools}
+                providers={providers}
+                id={route.id}
+                step={route.step}
+                tab={route.tab}
+                onChanged={refreshProjects}
+              />
+            )}
+          </ErrorBoundary>
         </main>
       </div>
     </div>

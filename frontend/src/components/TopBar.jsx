@@ -42,7 +42,7 @@ export function TopBar({ crumbs, health }) {
         {crumbs.map((crumb, i) => {
           const last = i === crumbs.length - 1;
           return (
-            <span key={i} style={{ display: "contents" }}>
+            <span key={i} className="crumbs__item">
               {i > 0 && <span className="crumbs__sep">/</span>}
               {last || !crumb.href ? (
                 <span className={last ? "crumbs__current" : undefined}>{crumb.label}</span>

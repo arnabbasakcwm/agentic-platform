@@ -1,4 +1,4 @@
-import { RunHistory } from "../../components/RunHistory.jsx";
+import { RunHistoryDrawer } from "../../components/RunHistory.jsx";
 import { useDeployedRuns } from "../../lib/useDeployedRuns.js";
 import { useEffect, useState } from "react";
 import { Icon } from "../../components/icons.jsx";
@@ -69,7 +69,7 @@ function SetupHelp({ region }) {
   return (
     <Callout tone="warn" title="Deployment isn't set up on this server">
       <p>The API found no AWS credentials. To enable deploying:</p>
-      <ol className="steps-list" style={{ marginTop: 6 }}>
+      <ol className="steps-list mt-field">
         <li>
           Install the AWS CLI and run <code>aws configure</code> (or{" "}
           <code>aws sso login</code>) for an account that can use Amazon Bedrock
@@ -156,7 +156,7 @@ function StatusPanel({
           <Callout tone="danger" title="The last deployment failed">
             {deployment.error}
             {deployment.live && (
-              <div style={{ marginTop: 6 }}>
+              <div className="mt-field">
                 Plan v{deployment.live_plan_version} is still live.
               </div>
             )}
@@ -265,6 +265,7 @@ function TryIt({ project }) {
   const deployed = useDeployedRuns(project.project_id);
   const [draft, setDraft] = useState(null);
   const [parseError, setParseError] = useState(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const shown = deployed.shown;
   // The input box shows what you're typing, else the shown run's input, else a sample.
   const input =
@@ -285,54 +286,76 @@ function TryIt({ project }) {
   }
 
   return (
-    <form onSubmit={execute}>
-      <Panel
-        title="Try the live deployment"
-        subtitle="Runs on AgentCore, not on this server."
-        footer={
-          <Button type="submit" variant="primary" loading={deployed.running}>
-            {!deployed.running && <Icon name="play" size={14} />}
-            {deployed.running ? "Running…" : "Run on AgentCore"}
-          </Button>
-        }
-      >
-        <Field label="Task input (JSON)">
-          <textarea
-            className="mono"
-            value={input}
-            onChange={(e) => setDraft(e.target.value)}
-            style={{ minHeight: 120 }}
-            spellCheck={false}
-          />
-        </Field>
-        {parseError && <ErrorCallout error={parseError} />}
-        {deployed.error && <ErrorCallout error={deployed.error} />}
-        {shown?.status === "running" && (
+    <>
+      <form onSubmit={execute}>
+        <Panel
+          title="Try the live deployment"
+          subtitle="Runs on AgentCore, not on this server."
+          actions={
+            <Button
+              size="sm"
+              aria-haspopup="dialog"
+              aria-expanded={historyOpen}
+              onClick={() => setHistoryOpen(true)}
+            >
+              <Icon name="clock" size={14} />
+              History
+              {deployed.runs?.length > 0 && (
+                <span className="count-chip">{deployed.runs.length}</span>
+              )}
+            </Button>
+          }
+          footer={
+            <Button type="submit" variant="primary" loading={deployed.running}>
+              {!deployed.running && <Icon name="play" size={14} />}
+              {deployed.running ? "Running…" : "Run on AgentCore"}
+            </Button>
+          }
+        >
+          <Field label="Task input (JSON)">
+            <textarea
+              className="mono minh-editor"
+              value={input}
+              onChange={(e) => setDraft(e.target.value)}
+              spellCheck={false}
+            />
+          </Field>
+          {parseError && <ErrorCallout error={parseError} />}
+          {deployed.error && <ErrorCallout error={deployed.error} />}
+        </Panel>
+      </form>
+      <Panel title="Result" subtitle="From the live deployment">
+        {!shown ? (
+          <Empty title="No run yet">
+            Run the deployment to see each agent's answer here.
+          </Empty>
+        ) : shown.status === "running" ? (
           <p className="muted tryit__status" role="status">
             Running on AgentCore… you can leave this page; the result is saved
             when it finishes.
           </p>
-        )}
-        {shown?.status === "failed" && shown.error && (
-          <ErrorCallout
-            error={{
-              errorType: shown.error.error_type,
-              message: shown.error.message,
-            }}
-          />
-        )}
-        {shown && shown.status !== "running" && (
-          <div style={{ marginTop: 12 }}>
+        ) : (
+          <>
+            {shown.status === "failed" && shown.error && (
+              <ErrorCallout
+                error={{
+                  errorType: shown.error.error_type,
+                  message: shown.error.message,
+                }}
+              />
+            )}
             <p className="muted tryit__status">
               Finished {timeAgo(shown.finished_at ?? shown.updated_at)} · plan v
               {shown.plan_version}
             </p>
             <UsageLine usage={shown.usage} />
             <ResultOutputs plan={project.plan} result={shown} />
-          </div>
+          </>
         )}
       </Panel>
-      <RunHistory
+      <RunHistoryDrawer
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
         runs={deployed.runs}
         selectedId={shown?.id}
         onSelect={(id) => {
@@ -341,7 +364,7 @@ function TryIt({ project }) {
         }}
         title="Previous runs on AgentCore"
       />
-    </form>
+    </>
   );
 }
 
@@ -360,17 +383,17 @@ response = client.invoke_agent_runtime(
 print(json.loads(response["response"].read()))`;
   return (
     <Panel title="Call it from your app">
-      <p className="muted" style={{ marginBottom: 8 }}>
+      <p className="muted mb-xs">
         Through this platform, with a signed-in user's token. Same input and
         output as Run:
       </p>
       <pre className="codeblock">{curl}</pre>
-      <p className="muted" style={{ margin: "12px 0 8px" }}>
+      <p className="muted my-sm-xs">
         Or directly through AWS, with IAM credentials allowed to invoke the
         runtime:
       </p>
       <pre className="codeblock">{boto}</pre>
-      <p className="muted" style={{ marginTop: 8 }}>
+      <p className="muted mt-xs">
         {deployment.reports_usage
           ? "Direct AWS calls are counted on the Usage page too, from the runtime's logs, after the next sync."
           : "Direct AWS calls to this runtime aren't counted on the Usage page: redeploy to get a runtime that reports its usage."}
@@ -442,38 +465,34 @@ export function DeployStep({ project, onDeploymentChanged }) {
   return (
     <>
       <div className="page">
-        <div className="split split--even">
-          <div className="stack">
-            {!info.available && <SetupHelp region={info.region} />}
-            <StatusPanel
-              project={project}
-              deployment={deployment}
-              available={info.available}
-              onDeploy={startDeploy}
-              onRemove={removeDeployment}
-              deploying={deploy.busy}
-              removing={remove.busy}
-            />
-            {(deploy.error || remove.error) && (
-              <ErrorCallout error={deploy.error || remove.error} />
-            )}
-          </div>
-          <div className="stack">
-            {deployment?.live ? (
-              <>
-                <TryIt project={project} />
-                <CallIt project={project} deployment={deployment} />
-              </>
-            ) : (
-              <Panel title="Once it's live">
-                <p className="muted">
-                  You'll be able to try the deployed flow here, and get the
-                  snippets to call it from your own apps — through this
-                  platform's API, or directly through AWS.
-                </p>
-              </Panel>
-            )}
-          </div>
+        <div className="stack deploy-page">
+          {!info.available && <SetupHelp region={info.region} />}
+          <StatusPanel
+            project={project}
+            deployment={deployment}
+            available={info.available}
+            onDeploy={startDeploy}
+            onRemove={removeDeployment}
+            deploying={deploy.busy}
+            removing={remove.busy}
+          />
+          {(deploy.error || remove.error) && (
+            <ErrorCallout error={deploy.error || remove.error} />
+          )}
+          {deployment?.live ? (
+            <>
+              <TryIt project={project} />
+              <CallIt project={project} deployment={deployment} />
+            </>
+          ) : (
+            <Panel title="Once it's live">
+              <p className="muted">
+                You'll be able to try the deployed flow here, and get the
+                snippets to call it from your own apps — through this platform's
+                API, or directly through AWS.
+              </p>
+            </Panel>
+          )}
         </div>
       </div>
 

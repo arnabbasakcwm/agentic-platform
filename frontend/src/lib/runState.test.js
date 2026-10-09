@@ -70,6 +70,20 @@ describe("run state", () => {
     expect(statuses(s)).toEqual(["failed", "skipped", "skipped"]);
   });
 
+  it("a stopped run keeps what finished and marks nothing as failed", () => {
+    const s = play([
+      ["run_started", { at: 1 }],
+      ["node_started", { node: "a", at: 1 }],
+      ["node_completed", { node: "a", at: 2, output: { content: "done" } }],
+      ["node_started", { node: "b", at: 2 }],
+      ["run_failed", { at: 3, error_type: "RunStopped", message: "you stopped this run" }],
+    ]);
+    expect(s.status).toBe("failed");
+    expect(s.error.errorType).toBe("RunStopped");
+    expect(statuses(s)).toEqual(["completed", "skipped", "skipped"]);
+    expect(s.nodes.b.error).toBe("Stopped before it finished");
+  });
+
   it("records an HTTP failure from before the stream started", () => {
     const s = failRun(startRun(plan, { input: {} }), { errorType: "NotCompiled", message: "compile first" });
     expect(s.status).toBe("failed");

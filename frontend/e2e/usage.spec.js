@@ -85,7 +85,10 @@ for (const scheme of ["light", "dark"]) {
   });
 }
 
-test("a finished run shows its tokens and cost", async ({ page }) => {
+test("a finished run shows its tokens and cost", async ({ page, request }) => {
+  // Start clean: the Run page pre-fills the last run's input, which another spec may
+  // have left as one that never finishes.
+  await request.post("http://127.0.0.1:8765/__reset");
   await page.addInitScript(() => {
     sessionStorage.setItem("agentic-platform.token", "e2e-token");
     localStorage.setItem("agentic-platform.assistant-open", "0");

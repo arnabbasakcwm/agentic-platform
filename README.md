@@ -136,6 +136,9 @@ npm run dev
 Vite proxies `/api` to the backend on port 8000, so both run on one origin in the
 browser. Set `VITE_API_BASE` to point the console at a different API.
 
+**Production:** on a Linux server with Docker, `cp .env.production.example .env.production`,
+fill it in, and run `./deploy.sh`. See [docs/deployment.md](docs/deployment.md).
+
 ### Using the console
 
 1. **Create an account** on the sign-in screen (email and a password of 8+ characters).
@@ -278,9 +281,10 @@ signed-in user's projects. Interactive docs: http://127.0.0.1:8000/docs.
 | `POST /projects/{id}/run` | Run the whole team on an input |
 | `POST /projects/{id}/run/stream` | Same, streaming each agent's progress as Server-Sent Events |
 | `POST /projects/{id}/runs` | Start a run in the background; it's saved as it happens (202) |
-| `GET /projects/{id}/runs?kind=local\|deployed` | The project's last 5 saved runs of that kind |
+| `GET /projects/{id}/runs?kind=local\|deployed` | The project's last 10 saved runs of that kind |
 | `GET /projects/{id}/runs/{run_id}` | One saved run: input, events, outputs, errors, usage |
 | `GET /projects/{id}/runs/{run_id}/stream?after=N` | Replay a saved run's events from N, then follow it live |
+| `POST /projects/{id}/runs/{run_id}/stop` | Stop a running local run; it ends within seconds as failed with `RunStopped` |
 | `POST /projects/{id}/deployment/runs` | Run the deployment in the background (the console's Try it); saved like any run |
 | `POST /projects/{id}/agents/{agent_id}/invoke` | Run one agent on its own |
 | `GET /knowledge` | Your library: every file with the projects it's attached to and its embedding model, the default model for new uploads, limits |
@@ -299,6 +303,16 @@ signed-in user's projects. Interactive docs: http://127.0.0.1:8000/docs.
 | `GET /projects/{id}/datasources` | The sources attached to a project, the ones that could be, and which agents can query |
 | `POST` / `DELETE /projects/{id}/datasources/{source_id}` | Attach / detach a source (attaching is the opt-in) |
 | `DELETE /datasources/{id}` | Remove a data source |
+| `GET /mcp` | Your MCP servers (URLs masked, never header values), the projects you can attach them to, whether secrets can be stored |
+| `POST /mcp` | Connect a remote MCP server (`{name, url, headers?}`); checks the address, signs in, lists tools (none approved) |
+| `PUT /mcp/{id}/tools` | Set which tools agents may use (`{approved: [...]}`); pins each tool's definition |
+| `POST /mcp/{id}/refresh` | List the tools again; a changed approved tool is held back until approved again |
+| `PUT /mcp/{id}/secret` | Replace the URL and/or header values (checked first) |
+| `PUT /mcp/{id}/projects` | Set which projects may use the server (the opt-in) |
+| `POST /mcp/{id}/test` | Run one approved tool with the same checks and limits as an agent's call |
+| `GET /projects/{id}/mcp` | The servers attached to a project, and which tools its agents use |
+| `POST` / `DELETE /projects/{id}/mcp/{server_id}` | Attach / detach a server |
+| `DELETE /mcp/{id}` | Remove a server (refused while a plan uses its tools) |
 | `GET /usage?days=30&project_id=` | Models, tokens and estimated cost: totals, per day, per model, per project, per activity, recent runs |
 | `POST /usage/sync` | Read deployed runtimes' usage logs now, counting runs invoked straight through AWS |
 | `GET /usage/pricing` | The price table in use, and models you've used that have no price |
@@ -358,7 +372,7 @@ Then, in the console's **Data sources** page:
 
 You can also pick data sources when creating a project ("Add data" in the new-project
 chat): the planner is told the table names and gives the right agents the SQL tools. Or
-attach them on the project's **Data** step, which also offers "Give agents access" and a
+attach them on the project's **Resources** step (Databases tab), which also offers "Give agents access" and a
 test query. Otherwise, give an agent `sql_schema` and `sql_query` on the Brief page.
 
 Every query is checked by the platform before Google sees it:
@@ -367,6 +381,25 @@ Every query is checked by the platform before Google sees it:
 - at most 200 rows returned.
 
 Check the connection from a terminal with `uv run python scripts/bigquery_check.py`.
+
+## MCP servers (agents use tools from your servers)
+
+Agents can call tools from remote MCP servers: Zoho, GitHub, your own servers, any
+server that speaks MCP over HTTPS. Set `PLATFORM_SECRET_KEY` in `backend/.env` first;
+server URLs and headers are stored encrypted with it. Then, on the console's
+**MCP servers** page:
+1. **Connect:** paste the URL and any headers (a token or API key). The check names the
+   step that failed.
+2. **Approve tools:** none are approved at first. A tool that may change data asks you to
+   confirm. If the server later changes an approved tool, it's held back for review.
+3. **Attach the server to projects** (or use the project's **Resources** step, MCP tools tab, or "Add MCP" in
+   the new-project chat). Whatever agents pass to a tool is sent to that server.
+4. **Give agents the tools** on the Brief step, where the chips read *Server · tool*.
+
+Remote servers only, at public addresses. Each call has a 60 s timeout and its result is
+cut at 12,000 characters. Servers that need an OAuth sign-in aren't supported yet. Setup
+and per-server examples (Zoho, GitHub, in-house) are in
+[docs/mcp_setup.md](docs/mcp_setup.md).
 
 ## Models that can't call tools
 

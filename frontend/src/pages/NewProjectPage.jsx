@@ -19,6 +19,8 @@ import {
   formatBytes,
 } from "../lib/knowledge.js";
 import { paths } from "../lib/router.js";
+import { addAnswer, latestBriefTurn, toApiMessages } from "../lib/intake.js";
+import { Markdown } from "../components/Markdown.jsx";
 import { useAction } from "../lib/useAction.js";
 
 const MIN_AGENTS = 1;
@@ -277,6 +279,78 @@ function DataTray({ selected, onChange, disabled }) {
   );
 }
 
+// ------------------------------------------------------------------ MCP servers tray
+/**
+ * Pick MCP servers for the next project. They're attached when the project is created, and
+ * the planner is told the names and descriptions of their approved tools.
+ */
+function McpTray({ selected, onChange, disabled }) {
+  const [body, setBody] = useState(null);
+  const load = useAction();
+  const { run: runLoad } = load;
+
+  useEffect(() => {
+    runLoad(() => api.mcpServers()).then((res) => res && setBody(res));
+  }, [runLoad]);
+
+  const ids = new Set(selected.map((s) => s.id));
+  const usable = (body?.servers ?? []).filter((s) =>
+    s.tools.some((t) => t.usable),
+  );
+
+  function toggle(server) {
+    onChange(
+      ids.has(server.id)
+        ? selected.filter((s) => s.id !== server.id)
+        : [...selected, server],
+    );
+  }
+
+  return (
+    <div className="tray" id="composer-mcp">
+      <div className="tray__row tray__row--top">
+        <span className="tray__label">Tools</span>
+        <div className="tray__control">
+          <ErrorCallout error={load.error} />
+          {body && usable.length === 0 && (
+            <span className="tray__hint">
+              No MCP server with approved tools yet.{" "}
+              <a href="#/mcp">Connect a server and approve its tools</a> first.
+            </span>
+          )}
+          {usable.length > 0 && (
+            <fieldset className="filepick">
+              <legend className="tray__hint">MCP servers agents may use</legend>
+              {usable.map((s) => {
+                const n = s.tools.filter((t) => t.usable).length;
+                return (
+                  <label key={s.id} className="filepick__item">
+                    <input
+                      type="checkbox"
+                      checked={ids.has(s.id)}
+                      onChange={() => toggle(s)}
+                      disabled={disabled}
+                    />
+                    <Icon name="bolt" size={14} />
+                    <span className="filepick__name">{s.name}</span>
+                    <span className="muted filepick__size">
+                      {n} approved tool{n === 1 ? "" : "s"}
+                    </span>
+                  </label>
+                );
+              })}
+            </fieldset>
+          )}
+          <span className="tray__hint">
+            Agents can call these servers&apos; approved tools; whatever they
+            pass to a tool is sent to that server.
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ------------------------------------------------------------------ settings tray
 function SettingsTray({
   settings,
@@ -332,7 +406,7 @@ function SettingsTray({
       <div className="tray__row">
         <span className="tray__label">Team size</span>
         <div className="tray__control">
-          <label className="row" style={{ gap: 8 }}>
+          <label className="row gap-xs">
             <Switch
               checked={auto}
               onChange={(on) => onChange({ agentCount: on ? null : 3 })}
@@ -533,12 +607,143 @@ function PlanReply({ project, providers, onRenamed }) {
   );
 }
 
-function Message({ message, onRetry, busy, providers, onRenamed }) {
+function Typing({ children }) {
+  return (
+    <div className="typing">
+      <span className="typing__dots" aria-hidden="true">
+        <span />
+        <span />
+        <span />
+      </span>
+      {children}
+    </div>
+  );
+}
+
+function ErrorBody({ error, onRetry, busy }) {
+  return (
+    <>
+      <p className="msg__error-title">{error.errorType ?? "Error"}</p>
+      <p>{error.message}</p>
+      <div className="msg__actions">
+        <button
+          type="button"
+          className="btn btn--sm"
+          onClick={onRetry}
+          disabled={busy}
+        >
+          Try again
+        </button>
+      </div>
+    </>
+  );
+}
+
+/** One intake reply: the answer, and the clarifying questions with quick answers. */
+function TurnReply({ turn, onAnswer, busy }) {
+  return (
+    <>
+      <Markdown>{turn.reply}</Markdown>
+      {turn.questions?.length > 0 && (
+        <ol className="intake__questions">
+          {turn.questions.map((q) => (
+            <li key={q.question}>
+              <span className="intake__question">{q.question}</span>
+              {q.options?.length > 0 && (
+                <span
+                  className="intake__options"
+                  role="group"
+                  aria-label={`Answers to: ${q.question}`}
+                >
+                  {q.options.map((option) => (
+                    <button
+                      key={option}
+                      type="button"
+                      className="chip"
+                      onClick={() => onAnswer(q.question, option)}
+                      disabled={busy}
+                    >
+                      {option}
+                    </button>
+                  ))}
+                </span>
+              )}
+            </li>
+          ))}
+        </ol>
+      )}
+    </>
+  );
+}
+
+/**
+ * The task brief assembled so far, editable, and the button that plans the team. It's
+ * the user's call: the button works whenever there's a brief, and is the main action
+ * once the assistant says it has what it needs.
+ */
+function BriefCard({ message, settingsLabel, onChange, onCreate, busy }) {
+  const ready = Boolean(message.turn.ready);
+  const brief = message.editedBrief ?? message.turn.brief;
+  return (
+    <section
+      className={`briefcard ${ready ? "briefcard--ready" : ""}`}
+      aria-label="Task brief"
+    >
+      <header className="briefcard__head">
+        <span className="briefcard__title">Task brief</span>
+        {ready ? (
+          <Pill tone="success" dot>
+            Ready to plan
+          </Pill>
+        ) : (
+          <Pill>Draft — answer the questions for a better plan</Pill>
+        )}
+      </header>
+      <textarea
+        className="briefcard__text"
+        value={brief}
+        onChange={(e) => onChange(e.target.value)}
+        aria-label="Task brief (you can edit it)"
+        rows={Math.min(10, Math.max(3, Math.ceil(brief.length / 90)))}
+        disabled={busy}
+      />
+      <div className="briefcard__bar">
+        <span className="muted briefcard__meta">{settingsLabel}</span>
+        <button
+          type="button"
+          className={`btn btn--sm ${ready ? "btn--primary" : ""}`}
+          onClick={onCreate}
+          disabled={busy || !brief.trim()}
+        >
+          <Icon name="bolt" size={13} />
+          Create plan
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function Message({
+  message,
+  onRetry,
+  busy,
+  providers,
+  onRenamed,
+  onAnswer,
+  briefCard,
+}) {
+  if (message.role === "divider") {
+    return (
+      <div className="intake__divider" role="separator">
+        <span>New task</span>
+      </div>
+    );
+  }
   if (message.role === "user") {
     return (
       <div className="msg msg--user">
         <div className="msg__bubble">
-          <p className="prose">{message.brief}</p>
+          <p className="prose">{message.text}</p>
           {message.files?.length > 0 && (
             <ul className="msg__files" aria-label="Knowledge files">
               {message.files.map((f) => (
@@ -549,53 +754,40 @@ function Message({ message, onRetry, busy, providers, onRenamed }) {
               ))}
             </ul>
           )}
-          <span className="msg__meta">{message.settingsLabel}</span>
         </div>
       </div>
     );
   }
 
+  const failed = message.status === "error";
   return (
     <div className="msg msg--assistant" aria-live="polite">
       <AssistantAvatar />
-      <div
-        className={`msg__bubble ${message.status === "error" ? "msg__bubble--error" : ""}`}
-      >
-        {message.status === "pending" && (
-          <div className="typing">
-            <span className="typing__dots" aria-hidden="true">
-              <span />
-              <span />
-              <span />
-            </span>
-            Designing your agent team. This can take a minute or so.
-          </div>
-        )}
-        {message.status === "done" && (
-          <PlanReply
-            project={message.project}
-            providers={providers}
-            onRenamed={(updated) => onRenamed(message.id, updated)}
-          />
-        )}
-        {message.status === "error" && (
-          <>
-            <p className="msg__error-title">
-              {message.error.errorType ?? "Error"}
-            </p>
-            <p>{message.error.message}</p>
-            <div className="msg__actions">
-              <button
-                type="button"
-                className="btn btn--sm"
-                onClick={onRetry}
-                disabled={busy}
-              >
-                Try again
-              </button>
-            </div>
-          </>
-        )}
+      <div className="msg__stack">
+        <div className={`msg__bubble ${failed ? "msg__bubble--error" : ""}`}>
+          {message.status === "pending" &&
+            (message.kind === "plan" ? (
+              <Typing>
+                Designing your agent team. This can take a minute or so.
+              </Typing>
+            ) : (
+              <Typing>Thinking…</Typing>
+            ))}
+          {message.status === "done" && message.kind === "turn" && (
+            <TurnReply turn={message.turn} onAnswer={onAnswer} busy={busy} />
+          )}
+          {message.status === "done" && message.kind === "plan" && (
+            <PlanReply
+              project={message.project}
+              providers={providers}
+              onRenamed={(updated) => onRenamed(message.id, updated)}
+            />
+          )}
+          {failed && (
+            <ErrorBody error={message.error} onRetry={onRetry} busy={busy} />
+          )}
+        </div>
+        {briefCard}
       </div>
     </div>
   );
@@ -612,6 +804,9 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
   const [dataOpen, setDataOpen] = useState(false);
   // Data sources for the next project.
   const [sources, setSources] = useState([]);
+  const [mcpOpen, setMcpOpen] = useState(false);
+  // MCP servers for the next project.
+  const [mcpServers, setMcpServers] = useState([]);
   // agentCount null = the planner decides. tools null = follow the platform default.
   const [settings, setSettings] = useState(readSettings);
   // The next project's name: per project, so it's cleared once a message is sent.
@@ -653,26 +848,26 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
     }
   }
 
+  function patchMessage(id, patch) {
+    setMessages((all) =>
+      all.map((m) => (m.id === id ? { ...m, ...patch } : m)),
+    );
+  }
+
+  // Planning: only ever started by the user (the button, or a clear "go ahead").
   async function plan(request, replyId) {
     const chosen = modelList.find(
       (p) => `${p.provider}/${p.model}` === request.model,
     );
     if (request.model && !chosen) {
       // Never fall back to the platform default without saying so.
-      setMessages((all) =>
-        all.map((m) =>
-          m.id === replyId
-            ? {
-                ...m,
-                status: "error",
-                error: {
-                  errorType: "ModelUnavailable",
-                  message: `The model you chose (${request.model}) isn't in the list of available models right now. Choose a model in the settings and send again.`,
-                },
-              }
-            : m,
-        ),
-      );
+      patchMessage(replyId, {
+        status: "error",
+        error: {
+          errorType: "ModelUnavailable",
+          message: `The model you chose (${request.model}) isn't in the list of available models right now. Choose a model in the settings and try again.`,
+        },
+      });
       return;
     }
     try {
@@ -686,58 +881,122 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
           : null,
         documentIds: request.files.map((f) => f.id),
         datasourceIds: request.sources.map((s) => s.id),
+        mcpServerIds: (request.mcpServers ?? []).map((s) => s.id),
         name: request.name,
+        intake: request.intake,
       });
-      setMessages((all) =>
-        all.map((m) =>
+      // The next message starts a new task.
+      const dividerId = ++nextMessageId;
+      setMessages((all) => [
+        ...all.map((m) =>
           m.id === replyId ? { ...m, status: "done", project } : m,
         ),
-      );
+        { id: dividerId, role: "divider" },
+      ]);
+      // The attachments and name belonged to this project.
+      setFiles([]);
+      setName("");
       onCreated(project);
     } catch (error) {
-      setMessages((all) =>
-        all.map((m) =>
-          m.id === replyId ? { ...m, status: "error", error } : m,
-        ),
-      );
+      patchMessage(replyId, { status: "error", error });
+    }
+  }
+
+  // `thread`: the conversation to keep with the project (passed in when planning starts
+  // from inside a reply, where this render's messages are already out of date).
+  function createPlan(turnMessage, thread = messages) {
+    if (busy && !turnMessage.autoPlan) return;
+    const brief = (turnMessage.editedBrief ?? turnMessage.turn.brief).trim();
+    if (!brief) return;
+    const request = {
+      brief,
+      ...effectiveSettings,
+      files,
+      sources,
+      mcpServers,
+      name: name.trim() || turnMessage.turn.name || "",
+      intake: toApiMessages(thread),
+    };
+    setSettingsOpen(false);
+    setFilesOpen(false);
+    // Ids are taken here, never inside a state updater (React may run those twice).
+    const replyId = ++nextMessageId;
+    setMessages((all) => [
+      ...all,
+      {
+        id: replyId,
+        role: "assistant",
+        kind: "plan",
+        status: "pending",
+        request,
+      },
+    ]);
+    plan(request, replyId);
+  }
+
+  // One intake turn: never creates anything by itself.
+  async function talk(thread, replyId) {
+    try {
+      const turn = await api.briefChat({
+        messages: toApiMessages(thread),
+        documentIds: files.map((f) => f.id),
+        datasourceIds: sources.map((s) => s.id),
+        mcpServerIds: mcpServers.map((s) => s.id),
+      });
+      const done = { status: "done", turn };
+      patchMessage(replyId, done);
+      // "Yes, plan it" in the chat counts as pressing Create plan.
+      if (turn.plan_now && turn.brief?.trim()) {
+        const answered = {
+          id: replyId,
+          role: "assistant",
+          kind: "turn",
+          ...done,
+        };
+        createPlan({ ...answered, autoPlan: true }, [...thread, answered]);
+      }
+    } catch (error) {
+      patchMessage(replyId, { status: "error", error });
     }
   }
 
   function send(event) {
     event?.preventDefault();
-    const brief = draft.trim();
-    if (!brief || busy || disabled) return;
-    // Settings are captured per message, so changing them later never rewrites history.
-    const request = { brief, ...effectiveSettings, files, sources, name };
-    setName("");
-    const replyId = ++nextMessageId;
-    setMessages((all) => [
-      ...all,
-      {
-        id: ++nextMessageId,
-        role: "user",
-        brief,
-        files,
-        settingsLabel: describeSettings(request, tools, providers),
-      },
-      { id: replyId, role: "assistant", status: "pending", request },
-    ]);
+    const text = draft.trim();
+    if (!text || busy || disabled) return;
+    const user = { id: ++nextMessageId, role: "user", text, files };
+    const reply = {
+      id: ++nextMessageId,
+      role: "assistant",
+      kind: "turn",
+      status: "pending",
+    };
+    const thread = [...messages, user];
+    setMessages([...thread, reply]);
     setDraft("");
     setSettingsOpen(false);
     setFilesOpen(false);
-    // The files belong to this project; the next one starts without any.
-    setFiles([]);
-    plan(request, replyId);
+    talk(thread, reply.id);
   }
 
   function retry(message) {
-    setMessages((all) =>
-      all.map((m) =>
-        m.id === message.id ? { ...m, status: "pending", error: null } : m,
-      ),
-    );
-    plan(message.request, message.id);
+    patchMessage(message.id, { status: "pending", error: null });
+    if (message.kind === "plan") {
+      plan(message.request, message.id);
+    } else {
+      talk(
+        messages.filter((m) => m.id < message.id),
+        message.id,
+      );
+    }
   }
+
+  function answer(question, option) {
+    setDraft((d) => addAnswer(d, question, option));
+    textareaRef.current?.focus();
+  }
+
+  const briefTurn = latestBriefTurn(messages);
 
   function onKeyDown(event) {
     if (
@@ -759,9 +1018,9 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
             </span>
             <h1>What should your agent team do?</h1>
             <p className="muted">
-              Describe the task in your own words. The planner decides how many
-              agents you need, what each one does and how they work together.
-              You review the plan before anything runs.
+              Tell me what you'd like your agents to do. I&apos;ll ask a few
+              questions to get it right, then plan the team when you&apos;re
+              ready. You review the plan before anything runs.
             </p>
             <div className="suggestions">
               {EXAMPLES.map((example) => (
@@ -806,6 +1065,24 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
                 onCreated(updated);
               }}
               onRetry={() => retry(message)}
+              onAnswer={answer}
+              briefCard={
+                briefTurn?.id === message.id ? (
+                  <BriefCard
+                    message={message}
+                    settingsLabel={describeSettings(
+                      effectiveSettings,
+                      tools,
+                      providers,
+                    )}
+                    onChange={(text) =>
+                      patchMessage(message.id, { editedBrief: text })
+                    }
+                    onCreate={() => createPlan(message)}
+                    busy={busy}
+                  />
+                ) : null
+              }
             />
           ))
         )}
@@ -821,6 +1098,13 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
             <DataTray
               selected={sources}
               onChange={setSources}
+              disabled={busy}
+            />
+          )}
+          {mcpOpen && (
+            <McpTray
+              selected={mcpServers}
+              onChange={setMcpServers}
               disabled={busy}
             />
           )}
@@ -867,8 +1151,8 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
               onKeyDown={onKeyDown}
               placeholder={
                 empty
-                  ? "Describe the task for your agent team…"
-                  : "Describe another task to plan a new team…"
+                  ? "Describe the task, or ask how to start…"
+                  : "Reply, answer the questions, or describe another task…"
               }
               aria-label="Task description"
               disabled={disabled}
@@ -900,20 +1184,35 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
               </button>
               <button
                 type="button"
+                className={`composer__options ${mcpOpen ? "composer__options--open" : ""}`}
+                onClick={() => setMcpOpen((open) => !open)}
+                aria-expanded={mcpOpen}
+                aria-controls="composer-mcp"
+                title="Let the agents use tools from your MCP servers"
+              >
+                <Icon name="bolt" size={14} />
+                {mcpServers.length
+                  ? `${mcpServers.length} MCP server${mcpServers.length === 1 ? "" : "s"}`
+                  : "Add MCP"}
+              </button>
+              <button
+                type="button"
                 className={`composer__options ${settingsOpen ? "composer__options--open" : ""}`}
                 onClick={() => setSettingsOpen((open) => !open)}
                 aria-expanded={settingsOpen}
                 aria-controls="composer-settings"
               >
                 <Icon name="sliders" size={14} />
-                {describeSettings(effectiveSettings, tools, modelList)}
+                <span className="composer__label">
+                  {describeSettings(effectiveSettings, tools, modelList)}
+                </span>
               </button>
               <button
                 type="submit"
                 className="composer__send"
                 disabled={disabled || busy || !draft.trim()}
-                aria-label="Plan this team"
-                title="Plan this team (Enter)"
+                aria-label="Send"
+                title="Send (Enter)"
               >
                 {busy ? (
                   <span className="spin" />
@@ -924,8 +1223,9 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
             </div>
           </div>
           <p className="composer__hint">
-            Enter to send, Shift+Enter for a new line. Each message plans a new
-            project — nothing runs until you choose to run it.
+            Enter to send, Shift+Enter for a new line. The team is planned only
+            when you press Create plan or say so — nothing runs until you choose
+            to run it.
           </p>
         </div>
       </form>

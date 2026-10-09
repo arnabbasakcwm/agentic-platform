@@ -463,6 +463,34 @@ def test_data_sources_are_scoped_and_updatable(sources):
     assert sources.list("u1") == []
 
 
+# ------------------------------------------------------------------ MCP servers
+def test_mcp_servers_are_scoped_and_approval_pins_the_definition(backend):
+    from agentic_platform.stores import InMemoryMcpServerStore, McpServer, McpTool, MongoMcpServerStore
+
+    store = InMemoryMcpServerStore() if backend is None else MongoMcpServerStore(backend)
+    tool = McpTool(name="search", description="Search records", input_schema={"type": "object"})
+    approved = tool.model_copy(update={"approved": True, "approved_hash": tool.definition_hash()})
+    server = McpServer(
+        id="m1", tenant_id="u1", name="CRM", slug="crm", display_url="https://crm.example.com/mcp/••••",
+        host="crm.example.com", secret="sealed", tools=[approved, McpTool(name="delete_all")],
+    )
+    store.add(server)
+    store.add(server.model_copy(update={"id": "m2", "tenant_id": "u2"}))
+    assert [s.id for s in store.list("u1")] == ["m1"]
+    assert store.get("u2", "m1") is None  # never another tenant's
+    got = store.get("u1", "m1")
+    assert [t.name for t in got.usable_tools()] == ["search"]  # the unapproved tool never is
+    # The server changed the tool's description: still marked approved, but no longer usable.
+    edited = approved.model_copy(update={"description": "Search and delete records"})
+    assert not edited.usable()
+    assert store.update("u1", "m1", project_ids=["p1"]).project_ids == ["p1"]
+    assert store.update("u2", "m1", project_ids=[]) is None
+    assert [s.id for s in store.list("u1", "p1")] == ["m1"] and store.list("u1", "p2") == []
+    assert store.detach_project("u1", "p1") == 1 and store.get("u1", "m1").project_ids == []
+    assert store.delete("u2", "m1") is False and store.delete("u1", "m1") is True
+    assert store.list("u1") == []
+
+
 # ------------------------------------------------------------------ model capabilities
 def test_model_capabilities_round_trip(backend):
     from agentic_platform.stores import InMemoryModelCapabilityStore, ModelCapability, MongoModelCapabilityStore
@@ -487,24 +515,26 @@ def runs(backend):
 def test_runs_record_events_keep_the_newest_and_stay_private(runs):
     from datetime import datetime, timedelta, timezone
 
-    from agentic_platform.stores import RunRecord
+    from agentic_platform.stores import RUNS_KEPT, RunRecord
 
     start = datetime(2026, 10, 6, 12, tzinfo=timezone.utc)
-    for i in range(7):
+    count = RUNS_KEPT + 2
+    for i in range(count):
         runs.create(RunRecord(id=f"r{i}", tenant_id="u1", project_id="p1", started_at=start + timedelta(minutes=i)))
     runs.create(RunRecord(id="d1", tenant_id="u1", project_id="p1", kind="deployed"))
-    runs.update("u1", "r6", new_events=[{"event": "run_started"}])
-    runs.update("u1", "r6", new_events=[{"event": "node_started", "node": "a"}], outputs={"a": {"content": "x"}})
-    runs.update("u2", "r6", status="failed")  # another tenant: ignored
-    run = runs.get("u1", "p1", "r6")
+    newest = f"r{count - 1}"
+    runs.update("u1", newest, new_events=[{"event": "run_started"}])
+    runs.update("u1", newest, new_events=[{"event": "node_started", "node": "a"}], outputs={"a": {"content": "x"}})
+    runs.update("u2", newest, status="failed")  # another tenant: ignored
+    run = runs.get("u1", "p1", newest)
     assert [e["event"] for e in run.events] == ["run_started", "node_started"]
     assert run.outputs == {"a": {"content": "x"}} and run.status == "running"
-    assert runs.get("u2", "p1", "r6") is None and runs.get("u1", "p2", "r6") is None
+    assert runs.get("u2", "p1", newest) is None and runs.get("u1", "p2", newest) is None
 
     assert runs.prune("u1", "p1", "local") == 2
-    assert [r.id for r in runs.list("u1", "p1", "local")] == ["r6", "r5", "r4", "r3", "r2"]
+    assert [r.id for r in runs.list("u1", "p1", "local")] == [f"r{i}" for i in range(count - 1, 1, -1)]
     assert [r.id for r in runs.list("u1", "p1", "deployed")] == ["d1"]  # kept separately
-    assert runs.delete_for_project("u1", "p1") == 6
+    assert runs.delete_for_project("u1", "p1") == RUNS_KEPT + 1
     assert runs.list("u1", "p1", "local") == []
 
 

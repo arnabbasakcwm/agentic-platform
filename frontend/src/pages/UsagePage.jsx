@@ -38,7 +38,7 @@ const RANGES = [7, 30, 90];
 function Stat({ label, value, hint }) {
   return (
     <div className="kstat">
-      <span className="kstat__value mono">{value}</span>
+      <span className="kstat__value">{value}</span>
       <span className="kstat__label">{label}</span>
       {hint && <span className="kstat__hint">{hint}</span>}
     </div>
@@ -225,6 +225,9 @@ function RunRow({ run, currency }) {
                     )}
                     {a.kind === "bigquery_query" && (
                       <span className="table__sub">data query</span>
+                    )}
+                    {a.kind === "mcp_call" && (
+                      <span className="table__sub">MCP tool call</span>
                     )}
                   </td>
                   <td>

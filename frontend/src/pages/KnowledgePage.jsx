@@ -47,7 +47,7 @@ function Stat({ label, value, tone }) {
     <div
       className={["kstat", tone && `kstat--${tone}`].filter(Boolean).join(" ")}
     >
-      <span className="kstat__value mono">{value}</span>
+      <span className="kstat__value">{value}</span>
       <span className="kstat__label">{label}</span>
     </div>
   );
@@ -98,13 +98,13 @@ function ProjectAttachments({ doc, projects, projectsById, onChange }) {
           <span key={p.project_id} className="kattach__item">
             <a
               className="kproject"
-              href={paths.project(p.project_id, "knowledge")}
+              href={paths.project(p.project_id, "resources", "documents")}
             >
               {projectName(p, 60)}
             </a>
             {p.ready > 0 && p.used_by.length === 0 && (
               <a
-                href={paths.project(p.project_id, "knowledge")}
+                href={paths.project(p.project_id, "resources", "documents")}
                 className="kproject__hint"
               >
                 <Pill tone="warn">Agents can&apos;t use yet</Pill>

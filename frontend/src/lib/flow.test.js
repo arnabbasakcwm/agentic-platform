@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   END,
   START,
+  AGENT_PALETTE,
   agentColor,
   agentTitle,
   buildGraph,
@@ -49,7 +50,7 @@ describe("buildGraph", () => {
 
   it("gives agents readable titles and stable colours", () => {
     expect(agentTitle("travel_advisor")).toBe("Travel Advisor");
-    expect(agentColor(0)).toBe(agentColor(12));
+    expect(agentColor(0)).toBe(agentColor(AGENT_PALETTE.length));
     expect(agentColor(0)).not.toBe(agentColor(1));
   });
 });

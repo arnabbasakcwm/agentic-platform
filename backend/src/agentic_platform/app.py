@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 import time
 import uuid
@@ -39,6 +40,7 @@ from .config import (
     BIGQUERY_PROJECT,
     GCP_SERVICE_ACCOUNT,
     GCP_WIF_AUDIENCE,
+    MCP_CALL_TIMEOUT_S,
     AGENTCORE_CODE_BUCKET,
     AGENTCORE_EXECUTION_ROLE_ARN,
     AGENTCORE_REGION,
@@ -53,6 +55,8 @@ from .config import (
 )
 from . import capabilities as caps
 from . import datasources as ds
+from . import mcp_client as mc
+from . import secrets_box
 from .deploy import build_package, remove_deployment, run_deployment, runtime_environment, runtime_name
 from .errors import (
     AuthenticationError,
@@ -65,16 +69,22 @@ from .errors import (
     DataSourceError,
     ModelCannotCallToolsError,
     RunNotFoundError,
+    RunNotStoppableError,
+    RunStoppedError,
     DataSourceNotFoundError,
     DataSourceUnavailableError,
     DocumentNotFoundError,
     KnowledgeBusyError,
     KnowledgeError,
     KnowledgeUnavailableError,
+    McpError,
+    McpServerNotFoundError,
+    McpUnavailableError,
     NotDeployedError,
     PlanConflictError,
     ProjectDeployedError,
     RunTimeoutError,
+    SecretsNotConfiguredError,
     MissingToolKeyError,
     PlannerError,
     PlatformError,
@@ -90,9 +100,9 @@ from .graph_builder import (
     get_embeddings,
     run_graph,
     run_graph_events,
-    run_single_agent,
+    run_agent_events,
 )
-from .meta_planner_prompt import plan_project, revise_plan
+from .meta_planner_prompt import discuss_brief, plan_project, revise_plan
 from .stores import (
     DataSource,
     ModelCapability,
@@ -100,6 +110,9 @@ from .stores import (
     ChatMessage,
     Deployment,
     KnowledgeDocument,
+    McpAuthKind,
+    McpServer,
+    McpTool,
     ProjectRecord,
     UsageRecord,
     UserRecord,
@@ -108,6 +121,7 @@ from .stores import (
     brief_title,
     make_run_store,
     make_datasource_store,
+    make_mcp_store,
     make_stores,
 )
 from .usage import UsageCollector
@@ -119,8 +133,10 @@ from .tools import (
     TOOL_REGISTRY,
     TOOL_SUMMARIES,
     default_tool_names,
+    is_mcp_tool,
     uses_data,
     uses_knowledge,
+    uses_mcp,
 )
 
 app = FastAPI(
@@ -142,6 +158,7 @@ app.add_middleware(
 
 _store, _users, _knowledge, _usage = make_stores()
 _datasources = make_datasource_store()
+_mcp = make_mcp_store()
 _capabilities = make_capability_store()
 _runs = make_run_store()
 logger = logging.getLogger(__name__)
@@ -168,6 +185,11 @@ MAX_FILES_PER_UPLOAD = 10
 
 
 # --------------------------------------------------------------------------- models
+class IntakeMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=4_000)
+
+
 class CreateProjectRequest(BaseModel):
     brief: str = Field(min_length=1)
     # Optional; without one the project is called by its brief's first line.
@@ -182,6 +204,12 @@ class CreateProjectRequest(BaseModel):
     # Data sources (BigQuery) to attach to the new project. The planner is told their
     # table names, so it can give the agents that need data sql_schema / sql_query.
     datasource_ids: list[str] = Field(default_factory=list, max_length=20)
+    # MCP servers to attach to the new project. The planner is told the names and
+    # descriptions of their approved tools, never anything they return.
+    mcp_server_ids: list[str] = Field(default_factory=list, max_length=20)
+    # The new-project conversation that led to this brief (POST /brief/chat), kept as the
+    # project's conversation so the plan assistant knows how the brief came about.
+    intake: list[IntakeMessage] = Field(default_factory=list, max_length=40)
 
 
 class AgentSettings(BaseModel):
@@ -299,8 +327,27 @@ def _project_body(project: ProjectRecord) -> dict[str, Any]:
         "deployment": _deployment_body(project),
         "knowledge": _knowledge_summary(project),
         "data_sources": _data_summary(project),
+        "mcp": _mcp_summary(project),
         "created_at": project.created_at,
         "updated_at": project.updated_at,
+    }
+
+
+def _mcp_summary(project: ProjectRecord) -> dict[str, Any]:
+    """The attached MCP servers and their approved tools: what the Brief editor may offer."""
+    servers = _attached_mcp(project)
+    return {
+        "servers": len(servers),
+        "tools": [
+            {
+                "name": mc.exposed_name(s.slug, t.name),
+                "tool": t.name,
+                "server": s.name,
+                "description": t.description,
+                "side_effect": not t.looks_read_only(),
+            }
+            for s in servers for t in s.usable_tools()
+        ],
     }
 
 
@@ -329,7 +376,7 @@ def _compiled_graph(project: ProjectRecord) -> Any:
         raise ModelCannotCallToolsError("; ".join(problems))
     graph = compile_graph(
         project.plan, _knowledge_context(project), _data_context(project),
-        _json_models(project.plan, project.tenant_id),
+        _json_models(project.plan, project.tenant_id), mcp=_mcp_context(project),
     )
     _COMPILED[project.id] = (project.plan_version, graph)
     return graph
@@ -486,6 +533,8 @@ def _offered_tools(project: ProjectRecord) -> list[str]:
         tools |= KNOWLEDGE_TOOLS
     if _attached_sources(project):
         tools |= DATA_TOOLS
+    # The approved tools of attached MCP servers: attaching is the project's opt-in.
+    tools |= set(_mcp_tool_notes(_attached_mcp(project)))
     return sorted(tools)
 
 
@@ -583,6 +632,10 @@ def _reembed(tenant_id: str, document_id: str, config: EmbeddingConfig) -> None:
 # browser never loses it; the last RUNS_KEPT per project and kind are kept. Known
 # deviation: background runs are in-process threads until the job queue exists.
 FLUSH_EVERY_S = 0.5
+# How often a run checks its saved record for a stop requested through another process.
+STOP_POLL_S = 2.0
+# Stop flags of the runs this process is running, by run id.
+_STOP_FLAGS: dict[str, threading.Event] = {}
 
 
 def _stored_event(event: str, data: dict[str, Any]) -> dict[str, Any]:
@@ -599,13 +652,31 @@ class _RunRecorder:
         self.outputs: dict[str, Any] = {}
         self.buffer: list[dict[str, Any]] = []
         self.flushed_at = time.monotonic()
+        self.stop = threading.Event()
+        self.stop_checked_at = time.monotonic()
+        self.exception: BaseException | None = None  # what ended a failed run, for a typed reply
+        _STOP_FLAGS[run.id] = self.stop
 
     def event(self, event: str, data: dict[str, Any]) -> None:
         if event == "node_completed" and data.get("node"):
             self.outputs[data["node"]] = data.get("output")
         self.buffer.append(_stored_event(event, data))
-        if time.monotonic() - self.flushed_at >= FLUSH_EVERY_S:
+        # run_started is saved at once, so a reloaded page sees the run has begun.
+        if event == "run_started" or time.monotonic() - self.flushed_at >= FLUSH_EVERY_S:
             self.flush()
+
+    def stop_requested(self) -> bool:
+        """Whether the user asked to stop this run: at once when the request reached this
+        process, else from the saved run (another worker took the request)."""
+        if not self.stop.is_set() and time.monotonic() - self.stop_checked_at >= STOP_POLL_S:
+            self.stop_checked_at = time.monotonic()
+            try:
+                saved = _runs.get(self.run.tenant_id, self.run.project_id, self.run.id)
+            except Exception:  # noqa: BLE001 — a store hiccup never stops a run
+                saved = None
+            if saved is not None and saved.stop_requested:
+                self.stop.set()
+        return self.stop.is_set()
 
     def flush(self, **changes: Any) -> None:
         events, self.buffer = self.buffer, []
@@ -618,6 +689,7 @@ class _RunRecorder:
 
     def finish(self, *, outputs: dict[str, Any] | None = None, errors: list[dict[str, Any]] | None = None,
                halted: bool = False, error: dict[str, Any] | None = None, usage: dict[str, Any] | None = None) -> None:
+        _STOP_FLAGS.pop(self.run.id, None)
         if outputs is not None:
             self.outputs = dict(outputs)
         self.flush(
@@ -644,11 +716,20 @@ def _new_run(project: ProjectRecord, *, kind: str, mode: str, task_input: dict[s
 
 def _graph_events(project: ProjectRecord, graph: Any, task_input: dict[str, Any], collector: UsageCollector,
                   recorder: _RunRecorder):
-    """Run the graph, saving every event; yields them for a live stream. The run is saved
-    as completed or failed when it ends, and usage is recorded whatever happens."""
+    """Run the graph, saving every event; yields them for a live stream."""
+    events = run_graph_events(graph, task_input, project.plan.bounds, collector, should_stop=recorder.stop_requested)
+    return _recorded_events(project, events, collector, recorder)
+
+
+def _recorded_events(project: ProjectRecord, events: Any, collector: UsageCollector, recorder: _RunRecorder):
+    """Save a run's events as they happen and yield them. The run is saved as completed or
+    failed when it ends, and usage is recorded whatever happens."""
     terminal: tuple[str, dict[str, Any]] | None = None
     try:
-        for event, data in run_graph_events(graph, task_input, project.plan.bounds, collector):
+        for event, data in events:
+            if event == "run_failed" and "exception" in data:
+                data = dict(data)
+                recorder.exception = data.pop("exception")  # never saved or streamed
             if event in ("run_completed", "run_failed"):
                 data = {**data, "usage": usage_mod.summarize(collector.entries())}
                 terminal = (event, data)
@@ -673,28 +754,36 @@ def _graph_events(project: ProjectRecord, graph: Any, task_input: dict[str, Any]
 
 def _agent_run(project: ProjectRecord, agent_id: str, task_input: dict[str, Any],
                upstream: dict[str, Any], collector: UsageCollector, recorder: _RunRecorder) -> dict[str, Any]:
-    """One agent on its own, saved like any run."""
-    started = time.time()
-    recorder.event("run_started", {"at": started, "timeout_s": project.plan.bounds.timeout_s})
+    """One agent on its own, saved like any run, with the same events, time limit and stop.
+    Returns its outputs/errors/halted, or raises the typed error that ended it."""
     try:
-        result = run_single_agent(
+        events = run_agent_events(
             project.plan, agent_id, task_input, upstream, _knowledge_context(project),
-            usage=collector, data=_data_context(project), json_models=_json_models(project.plan, project.tenant_id),
+            usage=collector, data=_data_context(project), mcp=_mcp_context(project),
+            json_models=_json_models(project.plan, project.tenant_id), should_stop=recorder.stop_requested,
         )
-    except Exception as e:
+    except Exception as e:  # e.g. a knowledge or MCP context that can't be set up
         recorder.finish(error={"error_type": type(e).__name__, "message": str(e) or "the agent failed"},
                         usage=usage_mod.summarize(collector.entries()))
         _record_usage(project.tenant_id, project.id, collector.entries(), run_id=recorder.run.id)
         raise
-    summary = usage_mod.summarize(collector.entries())
-    recorder.event("run_completed", {"at": time.time(), "duration_ms": int((time.time() - started) * 1000),
-                                     "outputs": result.get("outputs", {}), "errors": result.get("errors", []),
-                                     "halted": bool(result.get("halted", False)), "usage": summary})
-    recorder.finish(outputs=result.get("outputs", {}), errors=result.get("errors", []),
-                    halted=bool(result.get("halted", False)), usage=summary)
-    _record_usage(project.tenant_id, project.id, collector.entries(), run_id=recorder.run.id)
-    _learn_from_errors(project, result.get("errors") or [])
-    return result
+    completed: dict[str, Any] | None = None
+    failed: dict[str, Any] = {}
+    for event, data in _recorded_events(project, events, collector, recorder):
+        if event == "run_completed":
+            completed = data
+        elif event == "run_failed":
+            failed = data
+    if completed is not None:
+        return {"outputs": completed.get("outputs", {}), "errors": completed.get("errors", []),
+                "halted": bool(completed.get("halted", False)), "usage": collector.entries()}
+    if failed.get("error_type") == "RunTimeout":
+        raise RunTimeoutError(project.plan.bounds.timeout_s)
+    if failed.get("error_type") == "RunStopped":
+        raise RunStoppedError("you stopped this run")
+    if isinstance(recorder.exception, Exception):
+        raise recorder.exception  # the typed platform error, as the endpoint always returned
+    raise PlatformError(failed.get("message") or "the agent failed")
 
 
 def _deployed_run(project: ProjectRecord, payload: dict[str, Any], recorder: _RunRecorder) -> dict[str, Any]:
@@ -792,6 +881,24 @@ def list_runs(
 @app.get("/projects/{project_id}/runs/{run_id}")
 def get_run(project_id: str, run_id: str, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
     """One saved run in full: input, events, outputs, errors and usage."""
+    return {"run": _run_body(_get_run(project_id, run_id, user))}
+
+
+@app.post("/projects/{project_id}/runs/{run_id}/stop")
+def stop_run(project_id: str, run_id: str, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """Stop a running local run. It ends within about two seconds as failed with
+    `RunStopped`, keeping the outputs and usage so far; an agent mid-call finishes that
+    one call, then makes no more. A run that already ended is returned unchanged.
+    Deployed runs execute on AWS and can't be stopped here (409 `RunNotStoppable`)."""
+    run = _get_run(project_id, run_id, user)
+    if run.status != "running":
+        return {"run": _run_body(run)}
+    if run.kind == "deployed":
+        raise RunNotStoppableError(run_id)
+    _runs.update(user.id, run_id, stop_requested=True)
+    flag = _STOP_FLAGS.get(run_id)
+    if flag is not None:  # running in this process: stop at once rather than at the next poll
+        flag.set()
     return {"run": _run_body(_get_run(project_id, run_id, user))}
 
 
@@ -1109,6 +1216,410 @@ def query_datasource(
     }
 
 
+# --------------------------------------------------------------------------- MCP servers
+class McpCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    url: str = Field(min_length=1, max_length=2_048)
+    headers: dict[str, str] = Field(default_factory=dict, max_length=20)
+    transport: Literal["http", "sse"] = "http"
+    preset: str | None = Field(default=None, max_length=40)
+    # How the console asked for credentials (an access token, an API key header, …), so it
+    # can show and ask again the same way. Display only: `headers` is what's sent.
+    auth: McpAuthKind | None = None
+
+
+class McpSecretRequest(BaseModel):
+    """A new URL and/or new header values; what's left out stays as it is."""
+
+    url: str | None = Field(default=None, max_length=2_048)
+    headers: dict[str, str] | None = Field(default=None, max_length=20)
+    auth: McpAuthKind | None = None
+
+
+class McpRenameRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+
+
+class McpToolsRequest(BaseModel):
+    approved: list[str] = Field(max_length=200)
+
+
+class McpProjectsRequest(BaseModel):
+    project_ids: list[str] = Field(max_length=200)
+
+
+class McpTestRequest(BaseModel):
+    tool: str = Field(min_length=1, max_length=128)
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+
+_HEADER_NAME = re.compile(r"^[A-Za-z0-9-]{1,64}$")
+_PLATFORM_HEADERS = {"host", "content-length", "content-type", "accept", "mcp-session-id", "mcp-protocol-version"}
+
+
+def _get_mcp(server_id: str, user: UserRecord) -> McpServer:
+    server = _mcp.get(user.id, server_id)
+    if server is None:  # someone else's server is reported exactly like a missing one
+        raise McpServerNotFoundError(server_id)
+    return server
+
+
+def _clean_headers(headers: dict[str, str]) -> dict[str, str]:
+    cleaned: dict[str, str] = {}
+    for name, value in headers.items():
+        name = name.strip()
+        if not _HEADER_NAME.match(name):
+            raise McpError("header names may use letters, digits and dashes only", status=422, error_type="McpBadHeader")
+        if name.lower() in _PLATFORM_HEADERS:
+            raise McpError(f"the {name} header is set by the platform", status=422, error_type="McpBadHeader")
+        if "\n" in value or "\r" in value or len(value) > 4_096:
+            raise McpError(f"the value of {name} isn't a valid header value", status=422, error_type="McpBadHeader")
+        cleaned[name] = value.strip()
+    return cleaned
+
+
+def _slug_for(name: str, taken: set[str]) -> str:
+    base = re.sub(r"[^a-z0-9]", "", name.lower())[:12] or "mcp"
+    slug, n = base, 2
+    while slug in taken:
+        slug, n = f"{base[:12]}{n}", n + 1
+    return slug
+
+
+def _server_config(server: McpServer) -> mc.McpServerConfig:
+    """A server's approved tools with its decrypted URL and headers, for one use."""
+    secret = secrets_box.open_(server.secret)
+    return mc.McpServerConfig(
+        id=server.id, name=server.name, slug=server.slug, transport=server.transport,
+        tools=[mc.McpToolDef.model_validate(t.model_dump(include=set(mc.McpToolDef.model_fields)))
+               for t in server.usable_tools()],
+        url=secret["url"], headers=secret.get("headers") or {},
+    )
+
+
+def _connection(server: McpServer) -> mc.McpConnection:
+    secret = secrets_box.open_(server.secret)
+    return mc.McpConnection(
+        url=secret["url"], headers=secret.get("headers") or {}, transport=server.transport, name=server.name
+    )
+
+
+def _attached_mcp(project: ProjectRecord) -> list[McpServer]:
+    return _mcp.list(project.tenant_id, project.id)
+
+
+def _mcp_context(project: ProjectRecord) -> mc.McpContext | None:
+    """The approved tools of the servers attached to the project, or None when no agent
+    uses MCP tools. Servers are read at call time, so attaching needs no recompile."""
+    if not uses_mcp(project.plan):
+        return None
+    return mc.McpContext(lambda: [_server_config(s) for s in _attached_mcp(project) if s.usable_tools()])
+
+
+def _deployable_mcp(project: ProjectRecord) -> list[mc.McpServerConfig]:
+    """The attached servers whose approved tools the plan uses, with their secrets, for a
+    deployment. Raises McpUnavailableError if a tool the plan uses isn't offered."""
+    needed = {t for a in project.plan.agents for t in a.tools if is_mcp_tool(t)}
+    configs = [_server_config(s) for s in _attached_mcp(project) if s.usable_tools()]
+    offered = {mc.exposed_name(c.slug, t.name): c.slug for c in configs for t in c.tools}
+    missing = sorted(needed - set(offered))
+    if missing:
+        raise McpUnavailableError(missing)
+    used = {offered[t] for t in needed}
+    return [c for c in configs if c.slug in used]
+
+
+def _mcp_tool_notes(servers: list[McpServer]) -> dict[str, str]:
+    """Exposed name -> "server: description" for the approved tools of `servers`."""
+    return {
+        mc.exposed_name(s.slug, t.name): f"{s.name}: {t.description or t.name}"
+        for s in servers for t in s.usable_tools()
+    }
+
+
+def _mcp_tools_used(project: ProjectRecord, server: McpServer) -> list[str]:
+    prefix = f"{mc.PREFIX}{server.slug}__"
+    return sorted({t for a in project.plan.agents for t in a.tools if t.startswith(prefix)})
+
+
+def _tool_body(server: McpServer, tool: McpTool) -> dict[str, Any]:
+    return {
+        "name": tool.name,
+        "exposed_name": mc.exposed_name(server.slug, tool.name),
+        "description": tool.description,
+        "input_schema": tool.input_schema,
+        "annotations": tool.annotations,
+        "approved": tool.approved,
+        "changed": tool.changed,
+        "usable": tool.usable(),
+        "read_only_hint": tool.looks_read_only(),
+    }
+
+
+def _mcp_body(server: McpServer, owned: set[str] | None = None) -> dict[str, Any]:
+    """A server as the API shows it: never the URL or header values."""
+    body = server.model_dump(exclude={"tenant_id", "secret", "tools"})
+    body["tools"] = [_tool_body(server, t) for t in server.tools]
+    if owned is not None:
+        body["project_ids"] = [p for p in server.project_ids if p in owned]
+    return body
+
+
+def _merge_tools(old: list[McpTool], listed: list[mc.McpToolDef]) -> list[McpTool]:
+    """The server's current tools, keeping approvals whose definitions didn't change. An
+    approved tool that changed is held back (`changed`) until approved again."""
+    previous = {t.name: t for t in old}
+    merged: list[McpTool] = []
+    for definition in listed:
+        before = previous.get(definition.name)
+        tool = McpTool(**definition.model_dump())
+        if before is not None and before.approved:
+            same = before.approved_hash == definition.definition_hash()
+            tool.approved, tool.approved_hash, tool.changed = True, before.approved_hash, not same
+        merged.append(tool)
+    return merged
+
+
+def _check_exposed_names(slug: str, tools: list[mc.McpToolDef]) -> None:
+    seen: dict[str, str] = {}
+    for tool in tools:
+        name = mc.exposed_name(slug, tool.name)
+        if name in seen:
+            raise McpError(
+                f"the server's tools '{seen[name]}' and '{tool.name}' get the same name ({name}); "
+                "the platform can't tell them apart",
+                status=422,
+                error_type="McpToolNameClash",
+            )
+        seen[name] = tool.name
+
+
+def _status_for(error: McpError) -> str:
+    auth = ("McpAuthFailed", "McpOAuthRequired", "McpAuthorizationRequired")
+    return "auth_failed" if error.error_type in auth else "unreachable"
+
+
+def _list_with_steps(conn: mc.McpConnection) -> mc.McpListing:
+    """List the server's tools; a failure carries the step it failed at, for the console."""
+    try:
+        mc.check_url(conn.url)
+    except McpError as e:
+        e.details = {"steps": [{"step": "check the address", "ok": False, "error": str(e)}]}
+        raise
+    try:
+        listing = mc.list_tools(conn)
+    except McpError as e:
+        step = "sign in" if e.error_type in ("McpAuthFailed", "McpOAuthRequired") else "reach the server"
+        e.details = {"steps": [{"step": "check the address", "ok": True}, {"step": step, "ok": False, "error": str(e)}]}
+        raise
+    return listing
+
+
+@app.get("/mcp")
+def list_mcp_servers(user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """Your MCP servers (never their URLs or header values), the projects you can attach
+    them to, and whether this server can store secrets."""
+    projects = _store.list_for_tenant(user.id)
+    owned = {p.id for p in projects}
+    return {
+        "configured": secrets_box.configured(),
+        "servers": [_mcp_body(s, owned) for s in _mcp.list(user.id)],
+        "projects": [
+            {
+                "project_id": p.id,
+                "name": p.display_name,
+                "used_by": [a.id for a in p.plan.agents if any(is_mcp_tool(t) for t in a.tools)],
+            }
+            for p in projects
+        ],
+        "limits": {"max_tools": mc.MAX_TOOLS, "call_timeout_s": MCP_CALL_TIMEOUT_S},
+    }
+
+
+@app.post("/mcp", status_code=201)
+def create_mcp_server(req: McpCreateRequest, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """Connect a remote MCP server: check its address, sign in, list its tools. Nothing is
+    approved yet: agents get a tool only after you approve it. The URL and header values
+    are stored encrypted, and never shown again."""
+    if not secrets_box.configured():
+        raise SecretsNotConfiguredError()
+    headers = _clean_headers(req.headers)
+    url = req.url.strip()
+    conn = mc.McpConnection(url=url, headers=headers, transport=req.transport, name=req.name.strip())
+    listing = _list_with_steps(conn)
+    slug = _slug_for(req.name, {s.slug for s in _mcp.list(user.id)})
+    _check_exposed_names(slug, listing.tools)
+    server = McpServer(
+        id=uuid.uuid4().hex, tenant_id=user.id, name=req.name.strip(), slug=slug,
+        display_url=mc.display_url(url), host=mc.host_of(url), transport=req.transport,
+        preset=req.preset, auth=req.auth, header_names=sorted(headers),
+        secret=secrets_box.seal({"url": url, "headers": headers}),
+        server_name=listing.server_name, server_version=listing.server_version,
+        tools=[McpTool(**t.model_dump()) for t in listing.tools],
+    )
+    _mcp.add(server)
+    return {"server": _mcp_body(server), "skipped": listing.skipped}
+
+
+@app.post("/mcp/{server_id}/refresh")
+def refresh_mcp_server(server_id: str, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """List the server's tools again. Approvals stay for tools that didn't change; a
+    changed tool is held back until you approve it again; new tools come in unapproved."""
+    server = _get_mcp(server_id, user)
+    try:
+        listing = mc.list_tools(_connection(server))
+    except McpError as e:
+        _mcp.update(user.id, server_id, status=_status_for(e), status_message=str(e),
+                    checked_at=datetime.now(timezone.utc))
+        raise
+    _check_exposed_names(server.slug, listing.tools)
+    updated = _mcp.update(
+        user.id, server_id, tools=_merge_tools(server.tools, listing.tools), status="ok", status_message=None,
+        server_name=listing.server_name, server_version=listing.server_version,
+        checked_at=datetime.now(timezone.utc),
+    )
+    _COMPILED.clear()  # compiled graphs hold the old tool definitions
+    return {"server": _mcp_body(updated), "skipped": listing.skipped}
+
+
+@app.put("/mcp/{server_id}/tools")
+def approve_mcp_tools(server_id: str, req: McpToolsRequest, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """Set which of the server's tools agents may use. Approving pins each tool's current
+    definition; tools not listed are no longer approved."""
+    server = _get_mcp(server_id, user)
+    names = {t.name for t in server.tools}
+    unknown = sorted(set(req.approved) - names)
+    if unknown:
+        raise McpError(f"the server has no tool named {', '.join(unknown)}", status=422, error_type="McpUnknownTool")
+    wanted = set(req.approved)
+    tools = [
+        t.model_copy(update={"approved": True, "approved_hash": t.definition_hash(), "changed": False})
+        if t.name in wanted
+        else t.model_copy(update={"approved": False, "approved_hash": None, "changed": False})
+        for t in server.tools
+    ]
+    updated = _mcp.update(user.id, server_id, tools=tools)
+    _COMPILED.clear()
+    return {"server": _mcp_body(updated)}
+
+
+@app.put("/mcp/{server_id}/secret")
+def replace_mcp_secret(server_id: str, req: McpSecretRequest, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """Replace the server's URL and/or header values, after a token expires or a key is
+    regenerated. The new ones are checked first; approvals of unchanged tools carry over."""
+    server = _get_mcp(server_id, user)
+    secret = secrets_box.open_(server.secret)
+    url = (req.url or secret["url"]).strip()
+    headers = _clean_headers(req.headers) if req.headers is not None else secret.get("headers") or {}
+    conn = mc.McpConnection(url=url, headers=headers, transport=server.transport, name=server.name)
+    listing = _list_with_steps(conn)
+    _check_exposed_names(server.slug, listing.tools)
+    updated = _mcp.update(
+        user.id, server_id, secret=secrets_box.seal({"url": url, "headers": headers}),
+        display_url=mc.display_url(url), host=mc.host_of(url), header_names=sorted(headers),
+        **({"auth": req.auth} if req.auth is not None else {}),
+        tools=_merge_tools(server.tools, listing.tools), status="ok", status_message=None,
+        checked_at=datetime.now(timezone.utc),
+    )
+    _COMPILED.clear()
+    return {"server": _mcp_body(updated), "skipped": listing.skipped}
+
+
+@app.patch("/mcp/{server_id}")
+def rename_mcp_server(server_id: str, req: McpRenameRequest, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    _get_mcp(server_id, user)
+    return {"server": _mcp_body(_mcp.update(user.id, server_id, name=req.name.strip()))}
+
+
+@app.delete("/mcp/{server_id}")
+def delete_mcp_server(server_id: str, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """Remove a server and its stored secret. Refused while a project's plan uses its
+    tools: change those agents' tools first."""
+    server = _get_mcp(server_id, user)
+    using = [p.display_name for p in _store.list_for_tenant(user.id) if _mcp_tools_used(p, server)]
+    if using:
+        raise McpError(
+            f"agents in {', '.join(using)} use this server's tools; remove those tools from the agents first",
+            status=409,
+            error_type="McpServerInUse",
+        )
+    _mcp.delete(user.id, server_id)
+    _COMPILED.clear()
+    return {"deleted": server_id}
+
+
+@app.put("/mcp/{server_id}/projects")
+def set_mcp_projects(server_id: str, req: McpProjectsRequest, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """Attach the server to exactly these projects of yours. Attaching is the project's
+    opt-in to the server's approved tools."""
+    server = _get_mcp(server_id, user)
+    owned = {p.id for p in _store.list_for_tenant(user.id)}
+    wanted = list(dict.fromkeys(req.project_ids))
+    missing = [p for p in wanted if p not in owned]
+    if missing:
+        raise ProjectNotFoundError(missing[0])
+    keep_foreign = [p for p in server.project_ids if p not in owned]
+    updated = _mcp.update(user.id, server_id, project_ids=[*keep_foreign, *wanted])
+    for project_id in set(server.project_ids) ^ set(wanted):
+        _COMPILED.pop(project_id, None)
+    return {"server": _mcp_body(updated, owned)}
+
+
+@app.get("/projects/{project_id}/mcp")
+def project_mcp_servers(project_id: str, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """Your MCP servers, which are attached to this project, and which tools its agents use."""
+    project = _get_project(project_id, user)
+    return {
+        "configured": secrets_box.configured(),
+        "servers": [
+            {**_mcp_body(s), "attached": project_id in s.project_ids, "used_tools": _mcp_tools_used(project, s)}
+            for s in _mcp.list(user.id)
+        ],
+    }
+
+
+@app.post("/projects/{project_id}/mcp/{server_id}")
+def attach_mcp_server(project_id: str, server_id: str, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    _get_project(project_id, user)
+    server = _get_mcp(server_id, user)
+    if project_id not in server.project_ids:
+        server = _mcp.update(user.id, server_id, project_ids=[*server.project_ids, project_id])
+    return {"server": _mcp_body(server)}
+
+
+@app.delete("/projects/{project_id}/mcp/{server_id}")
+def detach_mcp_server(project_id: str, server_id: str, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """Detach a server. If agents still use its tools, compiling fails until they don't."""
+    _get_project(project_id, user)
+    server = _get_mcp(server_id, user)
+    server = _mcp.update(user.id, server_id, project_ids=[p for p in server.project_ids if p != project_id])
+    _COMPILED.pop(project_id, None)
+    return {"server": _mcp_body(server)}
+
+
+@app.post("/mcp/{server_id}/test")
+def test_mcp_tool(server_id: str, req: McpTestRequest, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """Run one approved tool with these arguments, exactly as an agent would (same checks,
+    limits and fencing), to try it before agents use it."""
+    server = _get_mcp(server_id, user)
+    tool = next((t for t in server.tools if t.name == req.tool), None)
+    if tool is None or not tool.usable():
+        raise McpError("approve the tool before trying it", status=409, error_type="McpToolNotApproved")
+    context = mc.McpContext(lambda: [_server_config(server)])
+    try:
+        _, output = context.call(mc.exposed_name(server.slug, tool.name), req.arguments)
+    except McpError as e:
+        _mcp.update(user.id, server_id, status=_status_for(e), status_message=str(e),
+                    checked_at=datetime.now(timezone.utc))
+        raise
+    collector = UsageCollector()
+    collector.add(kind="mcp_call", provider="mcp", model=server.slug, input_tokens=0)
+    _record_usage(user.id, None, collector.entries(), run_id=uuid.uuid4().hex)
+    if server.status != "ok":
+        _mcp.update(user.id, server_id, status="ok", status_message=None, checked_at=datetime.now(timezone.utc))
+    return {"output": output}
+
+
 # --------------------------------------------------------------------------- usage
 def _record_usage(
     tenant_id: str,
@@ -1258,6 +1769,47 @@ def me(user: UserRecord = Depends(current_user)) -> dict[str, Any]:
     return _public_user(user)
 
 
+class BriefChatRequest(BaseModel):
+    """The new-project conversation so far (the console holds it; nothing is stored) and
+    what the user has picked to attach. Only the attachments' names reach the model."""
+
+    messages: list[IntakeMessage] = Field(min_length=1, max_length=40)
+    document_ids: list[str] = Field(default_factory=list, max_length=50)
+    datasource_ids: list[str] = Field(default_factory=list, max_length=20)
+    mcp_server_ids: list[str] = Field(default_factory=list, max_length=20)
+
+
+@app.post("/brief/chat")
+def brief_chat(req: BriefChatRequest, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """One turn of the new-project conversation, before any plan exists: a reply, a few
+    clarifying questions and the task brief so far. Creates nothing; planning is the
+    user's explicit step (POST /projects with the brief)."""
+    if req.messages[-1].role != "user":
+        raise KnowledgeError("the last message must be the user's", status=422)
+    documents = [_get_document(doc_id, user) for doc_id in dict.fromkeys(req.document_ids)]
+    sources = [_get_source(source_id, user) for source_id in dict.fromkeys(req.datasource_ids)]
+    mcp_servers = [_get_mcp(server_id, user) for server_id in dict.fromkeys(req.mcp_server_ids)]
+    notes = _mcp_tool_notes(mcp_servers)
+    tools = default_tool_names() + sorted(notes)
+    if documents:
+        tools += sorted(KNOWLEDGE_TOOLS)
+    if any(s.tables for s in sources):
+        tools += sorted(DATA_TOOLS)
+    collector = UsageCollector()
+    try:
+        turn = discuss_brief(
+            [(m.role, m.content) for m in req.messages],
+            available_tools=tools,
+            tool_notes=notes,
+            knowledge_files=[d.filename for d in documents],
+            data_tables=[t.id for s in sources for t in s.tables],
+            usage=collector,
+        )
+    finally:
+        _record_usage(user.id, None, collector.entries(), run_id=uuid.uuid4().hex)
+    return turn.model_dump()
+
+
 @app.post("/projects", status_code=201)
 def create_project(
     req: CreateProjectRequest, user: UserRecord = Depends(current_user)
@@ -1287,6 +1839,9 @@ def create_project(
         available_tools = [*available_tools, *sorted(KNOWLEDGE_TOOLS)]
     if data_tables:
         available_tools = [*available_tools, *sorted(DATA_TOOLS)]
+    mcp_servers = [_get_mcp(server_id, user) for server_id in dict.fromkeys(req.mcp_server_ids)]
+    mcp_notes = _mcp_tool_notes(mcp_servers)
+    available_tools = [t for t in available_tools if not is_mcp_tool(t)] + sorted(mcp_notes)
     side_effect_tools_enabled = sorted(set(available_tools) & SIDE_EFFECT_TOOLS)
     collector = UsageCollector()
     project_id: str | None = None
@@ -1299,6 +1854,7 @@ def create_project(
             usage=collector,
             knowledge_files=[d.filename for d in documents],
             data_tables=data_tables,
+            tool_notes=mcp_notes,
         )
         project_id = uuid.uuid4().hex
     finally:
@@ -1312,12 +1868,15 @@ def create_project(
             name=_clean_name(req.name),
             plan=plan,
             side_effect_tools_enabled=side_effect_tools_enabled,
+            conversation=[ChatMessage(role=m.role, content=m.content) for m in req.intake],
         )
     )
     for doc in documents:
         _knowledge.attach(user.id, doc.id, project_id)
     for source in sources:
         _datasources.update(user.id, source.id, project_ids=[*source.project_ids, project_id])
+    for server in mcp_servers:
+        _mcp.update(user.id, server.id, project_ids=[*server.project_ids, project_id])
     return {
         "project_id": project_id,
         "name": _clean_name(req.name) or brief_title(req.brief),
@@ -1395,6 +1954,7 @@ def delete_project(project_id: str, user: UserRecord = Depends(current_user)) ->
     _COMPILED.pop(project_id, None)
     detached = _knowledge.detach_project(user.id, project_id)
     _datasources.detach_project(user.id, project_id)
+    _mcp.detach_project(user.id, project_id)
     _runs.delete_for_project(user.id, project_id)
     return {"deleted": project_id, "knowledge_documents_detached": detached}
 
@@ -1413,6 +1973,7 @@ def update_agent_settings(
     current_models = {(a.llm.provider, a.llm.model) for a in project.plan.agents}
     has_knowledge = bool(_knowledge.list_documents(user.id, project_id))
     has_data = bool(_attached_sources(project))
+    mcp_offered = set(_mcp_tool_notes(_attached_mcp(project)))
     problems: list[str] = []
     updates: dict[str, Any] = {}
     for change in req.agents:
@@ -1422,9 +1983,14 @@ def update_agent_settings(
             continue
         if (change.provider, change.model) not in current_models and not _model_allowed(change.provider, change.model):
             problems.append(f"{change.provider}/{change.model} isn't one of the available models")
-        unknown = [t for t in change.tools if t not in TOOL_REGISTRY]
+        unknown = [t for t in change.tools if t not in TOOL_REGISTRY and not is_mcp_tool(t)]
         if unknown:
             problems.append(f"unknown tool(s) for '{change.id}': {unknown}")
+        unoffered = [t for t in change.tools if is_mcp_tool(t) and t not in mcp_offered]
+        if unoffered:
+            problems.append(
+                f"{', '.join(unoffered)}: attach the tool's MCP server to this project and approve the tool first"
+            )
         if set(change.tools) & KNOWLEDGE_TOOLS and not has_knowledge:
             problems.append("knowledge_search needs files attached to this project first")
         if set(change.tools) & DATA_TOOLS and not has_data:
@@ -1498,6 +2064,7 @@ def revise_project(
             available_tools=allowed_tools,
             available_llms=_flag_tools(allowed_llms, user.id, check=False),
             usage=collector,
+            tool_notes=_mcp_tool_notes(_attached_mcp(project)),
             data_tables=[t.id for s in _attached_sources(project) for t in s.tables],
         )
     finally:
@@ -2096,6 +2663,17 @@ def deploy_project(
         def data_snapshot():
             return ds.snapshot([s.config() for s in _attached_sources(project)])
 
+    mcp_snapshot = None
+    if uses_mcp(project.plan):
+        _deployable_mcp(project)  # fail now if a tool the plan uses isn't attached and approved
+
+        def mcp_snapshot():
+            configs = _deployable_mcp(project)
+            secrets = {
+                mc.secret_env_name(c.slug): json.dumps({"url": c.url, "headers": c.headers}) for c in configs
+            }
+            return mc.snapshot(configs), secrets
+
     runtime_environment(project.plan, embeddings)
 
     deployment = Deployment(
@@ -2114,7 +2692,7 @@ def deploy_project(
     json_models = sorted(_json_models(project.plan, user.id))
     background.add_task(
         run_deployment, project_id, _store, cloud, _package_builder, snapshot, embeddings, data_snapshot,
-        json.dumps(json_models).encode("utf-8") if json_models else None,
+        json.dumps(json_models).encode("utf-8") if json_models else None, mcp_snapshot=mcp_snapshot,
     )
     return {"deployment": _deployment_body(_get_project(project_id, user))}
 
@@ -2281,6 +2859,16 @@ def _handle_knowledge(_req: Request, exc: KnowledgeError):
     return _error_response(exc.status, "KnowledgeRejected", str(exc))
 
 
+@app.exception_handler(RunStoppedError)
+def _handle_run_stopped(_req: Request, exc: RunStoppedError):
+    return _error_response(409, "RunStopped", str(exc))
+
+
+@app.exception_handler(RunNotStoppableError)
+def _handle_run_not_stoppable(_req: Request, exc: RunNotStoppableError):
+    return _error_response(409, "RunNotStoppable", str(exc))
+
+
 @app.exception_handler(RunNotFoundError)
 def _handle_run_not_found(_req: Request, exc: RunNotFoundError):
     return _error_response(404, "RunNotFound", str(exc))
@@ -2289,6 +2877,16 @@ def _handle_run_not_found(_req: Request, exc: RunNotFoundError):
 @app.exception_handler(ModelCannotCallToolsError)
 def _handle_cannot_call_tools(_req: Request, exc: ModelCannotCallToolsError):
     return _error_response(422, "ModelCannotCallTools", str(exc))
+
+
+@app.exception_handler(McpError)
+def _handle_mcp(_req: Request, exc: McpError):
+    return _error_response(exc.status, exc.error_type, str(exc), getattr(exc, "details", None))
+
+
+@app.exception_handler(SecretsNotConfiguredError)
+def _handle_secrets_not_configured(_req: Request, exc: SecretsNotConfiguredError):
+    return _error_response(503, "SecretsNotConfigured", str(exc))
 
 
 @app.exception_handler(DataSourceError)

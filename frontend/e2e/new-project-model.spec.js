@@ -28,7 +28,9 @@ test("the chosen model survives navigation and is what the agents get", async ({
   await expect(page.getByRole("button", { name: /Auto team size/ })).toContainText("Claude Haiku 4.5");
 
   await page.getByLabel("Task description").fill("Find the busiest bike stations");
-  await page.getByRole("button", { name: "Plan this team" }).click();
+  // Sending talks it through first; planning is the explicit Create plan step.
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await page.getByRole("region", { name: "Task brief" }).getByRole("button", { name: "Create plan" }).click();
   await expect(page.getByRole("link", { name: "Review plan" })).toBeVisible();
   const sent = await (await request.get(`${API}/__last_create`)).json();
   expect(sent.available_llms).toEqual([{ provider: "bedrock", model: "in.anthropic.claude-haiku-4-5-20251001-v1:0" }]);

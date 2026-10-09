@@ -131,10 +131,11 @@ export function Callout({ tone, title, children, detail }) {
   );
 }
 
-export function ErrorCallout({ error }) {
+// `hideDetails` when the page shows the details itself (a connection check's steps).
+export function ErrorCallout({ error, hideDetails }) {
   if (!error) return null;
   const detail =
-    error.details == null
+    hideDetails || error.details == null
       ? null
       : typeof error.details === "string"
         ? error.details
@@ -163,7 +164,7 @@ export function MetaList({ rows }) {
       {rows
         .filter(([, value]) => value != null)
         .map(([label, value]) => (
-          <div key={label} style={{ display: "contents" }}>
+          <div key={label} className="contents">
             <span className="metalist__key">{label}</span>
             <span className="metalist__val">{value}</span>
           </div>

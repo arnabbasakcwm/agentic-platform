@@ -31,6 +31,7 @@ from .config import PROVIDER_ENV_VARS
 from .errors import DeployError, MissingProviderKeyError, MissingToolKeyError
 from .knowledge import SNAPSHOT_FILE, SNAPSHOT_VECTORS_FILE
 from .datasources import DATASOURCES_FILE
+from .mcp_client import MCP_FILE
 
 # Models in the plan that can't call tools (their agents answer by JSON): a JSON list.
 MODELS_FILE = "models.json"
@@ -215,6 +216,7 @@ def build_package(
     knowledge: tuple[bytes, bytes] | None = None,
     datasources: bytes | None = None,
     models: bytes | None = None,
+    mcp_servers: bytes | None = None,
 ) -> dict[str, int]:
     """Write the deployment zip for `plan` to `out_path`; returns its sizes in bytes.
     `knowledge` is the knowledge-base snapshot (knowledge.build_snapshot), if any."""
@@ -234,6 +236,8 @@ def build_package(
             _add_file(zf, DATASOURCES_FILE, datasources)
         if models is not None:
             _add_file(zf, MODELS_FILE, models)
+        if mcp_servers is not None:
+            _add_file(zf, MCP_FILE, mcp_servers)
         unzipped = sum(i.file_size for i in zf.infolist())
     zipped = out_path.stat().st_size
     if zipped > MAX_ZIPPED_BYTES or unzipped > MAX_UNZIPPED_BYTES:
@@ -279,6 +283,7 @@ def run_deployment(
     knowledge_embeddings: list[EmbeddingConfig] | EmbeddingConfig | None = None,
     data_snapshot: Callable[[], bytes | None] | None = None,
     models_snapshot: bytes | None = None,
+    mcp_snapshot: Callable[[], tuple[bytes, dict[str, str]]] | None = None,
 ) -> None:
     """The background job: package, upload, provision, wait. Progress and the outcome are
     written to the project's deployment record; this never raises. `knowledge_snapshot`
@@ -304,6 +309,11 @@ def run_deployment(
         environment = runtime_environment(project.plan, knowledge_embeddings)
         snapshot = knowledge_snapshot() if knowledge_snapshot is not None else None
         datasources = data_snapshot() if data_snapshot is not None else None
+        if mcp_snapshot is not None:
+            # The servers' URLs and headers reach the runtime only as environment variables
+            # (MCP_SECRET_<SLUG>); the package holds names and approved tool definitions.
+            mcp_file, mcp_env = mcp_snapshot()
+            environment = {**environment, **mcp_env}
         with tempfile.TemporaryDirectory(prefix="agentic-deploy-") as tmp:
             package = Path(tmp) / "package.zip"
             extras: dict[str, Any] = {}
@@ -313,6 +323,8 @@ def run_deployment(
                 extras["datasources"] = datasources
             if models_snapshot is not None:
                 extras["models"] = models_snapshot
+            if mcp_snapshot is not None:
+                extras["mcp_servers"] = mcp_file
             packager(project.plan, package, **extras)
 
             update(status="uploading")

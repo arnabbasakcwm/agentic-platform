@@ -139,6 +139,19 @@ export const api = {
     request("/auth/login", { method: "POST", body: { email, password } }),
   me: () => request("/auth/me"),
 
+  // One turn of the new-project conversation: a reply, clarifying questions and the
+  // brief so far. Creates nothing.
+  briefChat: ({ messages, documentIds, datasourceIds, mcpServerIds }) =>
+    request("/brief/chat", {
+      method: "POST",
+      body: {
+        messages,
+        ...(documentIds?.length ? { document_ids: documentIds } : {}),
+        ...(datasourceIds?.length ? { datasource_ids: datasourceIds } : {}),
+        ...(mcpServerIds?.length ? { mcp_server_ids: mcpServerIds } : {}),
+      },
+    }),
+
   createProject: ({
     brief,
     agentCount,
@@ -146,7 +159,9 @@ export const api = {
     availableLlms,
     documentIds,
     datasourceIds,
+    mcpServerIds,
     name,
+    intake,
   }) =>
     request("/projects", {
       method: "POST",
@@ -161,6 +176,10 @@ export const api = {
         ...(documentIds?.length ? { document_ids: documentIds } : {}),
         // Data sources to attach; the planner is told their table names.
         ...(datasourceIds?.length ? { datasource_ids: datasourceIds } : {}),
+        // MCP servers to attach; the planner is told their approved tools.
+        ...(mcpServerIds?.length ? { mcp_server_ids: mcpServerIds } : {}),
+        // The conversation that led to this brief, kept on the project.
+        ...(intake?.length ? { intake } : {}),
       },
     }),
   // Change agents' model and tools: [{ id, provider, model, tools }]. Makes a new plan version.
@@ -238,6 +257,32 @@ export const api = {
   detachDataSource: (id, sourceId) =>
     request(`/projects/${id}/datasources/${sourceId}`, { method: "DELETE" }),
   deleteDataSource: (id) => request(`/datasources/${id}`, { method: "DELETE" }),
+  // ---- MCP servers (remote tools agents may call)
+  mcpServers: () => request("/mcp"),
+  createMcpServer: (body) => request("/mcp", { method: "POST", body }),
+  refreshMcpServer: (id) => request(`/mcp/${id}/refresh`, { method: "POST" }),
+  approveMcpTools: (id, approved) =>
+    request(`/mcp/${id}/tools`, { method: "PUT", body: { approved } }),
+  replaceMcpSecret: (id, body) =>
+    request(`/mcp/${id}/secret`, { method: "PUT", body }),
+  renameMcpServer: (id, name) =>
+    request(`/mcp/${id}`, { method: "PATCH", body: { name } }),
+  setMcpProjects: (id, projectIds) =>
+    request(`/mcp/${id}/projects`, {
+      method: "PUT",
+      body: { project_ids: projectIds },
+    }),
+  testMcpTool: (id, tool, args) =>
+    request(`/mcp/${id}/test`, {
+      method: "POST",
+      body: { tool, arguments: args },
+    }),
+  deleteMcpServer: (id) => request(`/mcp/${id}`, { method: "DELETE" }),
+  projectMcpServers: (id) => request(`/projects/${id}/mcp`),
+  attachMcpServer: (id, serverId) =>
+    request(`/projects/${id}/mcp/${serverId}`, { method: "POST" }),
+  detachMcpServer: (id, serverId) =>
+    request(`/projects/${id}/mcp/${serverId}`, { method: "DELETE" }),
   // ---- one project's view: the files attached to it.
   getKnowledge: (id) => request(`/projects/${id}/knowledge`),
   // Adds the files to the library and attaches them to the project.
@@ -266,7 +311,7 @@ export const api = {
   run: (id, input) =>
     request(`/projects/${id}/run`, { method: "POST", body: { input } }),
   // Same input as run(); onEvent receives { event, data } as each agent progresses.
-  // ---- saved runs: started in the background on the server, kept (last 5 per kind).
+  // ---- saved runs: started in the background on the server, kept (last 10 per kind).
   startRun: (id, { input, mode = "graph", agentId = null }) =>
     request(`/projects/${id}/runs`, {
       method: "POST",
@@ -275,6 +320,9 @@ export const api = {
   listRuns: (id, kind = "local") =>
     request(`/projects/${id}/runs?kind=${kind}`),
   getRun: (id, runId) => request(`/projects/${id}/runs/${runId}`),
+  // Ends a running local run within seconds (it is saved as failed with RunStopped).
+  stopRun: (id, runId) =>
+    request(`/projects/${id}/runs/${runId}/stop`, { method: "POST" }),
   // Replays a saved run's events from `after`, then follows it live until it ends.
   followRun: (id, runId, after, onEvent, signal) =>
     follow(

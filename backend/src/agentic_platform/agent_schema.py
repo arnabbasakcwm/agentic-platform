@@ -197,3 +197,40 @@ def _assert_acyclic(agents: list[AgentSpec]) -> None:
 
     for agent_id in graph:
         visit(agent_id, [])
+
+
+class ClarifyingQuestion(BaseModel):
+    """One question the intake assistant asks before planning, with quick answers."""
+
+    question: str = Field(min_length=1, description="One short, specific question")
+    options: list[str] = Field(
+        default_factory=list,
+        description="Up to 5 short likely answers the user can click (may be empty)",
+    )
+
+
+class BriefTurn(BaseModel):
+    """One reply in the new-project conversation, before any plan exists: an answer, a few
+    clarifying questions, and the task brief assembled so far. Planning is the user's
+    explicit step: `plan_now` only reports that the user asked to go ahead."""
+
+    reply: str = Field(min_length=1, description="1-4 sentences of Markdown for the user")
+    questions: list[ClarifyingQuestion] = Field(
+        default_factory=list, description="At most 3 clarifying questions; none when ready"
+    )
+    brief: str = Field(
+        default="",
+        description=(
+            "The planner-ready task description built from everything said so far; empty "
+            "while nothing actionable is known (e.g. after a greeting)"
+        ),
+    )
+    ready: bool = Field(
+        default=False,
+        description="True once the goal, the per-run input and the expected output are clear",
+    )
+    name: str | None = Field(default=None, description="A short project name, once the task is clear")
+    plan_now: bool = Field(
+        default=False,
+        description="True only if the user's latest message explicitly asks to create the plan now",
+    )

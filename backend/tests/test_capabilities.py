@@ -250,7 +250,7 @@ def test_a_deployment_carries_its_json_models(tmp_path, monkeypatch):
     (tmp_path / "models.json").write_text(json_mod.dumps([f"bedrock/{GEMMA}"]), encoding="utf-8")
     captured = {}
 
-    def fake_compile(plan, knowledge=None, data=None, json_models=None):
+    def fake_compile(plan, knowledge=None, data=None, json_models=None, mcp=None):
         captured["json_models"] = json_models
         return object()
 

@@ -44,6 +44,8 @@ const PATHS = {
   ),
   chat: <path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.4A8 8 0 1 1 21 12z" />,
   close: <path d="M6 6l12 12M18 6 6 18" />,
+  maximize: <path d="M15 4h5v5M9 20H4v-5M20 4l-6 6M4 20l6-6" />,
+  minimize: <path d="M4 14h6v6M20 10h-6V4M10 14l-6 6M14 10l6-6" />,
   chevronRight: <path d="m9 6 6 6-6 6" />,
   chevronDown: <path d="m6 9 6 6 6-6" />,
   database: (
@@ -86,6 +88,7 @@ const PATHS = {
   ),
   flag: <path d="M5 21V4h11l-1.5 4L16 12H5" />,
   play: <path d="m7 5 12 7-12 7z" />,
+  stop: <rect x="6" y="6" width="12" height="12" rx="2" />,
   edit: <path d="M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4" />,
   bolt: <path d="M13 3 5 14h6l-1 7 8-11h-6z" />,
   loop: (
@@ -105,6 +108,18 @@ const PATHS = {
   ),
   book: <path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2zM4 21V5M8 7h7" />,
   chart: <path d="M4 20h16M7 16v-5M12 16V6M17 16v-8" />,
+  eye: (
+    <>
+      <path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z" />
+      <circle cx="12" cy="12" r="3" />
+    </>
+  ),
+  eyeOff: (
+    <>
+      <path d="M10.6 5.6A9.6 9.6 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a17 17 0 0 1-2.7 3.4M6.6 6.6C4 8.3 2.5 12 2.5 12S6 18.5 12 18.5c1.9 0 3.5-.6 4.9-1.5" />
+      <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2M3 3l18 18" />
+    </>
+  ),
 };
 
 export function Icon({ name, size = 16 }) {

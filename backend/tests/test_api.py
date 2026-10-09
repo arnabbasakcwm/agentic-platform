@@ -383,7 +383,7 @@ def test_run_stream_sends_progress_then_the_same_result_as_run(monkeypatch):
     pid = c.post("/projects", json={"brief": "x"}).json()["project_id"]
     c.post(f"/projects/{pid}/compile")
 
-    def fake_events(graph, task_input, bounds, usage=None):
+    def fake_events(graph, task_input, bounds, usage=None, should_stop=None):
         yield "run_started", {"at": 1.0, "timeout_s": bounds.timeout_s}
         yield "node_started", {"node": "a", "at": 1.1}
         yield "node_completed", {"node": "a", "at": 2.0, "duration_ms": 900, "attempts": 1,

@@ -193,6 +193,58 @@ class QueryRefusedError(DataSourceError):
         super().__init__(message, status=422, error_type="QueryRefused")
 
 
+class SecretsNotConfiguredError(PlatformError):
+    """The server has no PLATFORM_SECRET_KEY, so it can't store a secret encrypted."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "this server can't store secrets: set PLATFORM_SECRET_KEY in backend/.env "
+            "(see docs/mcp_setup.md)"
+        )
+
+
+class McpError(PlatformError):
+    """An MCP server can't be reached, signed in to, or used. Messages name the server's
+    host, never its URL: a URL can carry the server's key."""
+
+    def __init__(self, message: str, status: int = 400, error_type: str = "McpError"):
+        self.status = status
+        self.error_type = error_type
+        super().__init__(message)
+
+
+class McpServerNotFoundError(McpError):
+    def __init__(self, server_id: str):
+        super().__init__(f"MCP server not found: {server_id}", status=404, error_type="McpServerNotFound")
+
+
+class McpUnavailableError(McpError):
+    """A plan uses MCP tools that no attached server offers (detached, or not approved)."""
+
+    def __init__(self, names: list[str]):
+        self.names = names
+        super().__init__(
+            "these MCP tools aren't available to this project: "
+            + ", ".join(sorted(names))
+            + ". Attach their server and approve the tools on the MCP servers page",
+            status=409,
+            error_type="McpUnavailable",
+        )
+
+
+class RunStoppedError(PlatformError):
+    """The run was stopped (by the user, or because it ran out of time). Raised at an
+    agent's next checkpoint so an abandoned run stops spending; never retried."""
+
+    def __init__(self, message: str = "the run was stopped") -> None:
+        super().__init__(message)
+
+
+class RunNotStoppableError(PlatformError):
+    def __init__(self, run_id: str):
+        super().__init__(f"run {run_id} runs on AWS and can't be stopped from here; it ends at its time limit")
+
+
 class RunNotFoundError(PlatformError):
     def __init__(self, run_id: str):
         super().__init__(f"run not found: {run_id}")

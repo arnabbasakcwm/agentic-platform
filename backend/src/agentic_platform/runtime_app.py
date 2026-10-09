@@ -28,6 +28,7 @@ from .agent_schema import AgentPlan
 from .errors import PlatformError
 from .graph_builder import compile_graph, get_embeddings, run_graph, run_single_agent
 from . import datasources as ds
+from . import mcp_client as mc
 from .knowledge import KnowledgeContext, cached_embedders, load_snapshot, snapshot_context
 from .usage import UsageCollector
 
@@ -94,8 +95,10 @@ def create_app(plan_data: dict[str, Any], knowledge_dir: Path | None = None) -> 
     knowledge = _snapshot_context(knowledge_dir)
     sources = ds.load_snapshot(knowledge_dir) if knowledge_dir is not None else None
     data = ds.config_context(sources) if sources else None
+    servers = mc.load_snapshot(knowledge_dir) if knowledge_dir is not None else None
+    mcp = mc.config_context(servers) if servers else None
     json_models = _json_models(knowledge_dir)
-    graph = compile_graph(plan, knowledge, data, json_models)
+    graph = compile_graph(plan, knowledge, data, json_models, mcp=mcp)
     started = int(time.time())
 
     app = FastAPI(title="Agentic Platform runtime", docs_url=None, redoc_url=None)
@@ -118,11 +121,13 @@ def create_app(plan_data: dict[str, Any], knowledge_dir: Path | None = None) -> 
         if req.agent_id is not None:
             try:
                 result = run_single_agent(
-                    plan, req.agent_id, req.input, req.upstream_outputs, knowledge, usage=usage, data=data,
+                    plan, req.agent_id, req.input, req.upstream_outputs, knowledge, usage=usage, data=data, mcp=mcp,
                     json_models=json_models,
                 )
             except KeyError:
                 return _error(404, "AgentNotFound", f"agent '{req.agent_id}' is not in this plan")
+            except TimeoutError as e:
+                return _error(504, "RunTimeout", str(e))
             return {
                 "outputs": result.get("outputs", {}),
                 "errors": result.get("errors", []),

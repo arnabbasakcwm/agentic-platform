@@ -2,12 +2,10 @@ import { useCallback, useEffect, useState } from "react";
 import { UploadArea } from "../../components/KnowledgeUpload.jsx";
 import { Icon } from "../../components/icons.jsx";
 import {
-  ActionBar,
   Button,
   Callout,
   Empty,
   ErrorCallout,
-  LinkButton,
   Panel,
   Pill,
   Skeleton,
@@ -40,10 +38,13 @@ function DocumentRow({ doc, onDetach }) {
         </div>
         <div className="doclist__meta">
           {formatBytes(doc.size_bytes)}
-          {doc.status === "ready" && ` · ${doc.chunk_count} passage${doc.chunk_count === 1 ? "" : "s"}`}
+          {doc.status === "ready" &&
+            ` · ${doc.chunk_count} passage${doc.chunk_count === 1 ? "" : "s"}`}
           {doc.created_at && ` · added ${timeAgo(doc.created_at)}`}
         </div>
-        {doc.status === "failed" && doc.error && <div className="doclist__error">{doc.error}</div>}
+        {doc.status === "failed" && doc.error && (
+          <div className="doclist__error">{doc.error}</div>
+        )}
       </div>
       <StatusBadge status={badge} label={label} />
       <button
@@ -66,14 +67,18 @@ function EmbeddingNote({ knowledge }) {
       <p className="muted">
         {embedding ? (
           <>
-            New files are indexed with <strong>{providerName(embedding.provider)}</strong> ·{" "}
-            <span className="mono">{embedding.model}</span>. Each file keeps the model it was
-            indexed with, and search asks every model in use.
+            New files are indexed with{" "}
+            <strong>{providerName(embedding.provider)}</strong> ·{" "}
+            <span className="mono">{embedding.model}</span>. Each file keeps the
+            model it was indexed with, and search asks every model in use.
           </>
         ) : (
           "Chosen when you add your first file."
         )}{" "}
-        <a href={paths.knowledge}>Change the default, or one file&apos;s model, on the Knowledge page</a>.
+        <a href={paths.knowledge}>
+          Change the default, or one file&apos;s model, on the Knowledge page
+        </a>
+        .
       </p>
     </Panel>
   );
@@ -100,7 +105,8 @@ function LibraryPanel({ knowledge, onAttach, attaching }) {
                 </div>
                 <div className="doclist__meta">
                   {formatBytes(doc.size_bytes)}
-                  {doc.status === "ready" && ` · ${doc.chunk_count} passage${doc.chunk_count === 1 ? "" : "s"}`}
+                  {doc.status === "ready" &&
+                    ` · ${doc.chunk_count} passage${doc.chunk_count === 1 ? "" : "s"}`}
                   {doc.project_ids.length > 0 &&
                     ` · in ${doc.project_ids.length} other project${doc.project_ids.length === 1 ? "" : "s"}`}
                 </div>
@@ -130,7 +136,9 @@ function AccessPanel({ project, knowledge, onRevised, onReload }) {
   const users = knowledge.used_by;
 
   async function giveAccess() {
-    const res = await ask.run(() => api.reviseProject(project.project_id, ACCESS_REQUEST));
+    const res = await ask.run(() =>
+      api.reviseProject(project.project_id, ACCESS_REQUEST),
+    );
     if (res) {
       setReply(res.reply.content);
       onRevised(res.project);
@@ -143,8 +151,8 @@ function AccessPanel({ project, knowledge, onRevised, onReload }) {
       {users.length > 0 ? (
         <div className="stack">
           <p>
-            {users.length === 1 ? "This agent searches" : "These agents search"} the files with{" "}
-            <code>knowledge_search</code>:
+            {users.length === 1 ? "This agent searches" : "These agents search"}{" "}
+            the files with <code>knowledge_search</code>:
           </p>
           <div className="chips">
             {users.map((id) => (
@@ -153,17 +161,28 @@ function AccessPanel({ project, knowledge, onRevised, onReload }) {
               </Pill>
             ))}
           </div>
-          <p className="muted">New files are searchable as soon as they&apos;re ready — no recompiling.</p>
+          <p className="muted">
+            New files are searchable as soon as they&apos;re ready — no
+            recompiling.
+          </p>
         </div>
       ) : (
         <div className="stack">
-          <Callout tone={ready ? "warn" : undefined} title="Agents can't use these files yet">
+          <Callout
+            tone={ready ? "warn" : undefined}
+            title="Agents can't use these files yet"
+          >
             {ready
               ? "No agent has the knowledge_search tool. Ask the assistant to give it to the agents that need facts from your files."
               : "Once a file is ready, the assistant can give agents the knowledge_search tool."}
           </Callout>
           <div className="row">
-            <Button variant="primary" onClick={giveAccess} loading={ask.busy} disabled={!ready}>
+            <Button
+              variant="primary"
+              onClick={giveAccess}
+              loading={ask.busy}
+              disabled={!ready}
+            >
               {!ask.busy && <Icon name="chat" size={14} />}
               Give agents access
             </Button>
@@ -190,7 +209,9 @@ function SearchPanel({ project, knowledge }) {
   async function submit(event) {
     event.preventDefault();
     if (!query.trim()) return;
-    const res = await search.run(() => api.searchKnowledge(project.project_id, query.trim(), 3));
+    const res = await search.run(() =>
+      api.searchKnowledge(project.project_id, query.trim(), 3),
+    );
     if (res) setResults(res.results);
   }
 
@@ -201,17 +222,25 @@ function SearchPanel({ project, knowledge }) {
           type="text"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder={ready ? "Ask something your files answer" : "Add a file first"}
+          placeholder={
+            ready ? "Ask something your files answer" : "Add a file first"
+          }
           aria-label="Search the knowledge base"
           disabled={!ready}
           maxLength={1000}
         />
-        <Button type="submit" loading={search.busy} disabled={!ready || !query.trim()}>
+        <Button
+          type="submit"
+          loading={search.busy}
+          disabled={!ready || !query.trim()}
+        >
           Search
         </Button>
       </form>
       <ErrorCallout error={search.error} />
-      {results && results.length === 0 && <p className="muted">No matching passages.</p>}
+      {results && results.length === 0 && (
+        <p className="muted">No matching passages.</p>
+      )}
       {results && results.length > 0 && (
         <ol className="hits">
           {results.map((hit, i) => (
@@ -232,6 +261,7 @@ function SearchPanel({ project, knowledge }) {
   );
 }
 
+/** The Resources step's Documents tab: files attached to the project. */
 export function KnowledgeStep({ project, onKnowledgeChanged, onRevised }) {
   const id = project.project_id;
   const [knowledge, setKnowledge] = useState(null);
@@ -283,7 +313,10 @@ export function KnowledgeStep({ project, onKnowledgeChanged, onRevised }) {
     setProblems(refused);
     if (accepted.length === 0) return;
     await upload.run(async () => {
-      for (const batch of batches(accepted, knowledge.limits.max_files_per_upload)) {
+      for (const batch of batches(
+        accepted,
+        knowledge.limits.max_files_per_upload,
+      )) {
         await api.uploadDocuments(id, batch);
       }
     });
@@ -310,91 +343,102 @@ export function KnowledgeStep({ project, onKnowledgeChanged, onRevised }) {
 
   if (!knowledge) {
     return (
-      <div className="page">
-        <Panel>{load.error ? <ErrorCallout error={load.error} /> : <Skeleton lines={4} />}</Panel>
-      </div>
+      <Panel>
+        {load.error ? (
+          <ErrorCallout error={load.error} />
+        ) : (
+          <Skeleton lines={4} />
+        )}
+      </Panel>
     );
   }
 
   const { documents, embedding } = knowledge;
-  const provider = embedding?.provider ?? knowledge.embedding_options.find((o) => o.available)?.provider;
+  const provider =
+    embedding?.provider ??
+    knowledge.embedding_options.find((o) => o.available)?.provider;
 
+  // The Resources step provides the page, its tabs and the action bar.
   return (
-    <>
-      <div className="page">
-        <div className="split">
+    <div className="split">
+      <div className="stack">
+        <Panel
+          title="Knowledge for this project"
+          subtitle="This project's agents search only the files attached here. New files also go into your library."
+        >
           <div className="stack">
-            <Panel
-              title="Knowledge for this project"
-              subtitle="This project's agents search only the files attached here. New files also go into your library."
-            >
-              <div className="stack">
-                <Callout tone="info" title="Where your files go">
-                  Text from your files, and the questions agents search with, are sent to{" "}
-                  <strong>{provider ? providerName(provider) : "the embedding provider"}</strong> to
-                  index and search them. The files themselves aren&apos;t kept — only the text
-                  passages taken from them.
-                </Callout>
-                <UploadArea limits={knowledge.limits} onFiles={addFiles} uploading={upload.busy} />
-                {problems.length > 0 && (
-                  <Callout tone="warn" title="Some files weren't added">
-                    <ul className="steps-list">
-                      {problems.map((p) => (
-                        <li key={p}>{p}</li>
-                      ))}
-                    </ul>
-                  </Callout>
-                )}
-                <ErrorCallout error={upload.error || detach.error || attach.error} />
-              </div>
-            </Panel>
-
-            <Panel
-              title="Attached files"
-              subtitle={
-                documents.length > 0
-                  ? `${documents.length} file${documents.length === 1 ? "" : "s"} · ${knowledge.passages} passages`
-                  : undefined
-              }
-              flush
-            >
-              {documents.length === 0 ? (
-                <div className="panel__body">
-                  <Empty title="No files attached">
-                    Optional. Attach files from your library or add new ones when this project&apos;s
-                    agents need facts that only your documents have.
-                  </Empty>
-                </div>
-              ) : (
-                <ul className="doclist" aria-live="polite">
-                  {documents.map((doc) => (
-                    <DocumentRow key={doc.id} doc={doc} onDetach={detachDocument} />
+            <Callout tone="info" title="Where your files go">
+              Text from your files, and the questions agents search with, are
+              sent to{" "}
+              <strong>
+                {provider ? providerName(provider) : "the embedding provider"}
+              </strong>{" "}
+              to index and search them. The files themselves aren&apos;t kept —
+              only the text passages taken from them.
+            </Callout>
+            <UploadArea
+              limits={knowledge.limits}
+              onFiles={addFiles}
+              uploading={upload.busy}
+            />
+            {problems.length > 0 && (
+              <Callout tone="warn" title="Some files weren't added">
+                <ul className="steps-list">
+                  {problems.map((p) => (
+                    <li key={p}>{p}</li>
                   ))}
                 </ul>
-              )}
-            </Panel>
-
-            <LibraryPanel knowledge={knowledge} onAttach={attachDocument} attaching={attaching} />
+              </Callout>
+            )}
+            <ErrorCallout
+              error={upload.error || detach.error || attach.error}
+            />
           </div>
+        </Panel>
 
-          <aside className="split__aside stack">
-            <AccessPanel project={project} knowledge={knowledge} onRevised={onRevised} onReload={reload} />
-            <SearchPanel project={project} knowledge={knowledge} />
-            <EmbeddingNote knowledge={knowledge} />
-          </aside>
-        </div>
+        <Panel
+          title="Attached files"
+          subtitle={
+            documents.length > 0
+              ? `${documents.length} file${documents.length === 1 ? "" : "s"} · ${knowledge.passages} passages`
+              : undefined
+          }
+          flush
+        >
+          {documents.length === 0 ? (
+            <div className="panel__body">
+              <Empty title="No files attached">
+                Optional. Attach files from your library or add new ones when
+                this project&apos;s agents need facts that only your documents
+                have.
+              </Empty>
+            </div>
+          ) : (
+            <ul className="doclist" aria-live="polite">
+              {documents.map((doc) => (
+                <DocumentRow key={doc.id} doc={doc} onDetach={detachDocument} />
+              ))}
+            </ul>
+          )}
+        </Panel>
+
+        <LibraryPanel
+          knowledge={knowledge}
+          onAttach={attachDocument}
+          attaching={attaching}
+        />
       </div>
 
-      <ActionBar note="Optional: agents only see these files through the knowledge_search tool.">
-        <LinkButton href={paths.project(id, "brief")}>
-          <Icon name="arrowLeft" />
-          Brief
-        </LinkButton>
-        <LinkButton variant="primary" href={paths.project(id, "plan")}>
-          Review plan
-          <Icon name="arrowRight" />
-        </LinkButton>
-      </ActionBar>
-    </>
+      <aside className="split__aside stack">
+        <AccessPanel
+          project={project}
+          knowledge={knowledge}
+          onRevised={onRevised}
+          onReload={reload}
+        />
+        <SearchPanel project={project} knowledge={knowledge} />
+        <EmbeddingNote knowledge={knowledge} />
+      </aside>
+    </div>
   );
 }

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Icon } from "../components/icons.jsx";
+import { ItemCard } from "../components/ItemCard.jsx";
+import { ItemsToolbar, matchesFilter } from "../components/ItemsToolbar.jsx";
 import {
   Button,
   Callout,
@@ -14,11 +16,12 @@ import {
 } from "../components/ui.jsx";
 import { api } from "../lib/api.js";
 import { formatBytes, queryPreview, tableName } from "../lib/datasources.js";
+import { useExpanded } from "../lib/expanded.js";
 import { projectName } from "../lib/format.js";
 import { useAction } from "../lib/useAction.js";
 
 /** Each step of a connection check, ticked or crossed. */
-function Steps({ steps }) {
+export function Steps({ steps }) {
   if (!steps?.length) return null;
   return (
     <ul className="dsteps" aria-label="Connection check">
@@ -105,9 +108,7 @@ function ConnectForm({ defaults, onConnected, onCancel }) {
       {connect.error?.details?.steps && (
         <Steps steps={connect.error.details.steps} />
       )}
-      {connect.error && (
-        <ErrorCallout error={{ ...connect.error, details: null }} />
-      )}
+      {connect.error && <ErrorCallout error={connect.error} hideDetails />}
     </form>
   );
 }
@@ -342,8 +343,19 @@ export function TestQuery({ source, limits }) {
   );
 }
 
-function SourcePanel({ source, projects, limits, onChanged, onDeleted }) {
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+function sourceSummary(source) {
+  return [
+    source.billing_project,
+    plural(source.tables.length, "table"),
+    plural(source.project_ids.length, "project"),
+  ].join(" · ");
+}
+
+function SourcePanel({ source, projects, limits, open, onToggle, onChanged, onDeleted }) {
   const [picking, setPicking] = useState(source.tables.length === 0);
+  const [tab, setTab] = useState("tables");
   const remove = useAction();
 
   async function deleteSource() {
@@ -352,10 +364,19 @@ function SourcePanel({ source, projects, limits, onChanged, onDeleted }) {
     return Boolean(res);
   }
 
+  const tabs = [
+    { key: "tables", label: "Tables", count: source.tables.length },
+    { key: "projects", label: "Projects", count: source.project_ids.length },
+    ...(source.tables.length > 0 ? [{ key: "query", label: "Test query" }] : []),
+  ];
+  const current = tabs.some((t) => t.key === tab) ? tab : "tables";
+
   return (
-    <Panel
+    <ItemCard
+      id={source.id}
       title={source.name}
-      subtitle={`${source.billing_project} · ${source.service_account}`}
+      summary={sourceSummary(source)}
+      status={source.tables.length === 0 && <Pill tone="warn">No tables</Pill>}
       actions={
         <DeleteButton
           name={source.name}
@@ -363,10 +384,19 @@ function SourcePanel({ source, projects, limits, onChanged, onDeleted }) {
           onDelete={deleteSource}
         />
       }
+      open={open}
+      onToggle={onToggle}
+      tabs={tabs}
+      tab={current}
+      onTab={setTab}
+      notice={<ErrorCallout error={remove.error} />}
     >
-      <div className="stack">
-        <section aria-label={`Tables in ${source.name}`}>
-          <h3 className="dsection">Tables agents may query</h3>
+      {current === "tables" && (
+        <section aria-label={`Tables in ${source.name}`} className="stack">
+          <p className="muted dsection__hint">
+            Signed in as {source.service_account}. Agents may query only these
+            tables.
+          </p>
           {picking ? (
             <TablePicker
               source={source}
@@ -402,9 +432,10 @@ function SourcePanel({ source, projects, limits, onChanged, onDeleted }) {
             </div>
           )}
         </section>
+      )}
 
+      {current === "projects" && (
         <section aria-label={`Projects using ${source.name}`}>
-          <h3 className="dsection">Projects</h3>
           <p className="muted dsection__hint">
             A project&apos;s agents can query these tables once it&apos;s ticked
             here and an agent has the <code>sql_query</code> tool. Query results
@@ -416,13 +447,10 @@ function SourcePanel({ source, projects, limits, onChanged, onDeleted }) {
             onSaved={onChanged}
           />
         </section>
+      )}
 
-        {source.tables.length > 0 && !picking && (
-          <TestQuery source={source} limits={limits} />
-        )}
-        <ErrorCallout error={remove.error} />
-      </div>
-    </Panel>
+      {current === "query" && <TestQuery source={source} limits={limits} />}
+    </ItemCard>
   );
 }
 
@@ -431,6 +459,7 @@ export function DataSourcesPage() {
   const [body, setBody] = useState(null);
   const [adding, setAdding] = useState(false);
   const [lastCheck, setLastCheck] = useState(null);
+  const [filter, setFilter] = useState("");
   const load = useAction();
   const { run: runLoad } = load;
 
@@ -444,6 +473,13 @@ export function DataSourcesPage() {
   }, [runLoad]);
 
   const projects = useMemo(() => body?.projects ?? [], [body]);
+  const sources = useMemo(() => body?.sources ?? [], [body]);
+  const expanded = useExpanded(
+    "agentic-platform.data-sources-open",
+    sources.map((s) => s.id),
+    sources.filter((s) => s.tables.length === 0).map((s) => s.id),
+  );
+  const shown = sources.filter((s) => matchesFilter(filter, s.name, sourceSummary(s)));
 
   function replace(source) {
     setBody((b) => ({
@@ -453,10 +489,21 @@ export function DataSourcesPage() {
     reload();
   }
 
+  const showForm = body?.configured && (adding || sources.length === 0);
   const header = (
     <PageHeader
       title="Data sources"
       subtitle="Let agents query your BigQuery tables with SQL they write. Read-only, limited to the tables you choose, and capped per query."
+      actions={
+        body?.configured &&
+        sources.length > 0 &&
+        !adding && (
+          <Button variant="primary" onClick={() => setAdding(true)}>
+            <Icon name="plus" size={13} />
+            Connect a source
+          </Button>
+        )
+      }
     />
   );
 
@@ -486,51 +533,62 @@ export function DataSourcesPage() {
         </Callout>
       )}
       <div className="stack">
+        {showForm && (
+          <Panel title="Connect BigQuery">
+            <ConnectForm
+              defaults={body.defaults}
+              onCancel={sources.length > 0 ? () => setAdding(false) : null}
+              onConnected={(res) => {
+                setLastCheck({
+                  name: res.source.name,
+                  steps: res.check.steps,
+                });
+                setAdding(false);
+                expanded.open(res.source.id);
+                reload();
+              }}
+            />
+          </Panel>
+        )}
         {lastCheck && (
           <Callout tone="success" title={`Connected ${lastCheck.name}`}>
             <Steps steps={lastCheck.steps} />
           </Callout>
         )}
-        {body.sources.map((s) => (
-          <SourcePanel
-            key={s.id}
-            source={s}
-            projects={projects}
-            limits={body.limits}
-            onChanged={replace}
-            onDeleted={() => {
-              setLastCheck(null);
-              reload();
-            }}
-          />
-        ))}
-        {body.configured &&
-          (adding || body.sources.length === 0 ? (
-            <Panel title="Connect BigQuery">
-              <ConnectForm
-                defaults={body.defaults}
-                onCancel={
-                  body.sources.length > 0 ? () => setAdding(false) : null
-                }
-                onConnected={(res) => {
-                  setLastCheck({
-                    name: res.source.name,
-                    steps: res.check.steps,
-                  });
-                  setAdding(false);
+        <ItemsToolbar
+          count={sources.length}
+          noun="source"
+          filter={filter}
+          onFilter={setFilter}
+          shown={shown.length}
+          allOpen={expanded.openCount === sources.length}
+          noneOpen={expanded.openCount === 0}
+          onExpandAll={expanded.expandAll}
+          onCollapseAll={expanded.collapseAll}
+        />
+        {sources.length > 0 && (
+          <div className="itemlist">
+            {shown.map((s) => (
+              <SourcePanel
+                key={s.id}
+                source={s}
+                projects={projects}
+                limits={body.limits}
+                open={expanded.isOpen(s.id)}
+                onToggle={() => expanded.toggle(s.id)}
+                onChanged={replace}
+                onDeleted={() => {
+                  setLastCheck(null);
                   reload();
                 }}
               />
-            </Panel>
-          ) : (
-            <div>
-              <Button onClick={() => setAdding(true)}>
-                <Icon name="plus" size={13} />
-                Connect another source
-              </Button>
-            </div>
-          ))}
-        {!body.configured && body.sources.length === 0 && (
+            ))}
+            {shown.length === 0 && (
+              <Empty title="No sources match">Clear the filter to see them all.</Empty>
+            )}
+          </div>
+        )}
+        {!body.configured && sources.length === 0 && (
           <Empty title="No data sources yet" />
         )}
       </div>

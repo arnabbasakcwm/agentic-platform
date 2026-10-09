@@ -1,4 +1,4 @@
-import { RunHistory } from "../../components/RunHistory.jsx";
+import { RunHistoryDrawer } from "../../components/RunHistory.jsx";
 import {
   Suspense,
   lazy,
@@ -65,14 +65,39 @@ function runSummary(run, clock) {
     case "completed":
       return run.halted ? `Halted after ${elapsed}` : `Completed in ${elapsed}`;
     case "failed":
+      if (stopped(run)) return elapsed ? `Stopped after ${elapsed}` : "Stopped";
       return elapsed ? `Failed after ${elapsed}` : "Failed";
     default:
       return "Not run yet";
   }
 }
 
+/** Stops the run shown; only while it runs and the server knows its id. */
+function StopButton({ run, runId, stopping, onStop, size }) {
+  if (run.status !== "running" || !runId) return null;
+  return (
+    <Button
+      size={size}
+      variant="danger"
+      loading={stopping}
+      onClick={onStop}
+      aria-label={stopping ? "Stopping the run" : "Stop the run"}
+    >
+      {!stopping && <Icon name="stop" size={14} />}
+      {stopping ? "Stopping…" : "Stop"}
+    </Button>
+  );
+}
+
+const stopped = (run) =>
+  run.status === "failed" && run.error?.errorType === "RunStopped";
+
 const badgeStatus = (run) =>
-  run.status === "completed" && run.halted ? "failed" : run.status;
+  stopped(run)
+    ? "skipped"
+    : run.status === "completed" && run.halted
+      ? "failed"
+      : run.status;
 
 /** Plain-language status changes for screen readers (rendered into an aria-live region). */
 function useAnnouncement(run, plan) {
@@ -85,6 +110,7 @@ function useAnnouncement(run, plan) {
       if (run.status === "running") next = "Run started.";
       else if (run.status === "completed")
         next = run.halted ? "Run halted." : "Run completed.";
+      else if (stopped(run)) next = "Run stopped.";
       else if (run.status === "failed")
         next = `Run failed: ${run.error?.message ?? ""}`;
     } else {
@@ -109,7 +135,17 @@ function useAnnouncement(run, plan) {
   return message;
 }
 
-function InputPanel({ project, run, draftInput, onDraftInput, onStart }) {
+function InputPanel({
+  project,
+  run,
+  runId,
+  draftInput,
+  onDraftInput,
+  onStart,
+  onStop,
+  stopping,
+  stopError,
+}) {
   const [mode, setMode] = useState("graph");
   const [agentId, setAgentId] = useState("");
   const [parseError, setParseError] = useState(null);
@@ -152,19 +188,27 @@ function InputPanel({ project, run, draftInput, onDraftInput, onStart }) {
       <Panel
         title="Input"
         footer={
-          <Button
-            type="submit"
-            variant="primary"
-            loading={running}
-            disabled={blocked || running}
-          >
-            {!running && <Icon name="play" size={14} />}
-            {running
-              ? "Running…"
-              : mode === "graph"
-                ? "Run graph"
-                : "Run agent"}
-          </Button>
+          <div className="run-actions">
+            <Button
+              type="submit"
+              variant="primary"
+              loading={running}
+              disabled={blocked || running}
+            >
+              {!running && <Icon name="play" size={14} />}
+              {running
+                ? "Running…"
+                : mode === "graph"
+                  ? "Run graph"
+                  : "Run agent"}
+            </Button>
+            <StopButton
+              run={run}
+              runId={runId}
+              stopping={stopping}
+              onStop={onStop}
+            />
+          </div>
         }
       >
         <div className="segmented" role="tablist" aria-label="What to run">
@@ -232,6 +276,7 @@ function InputPanel({ project, run, draftInput, onDraftInput, onStart }) {
           </Callout>
         )}
         {parseError && <ErrorCallout error={parseError} />}
+        {stopError && <ErrorCallout error={stopError} />}
       </Panel>
     </form>
   );
@@ -317,8 +362,14 @@ function ResultsPanel({
       <UsageLine usage={run.usage} />
       <div className="panel__body run-results__body">
         {run.status === "failed" && run.error && (
-          <div className="stack" style={{ marginBottom: 16 }}>
-            <ErrorCallout error={run.error} />
+          <div className="stack mb-md">
+            {run.error.errorType === "RunStopped" ? (
+              <Callout tone="info" title="Stopped">
+                You stopped this run. Outputs finished before then are kept below.
+              </Callout>
+            ) : (
+              <ErrorCallout error={run.error} />
+            )}
             <div>
               <Button onClick={onRetry}>
                 <Icon name="play" size={14} />
@@ -373,11 +424,15 @@ export function RunStep({
   draftInput,
   onDraftInput,
   onStart,
+  onStop,
+  stopping = false,
+  stopError = null,
 }) {
   const clock = useClock(run.status === "running");
   const cardRefs = useRef({});
   const flowRef = useRef(null);
   const [highlighted, setHighlighted] = useState(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const announcement = useAnnouncement(run, project.plan);
   const counts = runCounts(run);
 
@@ -437,6 +492,25 @@ export function RunStep({
               status={badgeStatus(run)}
               label={runSummary(run, clock)}
             />
+            <StopButton
+              run={run}
+              runId={runId}
+              stopping={stopping}
+              onStop={onStop}
+              size="sm"
+            />
+            <Button
+              size="sm"
+              aria-haspopup="dialog"
+              aria-expanded={historyOpen}
+              onClick={() => setHistoryOpen(true)}
+            >
+              <Icon name="clock" size={14} />
+              History
+              {history.length > 0 && (
+                <span className="count-chip">{history.length}</span>
+              )}
+            </Button>
           </header>
           <Suspense
             fallback={
@@ -456,37 +530,42 @@ export function RunStep({
           </div>
         </section>
 
-        <div className="run-columns">
-          <InputPanel
-            project={project}
-            run={run}
-            draftInput={draftInput}
-            onDraftInput={onDraftInput}
-            onStart={startAndWatch}
-          />
-          <ResultsPanel
-            project={project}
-            run={run}
-            clock={clock}
-            cardRefs={cardRefs}
-            highlighted={highlighted}
-            draftInput={draftInput}
-            onRetry={retry}
-          />
-        </div>
+        <InputPanel
+          project={project}
+          run={run}
+          runId={runId}
+          draftInput={draftInput}
+          onDraftInput={onDraftInput}
+          onStart={startAndWatch}
+          onStop={onStop}
+          stopping={stopping}
+          stopError={stopError}
+        />
+        <ResultsPanel
+          project={project}
+          run={run}
+          clock={clock}
+          cardRefs={cardRefs}
+          highlighted={highlighted}
+          draftInput={draftInput}
+          onRetry={retry}
+        />
         {runVersion != null && runVersion !== project.plan_version && (
           <p className="muted runhist__older" role="status">
             This run used plan v{runVersion}; the plan is now v
             {project.plan_version}.
           </p>
         )}
-        <RunHistory
-          runs={history}
-          selectedId={runId}
-          onSelect={onOpenRun}
-          note={`Last ${history.length} saved on the server — they stay when you leave this page`}
-        />
       </div>
+
+      <RunHistoryDrawer
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        runs={history}
+        selectedId={runId}
+        onSelect={onOpenRun}
+        note={`Last ${history.length} saved on the server — they stay when you leave this page`}
+      />
 
       <p className="sr-only" aria-live="polite" role="status">
         {announcement}

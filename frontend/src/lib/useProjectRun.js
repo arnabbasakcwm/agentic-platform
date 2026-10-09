@@ -10,7 +10,6 @@ export function defaultInput(plan) {
 }
 
 const RECONNECT_MS = 2000;
-const POLL_MS = 1000;
 
 /**
  * A project's runs, saved on the server: the run shown (the latest by default, or one
@@ -43,7 +42,7 @@ export function useProjectRun(project) {
   // Follow a running run: replay from `after`, then live events until it ends. A dropped
   // connection is resumed from where it left off.
   const watch = useCallback(
-    (runId, record, after) => {
+    (runId, after) => {
       watchRef.current?.abort();
       const controller = new AbortController();
       watchRef.current = controller;
@@ -54,29 +53,7 @@ export function useProjectRun(project) {
             : current,
         );
 
-      if (record.mode === "agent") {
-        // One request on the server: poll until it's done.
-        const poll = async () => {
-          while (!controller.signal.aborted) {
-            await new Promise((r) => setTimeout(r, POLL_MS));
-            if (controller.signal.aborted) return;
-            try {
-              const { run } = await api.getRun(projectId, runId);
-              if (run.status !== "running") {
-                update(() => stateFromRecord(plan, run));
-                refreshHistory();
-                return;
-              }
-            } catch {
-              // try again on the next tick
-            }
-          }
-        };
-        poll();
-        return;
-      }
-
-      // Events already shown: a reopened run is built from its saved events.
+      // Events already shown (single-agent runs stream the same events as full ones): a reopened run is built from its saved events.
       let received = after;
       const follow = async () => {
         while (!controller.signal.aborted) {
@@ -115,7 +92,7 @@ export function useProjectRun(project) {
       };
       follow();
     },
-    [projectId, plan, refreshHistory],
+    [projectId, refreshHistory],
   );
 
   /** Show a saved run (from the history list), following it if it's still going. */
@@ -131,7 +108,7 @@ export function useProjectRun(project) {
           state: stateFromRecord(plan, run),
         });
         if (run.status === "running")
-          watch(run.id, run, run.events?.length ?? 0);
+          watch(run.id, run.events?.length ?? 0);
       } catch (error) {
         setShown({ id: runId, version, state: failRun(idleRun(plan), error) });
       }
@@ -168,7 +145,7 @@ export function useProjectRun(project) {
         const { run } = await api.startRun(projectId, { input, mode, agentId });
         setShown({ id: run.id, version: run.plan_version, state: pending });
         refreshHistory();
-        watch(run.id, run, 0); // a fresh run: follow from its first event
+        watch(run.id, 0); // a fresh run: follow from its first event
       } catch (error) {
         setShown({ id: null, version, state: failRun(pending, error) });
       }
@@ -176,7 +153,35 @@ export function useProjectRun(project) {
     [plan, version, projectId, refreshHistory, watch],
   );
 
+  // Ask the server to stop the shown run. The run ends there within seconds and the
+  // stream being followed reports it (run_failed, RunStopped), so nothing changes here
+  // until the server says so — apart from the button showing it was pressed.
+  const [stopping, setStopping] = useState(null); // id of the run being stopped
+  const [stopError, setStopError] = useState(null);
+  const shownId = shown?.id ?? null;
+  const stop = useCallback(async () => {
+    if (!shownId) return;
+    setStopping(shownId);
+    setStopError(null);
+    try {
+      const { run } = await api.stopRun(projectId, shownId);
+      if (run.status !== "running") {
+        // Already over (it finished just now, or its process was gone): show it as saved.
+        setShown((current) =>
+          current?.id === run.id
+            ? { ...current, state: stateFromRecord(plan, run) }
+            : current,
+        );
+        refreshHistory();
+      }
+    } catch (error) {
+      setStopError(error);
+      setStopping(null);
+    }
+  }, [shownId, projectId, plan, refreshHistory]);
+
   const run = !plan ? null : shown ? shown.state : idleRun(plan);
+  const isStopping = stopping != null && stopping === shownId && run?.status === "running";
   // The input box: what you typed, else the shown run's input, else the plan's example.
   const shownInput = shown?.state?.input;
   const draftInput =
@@ -196,5 +201,8 @@ export function useProjectRun(project) {
     draftInput,
     setDraftInput: setDraft,
     start,
+    stop,
+    stopping: isStopping,
+    stopError: shownId && run?.status === "running" ? stopError : null,
   };
 }

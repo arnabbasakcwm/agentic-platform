@@ -43,7 +43,10 @@ function ProjectRow({ project, onDelete, onRenamed }) {
       <td>
         <Pill tone="accent">{project.orchestration_pattern}</Pill>
       </td>
-      <td className="table__num">{project.agent_count}</td>
+      <td className="table__num">
+        {project.agent_count}
+        <span className="table__unit"> agent{project.agent_count === 1 ? "" : "s"}</span>
+      </td>
       <td>
         {project.compiled ? (
           <Pill tone="success" dot>
@@ -53,11 +56,7 @@ function ProjectRow({ project, onDelete, onRenamed }) {
           <Pill dot>Not compiled</Pill>
         )}
       </td>
-      <td
-        className="muted"
-        title={fullDate(project.updated_at)}
-        style={{ whiteSpace: "nowrap" }}
-      >
+      <td className="muted nowrap" title={fullDate(project.updated_at)}>
         {timeAgo(project.updated_at)}
       </td>
       {/* Clicks here mustn't open the project (the row itself is a link). */}
@@ -105,7 +104,7 @@ export function ProjectsPage({
       {error ? (
         <Panel>
           <ErrorCallout error={error} />
-          <div style={{ marginTop: 12 }}>
+          <div className="mt-sm">
             <Button onClick={onRetry}>Try again</Button>
           </div>
         </Panel>
@@ -135,7 +134,7 @@ export function ProjectsPage({
               <ErrorCallout error={remove.error} />
             </div>
           )}
-          <table className="table">
+          <table className="table table--stack">
             <thead>
               <tr>
                 <th>Project</th>

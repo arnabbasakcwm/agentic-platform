@@ -55,7 +55,8 @@ for (const scheme of ["light", "dark"]) {
     await expect(page.getByText("Connected BigQuery")).toBeVisible();
 
     // Choose tables: browse mydata, and add a public table by name.
-    const source = page.locator(".panel", { hasText: "agentic-bq-reader@" });
+    // A just-connected source opens on its Tables tab, with the table picker.
+    const source = page.getByRole("region", { name: "BigQuery", exact: true });
     await source.getByLabel("trips").check();
     await source.getByLabel("Add a table by full name").fill("bigquery-public-data.samples.shakespeare");
     await source.getByRole("button", { name: "Add", exact: true }).click();
@@ -67,17 +68,21 @@ for (const scheme of ["light", "dark"]) {
     await expect(tables).toContainText("mydata.trips");
 
     // Attach to the travel project.
+    await source.getByRole("tab", { name: /^Projects/ }).click();
     await source.getByLabel(TRAVEL).check();
     await expect(source.getByLabel(TRAVEL)).toBeChecked();
     await expect(source).toContainText("No agent queries it yet");
 
+    await expect(source.getByRole("button", { name: /^BigQuery/ })).toContainText("2 tables · 1 project");
+
     // Test query: rows and bytes; a write is refused.
+    await source.getByRole("tab", { name: "Test query" }).click();
     await source.getByRole("button", { name: "Run query" }).click();
     await expect(source.locator(".dresult__table")).toContainText("21st & Speedway @PCL");
     await expect(source.locator(".dresult__meta")).toContainText("23.0 MB scanned");
     await page.screenshot({ path: `e2e/screenshots/datasources-query-${scheme}.png`, fullPage: true });
     expect(await axeProblems(page, "query result")).toEqual([]);
-    await source.getByLabel("Test query").fill("DELETE FROM `agenticdb-510807.mydata.trips` WHERE TRUE");
+    await source.getByRole("textbox", { name: "Test query" }).fill("DELETE FROM `agenticdb-510807.mydata.trips` WHERE TRUE");
     await source.getByRole("button", { name: "Run query" }).click();
     await expect(source.getByText("only SELECT queries are allowed")).toBeVisible();
 

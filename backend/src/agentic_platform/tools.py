@@ -25,11 +25,18 @@ import requests
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, tool
 
-from .errors import KnowledgeUnavailableError, MissingToolKeyError, UnknownToolError, DataSourceUnavailableError
+from .errors import (
+    DataSourceUnavailableError,
+    KnowledgeUnavailableError,
+    McpUnavailableError,
+    MissingToolKeyError,
+    UnknownToolError,
+)
 
 if TYPE_CHECKING:
     from .datasources import DataContext
     from .knowledge import KnowledgeContext
+    from .mcp_client import McpContext
 
 # Wikipedia's API policy expects requests to identify themselves; the rest of the
 # services are fine with anything, so one constant covers every outbound call.
@@ -473,6 +480,59 @@ TOOL_REGISTRY: dict[str, Callable[[], BaseTool]] = {
 }
 
 
+# Tools from the user's MCP servers are named `mcp__<server>__<tool>`. They are never in
+# the registry: each project gets the approved tools of the servers attached to it
+# (attaching is the per-project opt-in), through an McpContext.
+MCP_PREFIX = "mcp__"
+
+
+def is_mcp_tool(name: str) -> bool:
+    return name.startswith(MCP_PREFIX)
+
+
+def uses_mcp(plan) -> bool:
+    """Whether any agent in the plan uses a tool from an MCP server."""
+    return any(is_mcp_tool(t) for agent in plan.agents for t in agent.tools)
+
+
+def _build_mcp_tools(names: list[str], mcp: McpContext | None) -> dict[str, BaseTool]:
+    """One LangChain tool per requested MCP tool, with the arguments and description the
+    user approved. Raises McpUnavailableError (naming each one) for tools no attached
+    server offers as approved."""
+    from langchain_core.tools import StructuredTool
+
+    from .errors import McpError
+
+    available = mcp.available() if mcp is not None else {}
+    missing = [n for n in names if n not in available]
+    if missing:
+        raise McpUnavailableError(missing)
+    built: dict[str, BaseTool] = {}
+    for name in names:
+        server, definition = available[name]
+
+        def run(config: RunnableConfig = None, __name: str = name, **arguments) -> str:
+            configurable = (config or {}).get("configurable") or {}
+            agent_id = configurable.get("agent_id")
+            try:
+                called, text = mcp.call(__name, arguments)
+            except McpError as e:
+                # Back to the agent as the tool result: it can try another way, and the
+                # run's error-recovery loop sees the reason.
+                return f"Tool call failed: {e}"
+            usage = configurable.get("usage")
+            if usage is not None:
+                usage.add(kind="mcp_call", provider="mcp", model=called.slug, input_tokens=0, agent_id=agent_id)
+            return text
+
+        description = definition.description or f"{definition.name} (from MCP server {server.name})"
+        built[name] = StructuredTool.from_function(
+            func=run, name=name, description=f"[{server.name}] {description}"[:1024],
+            args_schema=definition.input_schema,
+        )
+    return built
+
+
 def uses_knowledge(plan) -> bool:
     """Whether any agent in the plan searches the project's knowledge base."""
     return any(set(agent.tools) & KNOWLEDGE_TOOLS for agent in plan.agents)
@@ -491,7 +551,10 @@ def default_tool_names() -> list[str]:
 
 
 def get_tools(
-    names: list[str], knowledge: KnowledgeContext | None = None, data: DataContext | None = None
+    names: list[str],
+    knowledge: KnowledgeContext | None = None,
+    data: DataContext | None = None,
+    mcp: McpContext | None = None,
 ) -> list[BaseTool]:
     """Resolve tool names against the registry.
 
@@ -502,12 +565,16 @@ def get_tools(
     rather than mid-run. `knowledge` binds knowledge_search to one project's documents;
     without it that tool raises KnowledgeUnavailableError.
     """
-    unknown = [n for n in names if n not in TOOL_REGISTRY]
+    unknown = [n for n in names if n not in TOOL_REGISTRY and not is_mcp_tool(n)]
     if unknown:
         raise UnknownToolError(unknown)
+    mcp_names = [n for n in names if is_mcp_tool(n)]
+    mcp_tools = _build_mcp_tools(mcp_names, mcp) if mcp_names else {}
     built = []
     for n in names:
-        if n in KNOWLEDGE_TOOLS:
+        if n in mcp_tools:
+            built.append(mcp_tools[n])
+        elif n in KNOWLEDGE_TOOLS:
             built.append(_build_knowledge_search(knowledge))
         elif n in DATA_TOOLS:
             built.append(TOOL_REGISTRY[n](data))

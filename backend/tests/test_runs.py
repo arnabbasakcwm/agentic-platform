@@ -1,4 +1,4 @@
-"""Saved runs: background runs, the replayable stream, the last-5 limit, privacy,
+"""Saved runs: background runs, the replayable stream, the last-10 limit, privacy,
 interrupted runs, the existing run endpoints saving too, and deployed Try-it — offline."""
 
 import json
@@ -16,6 +16,7 @@ from agentic_platform.stores import (
     InMemoryProjectStore,
     InMemoryUsageStore,
     InMemoryUserStore,
+    RUNS_KEPT,
     RunRecord,
 )
 
@@ -28,7 +29,7 @@ def _plan():
     )
 
 
-def _fake_events(graph, task_input, bounds, usage=None):
+def _fake_events(graph, task_input, bounds, usage=None, should_stop=None):
     """What run_graph_events yields for a one-agent run, with a model call counted."""
     usage.add(kind="run", provider="google_genai", model="gemini-3.1-pro-preview", agent_id="analyst",
               input_tokens=100, output_tokens=20)
@@ -38,6 +39,25 @@ def _fake_events(graph, task_input, bounds, usage=None):
     yield "node_completed", {"node": "analyst", "at": 1.5, "output": output, "attempts": 1, "usage": []}
     yield "run_completed", {"at": 1.6, "duration_ms": 600, "outputs": {"analyst": output}, "errors": [],
                             "halted": False, "usage": usage.entries()}
+
+
+def _fake_agent_events(outputs):
+    """What run_agent_events yields for one agent that finishes."""
+    def events(plan, agent_id, task_input, *args, should_stop=None, **kwargs):
+        yield "run_started", {"at": 1.0, "timeout_s": plan.bounds.timeout_s}
+        yield "run_completed", {"at": 1.2, "duration_ms": 200, "outputs": outputs, "errors": [], "halted": False}
+    return events
+
+
+def _waits_for_stop(*args, should_stop=None, **kwargs):
+    """A run that keeps going until it's told to stop (graph or agent signature alike)."""
+    yield "run_started", {"at": time.time(), "timeout_s": 300}
+    for _ in range(250):
+        if should_stop():
+            yield "run_failed", {"at": time.time(), "error_type": "RunStopped", "message": "you stopped this run"}
+            return
+        time.sleep(0.02)
+    yield "run_completed", {"at": time.time(), "duration_ms": 5000, "outputs": {}, "errors": [], "halted": False}
 
 
 @pytest.fixture
@@ -112,11 +132,11 @@ def test_the_stream_replays_and_resumes(api):
     assert [e for e, _ in resumed] == ["node_completed", "run_completed"]
 
 
-def test_only_the_last_five_runs_are_kept(api):
+def test_only_the_last_ten_runs_are_kept(api):
     h = api.login("ada@example.com")
     pid = _project(api, h)
     ids = []
-    for i in range(6):
+    for i in range(RUNS_KEPT + 1):
         ids.append(api.post(f"/projects/{pid}/runs", json={"input": {"q": str(i)}}, headers=h).json()["run"]["id"])
         _wait(api, h, pid, ids[-1])
     listed = api.get(f"/projects/{pid}/runs", headers=h).json()["runs"]
@@ -159,7 +179,7 @@ def test_the_existing_run_endpoints_save_runs_too(api, monkeypatch):
         "outputs": {"analyst": {"content": "done", "data": {}}}, "errors": [], "halted": False})
     body = api.post(f"/projects/{pid}/run", json={"input": {"q": "y"}}, headers=h).json()
     assert body["outputs"]["analyst"]["content"] == "done"  # same response as before
-    monkeypatch.setattr(app_module, "run_single_agent", lambda *a, **k: {"outputs": {"analyst": {"content": "solo"}}})
+    monkeypatch.setattr(app_module, "run_agent_events", _fake_agent_events({"analyst": {"content": "solo"}}))
     r = api.post(f"/projects/{pid}/agents/analyst/invoke", json={"input": {"q": "z"}}, headers=h)
     assert r.json()["result"]["outputs"]["analyst"]["content"] == "solo"
     assert api.post(f"/projects/{pid}/agents/ghost/invoke", json={"input": {}}, headers=h).status_code == 404
@@ -206,3 +226,80 @@ def test_deleting_a_project_deletes_its_runs(api):
     user_id = api.get("/auth/me", headers=h).json()["id"]
     api.delete(f"/projects/{pid}", headers=h)
     assert app_module._runs.list(user_id, pid, "local") == []
+
+
+@pytest.mark.parametrize("mode", ["graph", "agent"])
+def test_a_running_run_can_be_stopped(api, monkeypatch, mode):
+    monkeypatch.setattr(app_module, "run_graph_events", _waits_for_stop)
+    monkeypatch.setattr(app_module, "run_agent_events", _waits_for_stop)
+    ada, bob = api.login("ada@example.com"), api.login("bob@example.com")
+    pid = _project(api, ada)
+    run_id = api.post(f"/projects/{pid}/runs", json={"input": {}, "mode": mode, "agent_id": "analyst"},
+                      headers=ada).json()["run"]["id"]
+    time.sleep(0.1)
+    # Saved as started at once, so a reloaded page knows the run has begun.
+    assert api.get(f"/projects/{pid}/runs/{run_id}", headers=ada).json()["run"]["events"][0]["event"] == "run_started"
+    assert api.post(f"/projects/{pid}/runs/{run_id}/stop", headers=bob).status_code == 404
+    r = api.post(f"/projects/{pid}/runs/{run_id}/stop", headers=ada)
+    assert r.status_code == 200
+    run = _wait(api, ada, pid, run_id)
+    assert run["status"] == "failed" and run["error"]["error_type"] == "RunStopped"
+    events = _sse(api.get(f"/projects/{pid}/runs/{run_id}/stream", headers=ada).text)
+    assert events[-1][0] == "run_failed" and events[-1][1]["error_type"] == "RunStopped"
+    # Stopping a run that already ended changes nothing.
+    again = api.post(f"/projects/{pid}/runs/{run_id}/stop", headers=ada).json()["run"]
+    assert again["status"] == "failed" and again["error"]["error_type"] == "RunStopped"
+
+
+def test_a_stop_reaches_a_run_through_its_saved_record(api, monkeypatch):
+    """Another worker process took the stop request: the run sees it in the store."""
+    monkeypatch.setattr(app_module, "run_graph_events", _waits_for_stop)
+    monkeypatch.setattr(app_module, "STOP_POLL_S", 0)
+    h = api.login("ada@example.com")
+    pid = _project(api, h)
+    run_id = api.post(f"/projects/{pid}/runs", json={"input": {}}, headers=h).json()["run"]["id"]
+    user_id = api.get("/auth/me", headers=h).json()["id"]
+    app_module._runs.update(user_id, run_id, stop_requested=True)  # no in-process flag set
+    run = _wait(api, h, pid, run_id)
+    assert run["error"]["error_type"] == "RunStopped"
+
+
+def test_a_stopped_run_whose_process_died_reads_as_stopped(api):
+    h = api.login("ada@example.com")
+    pid = _project(api, h)
+    user_id = api.get("/auth/me", headers=h).json()["id"]
+    recent = datetime.now(timezone.utc) - timedelta(seconds=5)
+    stale = datetime.now(timezone.utc) - timedelta(minutes=2)
+    app_module._runs.create(RunRecord(id="orphan", tenant_id=user_id, project_id=pid, started_at=recent,
+                                      updated_at=recent))
+    # Nothing in this process runs it, so the stop is only recorded ...
+    assert api.post(f"/projects/{pid}/runs/orphan/stop", headers=h).json()["run"]["status"] == "running"
+    assert app_module._runs.get(user_id, pid, "orphan").stop_requested is True
+    # ... and once nothing has ended it for a while, it reads as stopped.
+    app_module._runs.create(RunRecord(id="orphan2", tenant_id=user_id, project_id=pid, stop_requested=True,
+                                      started_at=stale, updated_at=stale))
+    run = api.get(f"/projects/{pid}/runs/orphan2", headers=h).json()["run"]
+    assert run["status"] == "failed" and run["error"]["error_type"] == "RunStopped"
+
+
+def test_deployed_runs_cant_be_stopped_here(api):
+    h = api.login("ada@example.com")
+    pid = _project(api, h)
+    user_id = api.get("/auth/me", headers=h).json()["id"]
+    app_module._runs.create(RunRecord(id="aws", tenant_id=user_id, project_id=pid, kind="deployed"))
+    r = api.post(f"/projects/{pid}/runs/aws/stop", headers=h)
+    assert r.status_code == 409 and r.json()["error_type"] == "RunNotStoppable"
+
+
+def test_a_single_agent_past_its_time_limit_is_a_timeout(api, monkeypatch):
+    def too_slow(plan, agent_id, task_input, *args, should_stop=None, **kwargs):
+        yield "run_started", {"at": 1.0, "timeout_s": 300}
+        yield "run_failed", {"at": 301.0, "error_type": "RunTimeout", "message": "the run exceeded its 300s time limit"}
+
+    monkeypatch.setattr(app_module, "run_agent_events", too_slow)
+    h = api.login("ada@example.com")
+    pid = _project(api, h)
+    r = api.post(f"/projects/{pid}/agents/analyst/invoke", json={"input": {}}, headers=h)
+    assert r.status_code == 504 and r.json()["error_type"] == "RunTimeout"
+    run = api.get(f"/projects/{pid}/runs", headers=h).json()["runs"][0]
+    assert run["status"] == "failed" and run["error"]["error_type"] == "RunTimeout"

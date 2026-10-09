@@ -133,9 +133,9 @@ for (const scheme of ["light", "dark"]) {
     await page.getByRole("button", { name: "Delete", exact: true }).click();
     await expect(rows).toHaveCount(2);
 
-    // A project link opens that project's Knowledge step, showing the attached file.
+    // A project link opens that project's Resources step (Documents), showing the attached file.
     await policy.getByRole("link", { name: TRAVEL }).click();
-    await expect(page).toHaveURL(/#\/projects\/e2e0travel0project\/knowledge$/);
+    await expect(page).toHaveURL(/#\/projects\/e2e0travel0project\/resources\/documents$/);
     await expect(page.locator(".doclist").getByText("policy.pdf")).toBeVisible();
 
     expect(errors).toEqual([]);

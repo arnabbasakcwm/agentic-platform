@@ -163,6 +163,9 @@ export function applyEvent(state, { event, data }) {
         error: { errorType: data.error_type, message: data.message, details: data.limit_s ? { limit_s: data.limit_s } : null },
       };
       // A run cut off mid-way: whatever was running didn't finish, and the rest never ran.
+      // A run the user stopped didn't fail: the agent working then was stopped.
+      if (data.error_type === "RunStopped")
+        return settle(settle(next, "skipped", "Stopped before it finished", ["running"]), "skipped", "Did not run");
       return settle(settle(next, "failed", data.message, ["running"]), "skipped", "Did not run");
     }
 

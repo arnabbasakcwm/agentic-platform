@@ -1,0 +1,70 @@
+# Production stack for one Linux server. Run it through ./deploy.sh, which passes
+# --env-file .env.production so the ${...} values below come from that file.
+name: agentic-platform
+
+services:
+  mongo:
+    image: mongo:8
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:?set MONGO_ROOT_USER in .env.production}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?set MONGO_ROOT_PASSWORD in .env.production}
+    volumes:
+      - mongo-data:/data/db
+      - mongo-config:/data/configdb
+    # No published port: only the API reaches the database, over the internal network.
+    networks: [backend]
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  api:
+    build: ./backend
+    image: agentic-platform-api:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    env_file: .env.production
+    environment:
+      MONGODB_URI: mongodb://${MONGO_ROOT_USER}:${MONGO_ROOT_PASSWORD}@mongo:27017/?authSource=admin
+      MONGODB_DB: ${MONGODB_DB:-agentic_platform}
+      MCP_ALLOW_INSECURE_LOCAL: ""
+    depends_on:
+      mongo:
+        condition: service_healthy
+    volumes:
+      # Built arm64 wheels for AgentCore packages; kept so each deploy doesn't rebuild them.
+      - deploy-cache:/app/.deploy-cache
+    networks: [backend, frontend]
+    stop_grace_period: 40s
+
+  web:
+    build: ./frontend
+    image: agentic-platform-web:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env.production}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+    networks: [frontend]
+
+networks:
+  backend:
+  frontend:
+
+volumes:
+  mongo-data:
+  mongo-config:
+  deploy-cache:
+  caddy-data:
+  caddy-config:

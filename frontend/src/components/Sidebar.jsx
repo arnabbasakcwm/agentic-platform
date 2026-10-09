@@ -101,6 +101,12 @@ export function Sidebar({
           active={route.page === "data"}
         />
         <NavItem
+          href={paths.mcp}
+          icon="bolt"
+          label="MCP servers"
+          active={route.page === "mcp"}
+        />
+        <NavItem
           href={paths.usage}
           icon="chart"
           label="Usage"

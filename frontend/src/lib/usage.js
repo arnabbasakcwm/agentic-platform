@@ -41,6 +41,7 @@ const KINDS = {
   embedding_index: "Indexing files",
   embedding_query: "Knowledge searches",
   bigquery_query: "Data queries (BigQuery)",
+  mcp_call: "Tool calls (MCP servers)",
   model_check: "Model checks",
 };
 
@@ -57,6 +58,7 @@ const PROVIDERS = {
   ollama: "Ollama",
   bedrock: "Amazon Bedrock",
   bigquery: "Google BigQuery",
+  mcp: "MCP server",
 };
 
 export function providerLabel(provider) {

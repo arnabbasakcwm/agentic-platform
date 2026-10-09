@@ -6,22 +6,9 @@ export const START = "__start__";
 export const END = "__end__";
 
 // One colour per agent, in plan order, used for its diagram node, output card, timeline
-// bar and legend entry. Mid-saturation hues that read on light and dark surfaces; they
-// mark identity (stripes, dots, bars), never carry text.
-export const AGENT_PALETTE = [
-  "#6366f1", // indigo
-  "#0ea5e9", // sky
-  "#10b981", // emerald
-  "#f59e0b", // amber
-  "#ec4899", // pink
-  "#8b5cf6", // violet
-  "#14b8a6", // teal
-  "#f97316", // orange
-  "#84cc16", // lime
-  "#06b6d4", // cyan
-  "#e11d48", // rose
-  "#a855f7", // purple
-];
+// bar and legend entry: mid-saturation hues (no orange, pink or purple) that mark
+// identity (stripes, dots, bars), never carrying text. Defined as CSS tokens.
+export const AGENT_PALETTE = Array.from({ length: 6 }, (_, i) => `var(--agent-${i + 1})`);
 
 export function agentColor(index) {
   return AGENT_PALETTE[index % AGENT_PALETTE.length];

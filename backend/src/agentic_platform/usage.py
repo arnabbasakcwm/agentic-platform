@@ -170,9 +170,16 @@ def price_for(provider: str, model: str, table: dict[str, Any] | None = None) ->
     return table["models"].get(f"{provider}/{model}")
 
 
+# Counted, but never costed: calls to the user's own MCP servers (like other tool API
+# costs, the platform doesn't know or bill them).
+UNCOSTED_KINDS = frozenset({"mcp_call"})
+
+
 def cost(entry: dict[str, Any], table: dict[str, Any] | None = None) -> float | None:
     """Estimated cost of a usage entry in the table's currency, or None if the model has
     no price. Long-context calls use the long-context rate when the table has one."""
+    if entry.get("kind") in UNCOSTED_KINDS:
+        return 0.0
     rate = price_for(entry["provider"], entry["model"], table)
     if rate is None:
         return None

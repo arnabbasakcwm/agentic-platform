@@ -31,7 +31,7 @@ export const DATA_ACCESS_REQUEST =
   "sql_query tools, and tell them to call sql_schema first, aggregate in SQL, and report " +
   "numbers exactly as the query returns them.";
 
-/** The Data step's hint in the project stepper. */
+/** A short summary of a project's attached data sources. */
 export function dataHint(summary) {
   if (!summary || summary.sources === 0) return "Optional";
   const n = summary.tables;

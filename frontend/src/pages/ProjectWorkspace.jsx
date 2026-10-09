@@ -15,19 +15,17 @@ import { api } from "../lib/api.js";
 import { ProjectName } from "../components/ProjectName.jsx";
 import { paths } from "../lib/router.js";
 import { useAction } from "../lib/useAction.js";
-import { dataHint } from "../lib/datasources.js";
-import { knowledgeHint } from "../lib/knowledge.js";
+import { resourcesHint, resourcesReady } from "../lib/resources.js";
 import { useProjectRun } from "../lib/useProjectRun.js";
 import { BriefStep } from "./project/BriefStep.jsx";
 import { CompileStep } from "./project/CompileStep.jsx";
 import { DeployStep } from "./project/DeployStep.jsx";
-import { DataStep } from "./project/DataStep.jsx";
-import { KnowledgeStep } from "./project/KnowledgeStep.jsx";
+import { ResourcesStep } from "./project/ResourcesStep.jsx";
 import { PlanStep } from "./project/PlanStep.jsx";
 import { RunStep } from "./project/RunStep.jsx";
 
 // The steps where the brief and plan can still change, so where the assistant is offered.
-const ASSISTANT_STEPS = ["brief", "knowledge", "data", "plan", "compile"];
+const ASSISTANT_STEPS = ["brief", "resources", "plan", "compile"];
 const ASSISTANT_KEY = "agentic-platform.assistant-open";
 
 // Open by default where there's room for it beside the page; remembered per browser.
@@ -54,7 +52,10 @@ function deployHint(deployment) {
 
 function runHint(project, run) {
   if (run?.status === "running") return "Running…";
-  if (run?.status === "failed") return "Last run failed";
+  if (run?.status === "failed")
+    return run.error?.errorType === "RunStopped"
+      ? "Last run stopped"
+      : "Last run failed";
   if (run?.status === "completed")
     return run.halted ? "Last run halted" : "Last run completed";
   return project.compiled ? "Ready" : "Needs compiling";
@@ -63,7 +64,14 @@ function runHint(project, run) {
 // One project, one step of its workflow per page. Mounted with key={id}, so switching
 // projects starts from a clean slate; switching steps keeps the loaded project and the
 // latest run, which keeps streaming while another step is open.
-export function ProjectWorkspace({ id, step, onChanged, tools, providers }) {
+export function ProjectWorkspace({
+  id,
+  step,
+  tab,
+  onChanged,
+  tools,
+  providers,
+}) {
   const [project, setProject] = useState(null);
   const {
     run,
@@ -74,6 +82,9 @@ export function ProjectWorkspace({ id, step, onChanged, tools, providers }) {
     draftInput,
     setDraftInput,
     start,
+    stop,
+    stopping,
+    stopError,
   } = useProjectRun(project);
   const [assistantOpen, setAssistantOpen] = useState(readAssistantOpen);
   const load = useAction();
@@ -111,7 +122,7 @@ export function ProjectWorkspace({ id, step, onChanged, tools, providers }) {
       <div className="page">
         <Panel>
           <ErrorCallout error={load.error} />
-          <div style={{ marginTop: 12 }}>
+          <div className="mt-sm">
             <LinkButton href={paths.projects}>Back to projects</LinkButton>
           </div>
         </Panel>
@@ -133,16 +144,11 @@ export function ProjectWorkspace({ id, step, onChanged, tools, providers }) {
   const steps = [
     { key: "brief", label: "Brief", hint: "Defined", done: true },
     {
-      key: "knowledge",
-      label: "Knowledge",
-      hint: knowledgeHint(project.knowledge),
-      done: (project.knowledge?.ready ?? 0) > 0,
-    },
-    {
-      key: "data",
-      label: "Data",
-      hint: dataHint(project.data_sources),
-      done: (project.data_sources?.tables ?? 0) > 0,
+      // Documents, databases and MCP tools: what the agents can use.
+      key: "resources",
+      label: "Resources",
+      hint: resourcesHint(project),
+      done: resourcesReady(project),
     },
     {
       key: "plan",
@@ -261,18 +267,11 @@ export function ProjectWorkspace({ id, step, onChanged, tools, providers }) {
             onSaved={projectChanged}
           />
         )}
-        {step === "knowledge" && (
-          // Not keyed by plan version: it holds no plan draft, and a revision made from it
-          // (giving agents access) shouldn't wipe the assistant's reply it shows.
-          <KnowledgeStep
+        {step === "resources" && (
+          <ResourcesStep
             project={project}
+            tab={tab}
             onKnowledgeChanged={knowledgeChanged}
-            onRevised={projectChanged}
-          />
-        )}
-        {step === "data" && (
-          <DataStep
-            project={project}
             onDataChanged={dataChanged}
             onRevised={projectChanged}
           />
@@ -301,6 +300,9 @@ export function ProjectWorkspace({ id, step, onChanged, tools, providers }) {
             draftInput={draftInput}
             onDraftInput={setDraftInput}
             onStart={start}
+            onStop={stop}
+            stopping={stopping}
+            stopError={stopError}
           />
         )}
         {step === "deploy" && (

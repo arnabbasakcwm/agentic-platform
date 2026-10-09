@@ -65,7 +65,9 @@ for (const scheme of ["light", "dark"]) {
     // Removing a chip, then planning: the request carries the remaining file.
     await chips.getByRole("button", { name: "Remove policy.pdf" }).click();
     await page.getByLabel("Task description").fill("Answer questions about fares");
-    await page.getByRole("button", { name: "Plan this team" }).click();
+    // Sending talks it through first; planning is the explicit Create plan step.
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    await page.getByRole("region", { name: "Task brief" }).getByRole("button", { name: "Create plan" }).click();
     await expect(page.getByRole("link", { name: "Review plan" })).toBeVisible();
     await expect(page.getByRole("list", { name: "Knowledge files" })).toContainText("fares.csv");
     await expect(page.getByRole("list", { name: "Knowledge files for this project" })).toHaveCount(0);

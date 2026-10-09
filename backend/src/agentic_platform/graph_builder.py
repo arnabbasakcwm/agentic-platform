@@ -33,11 +33,19 @@ from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
 
 from .agent_schema import AgentOutput, AgentPlan, AgentSpec, EmbeddingConfig, LLMConfig, RunBounds
-from .config import BEDROCK_REGION, EMBEDDING_MODELS, MOONSHOT_BASE_URL, PROVIDER_ENV_VARS, embedding_option
+from .config import (
+    BEDROCK_REGION,
+    EMBEDDING_MODELS,
+    LLM_REQUEST_TIMEOUT_S,
+    MOONSHOT_BASE_URL,
+    PROVIDER_ENV_VARS,
+    embedding_option,
+)
 from .errors import (
     ModelCannotCallToolsError,
     AgentExecutionError,
     MissingProviderKeyError,
+    RunStoppedError,
     UnsupportedProviderError,
 )
 from .tools import get_tools
@@ -61,6 +69,7 @@ def _malformed_tool_call(error: Exception) -> str | None:
 if TYPE_CHECKING:
     from .datasources import DataContext
     from .knowledge import KnowledgeContext
+    from .mcp_client import McpContext
 
 # Providers reachable through LangChain's native init_chat_model. Moonshot is handled
 # separately below because it isn't a native init_chat_model provider string — it's an
@@ -79,6 +88,9 @@ def _require_key(provider: str) -> str:
 
 def get_llm(config: LLMConfig) -> BaseChatModel:
     provider = config.provider
+    # A per-request timeout, so a stalled call fails into the agent's retry loop instead
+    # of hanging the run. extra_params can still override it.
+    params = {"timeout": LLM_REQUEST_TIMEOUT_S, **config.extra_params}
 
     if provider == "moonshot":
         # Moonshot Kimi: OpenAI-compatible endpoint. extra_params passes through quirks
@@ -91,7 +103,7 @@ def get_llm(config: LLMConfig) -> BaseChatModel:
             base_url=MOONSHOT_BASE_URL,
             api_key=key,
             temperature=config.temperature,
-            **config.extra_params,
+            **params,
         )
 
     if provider == "google_genai":
@@ -104,7 +116,7 @@ def get_llm(config: LLMConfig) -> BaseChatModel:
             model=config.model,
             google_api_key=key,
             temperature=config.temperature,
-            **config.extra_params,
+            **params,
         )
 
     if provider == "bedrock":
@@ -118,7 +130,7 @@ def get_llm(config: LLMConfig) -> BaseChatModel:
             model=config.model,
             region_name=BEDROCK_REGION,
             temperature=config.temperature,
-            **config.extra_params,
+            **params,
         )
 
     if provider in _NATIVE_PROVIDERS:
@@ -126,11 +138,13 @@ def get_llm(config: LLMConfig) -> BaseChatModel:
 
         if provider in PROVIDER_ENV_VARS:  # ollama has no key requirement
             _require_key(provider)
+        if provider == "ollama":  # a local server, and ChatOllama takes no `timeout`
+            params = dict(config.extra_params)
         return init_chat_model(
             model=config.model,
             model_provider=provider,
             temperature=config.temperature,
-            **config.extra_params,
+            **params,
         )
 
     raise UnsupportedProviderError(provider)
@@ -281,15 +295,18 @@ def _run_agent_once(
     knowledge: KnowledgeContext | None = None,
     usage: UsageCollector | None = None,
     data: DataContext | None = None,
+    mcp: McpContext | None = None,
     json_answer: bool = False,
+    stop: threading.Event | None = None,
 ) -> AgentOutput:
     """One full attempt for an agent node: bounded tool loop, then structured output.
 
     Any exception here (tool error, schema-validation failure) propagates to the caller's
-    retry loop, which feeds the error text back into the agent's own context.
+    retry loop, which feeds the error text back into the agent's own context. A stopped
+    run raises RunStoppedError before the next model or tool call.
     """
     messages = list(base_messages)
-    tools = get_tools(spec.tools, knowledge, data)
+    tools = get_tools(spec.tools, knowledge, data, mcp)
     # Every model call (tool turns, the structured answer, the rewrite) reports its
     # provider-counted tokens to the run's collector, labelled with this agent.
     call_config: RunnableConfig = (
@@ -304,6 +321,7 @@ def _run_agent_once(
         bound = llm.bind_tools(tools)
         tool_map = {t.name: t for t in tools}
         for _ in range(bounds.max_steps):
+            _check_stop(stop)
             try:
                 ai = bound.invoke(messages, config=call_config)
             except Exception as e:  # noqa: BLE001 — only malformed tool calls are handled here
@@ -329,12 +347,14 @@ def _run_agent_once(
             if not tool_calls:
                 break
             for tc in tool_calls:
+                _check_stop(stop)
                 tool = tool_map[tc["name"]]  # names validated at compile time
                 result = tool.invoke(tc["args"], config=tool_config)  # may raise -> retry loop
                 messages.append(
                     ToolMessage(content=str(result), tool_call_id=tc["id"])
                 )
 
+    _check_stop(stop)
     if json_answer:
         # The model can't call tools (capabilities.py), so it can't use structured output
         # either: ask for the same schema as JSON, and validate it exactly as strictly.
@@ -438,12 +458,25 @@ def _emitter(config: RunnableConfig | None) -> Emit:
     return emit if callable(emit) else (lambda event, **data: None)
 
 
+def _stop_event(config: RunnableConfig | None) -> threading.Event | None:
+    """The run's stop flag, passed like `emit`. Set when the user stops the run or its
+    time limit passes; agents check it before every model and tool call."""
+    stop = ((config or {}).get("configurable") or {}).get("stop")
+    return stop if isinstance(stop, threading.Event) else None
+
+
+def _check_stop(stop: threading.Event | None) -> None:
+    if stop is not None and stop.is_set():
+        raise RunStoppedError()
+
+
 def _make_node(
     spec: AgentSpec,
     bounds: RunBounds,
     include_all_outputs: bool = False,
     knowledge: KnowledgeContext | None = None,
     data: DataContext | None = None,
+    mcp: McpContext | None = None,
     json_models: frozenset[str] = frozenset(),
 ):
     json_answer = f"{spec.llm.provider}/{spec.llm.model}" in json_models
@@ -451,6 +484,7 @@ def _make_node(
     def node(state: GraphState, config: Optional[RunnableConfig] = None) -> dict[str, Any]:
         emit = _emitter(config)
         usage = _usage(config)
+        stop = _stop_event(config)
         started = time.monotonic()
 
         def elapsed_ms() -> int:
@@ -494,12 +528,15 @@ def _make_node(
                     )
                 )
             try:
-                output = _run_agent_once(llm, spec, attempt_messages, bounds, knowledge, usage, data, json_answer)
+                output = _run_agent_once(llm, spec, attempt_messages, bounds, knowledge, usage, data, mcp,
+                                         json_answer, stop)
                 dumped = output.model_dump()
                 emit("node_completed", node=spec.id, duration_ms=elapsed_ms(),
                      attempts=attempt, output=dumped,
                      usage=usage.entries(spec.id) if usage else [])
                 return {"outputs": {spec.id: dumped}}
+            except RunStoppedError:
+                raise  # the run is over; nobody is waiting for this agent any more
             except Exception as e:  # noqa: BLE001 — deliberate: recover from any node failure
                 last_error = f"{type(e).__name__}: {e}"
                 if attempt < bounds.max_retries:
@@ -557,6 +594,7 @@ def compile_graph(
     knowledge: KnowledgeContext | None = None,
     data: DataContext | None = None,
     json_models: set[str] | frozenset[str] | None = None,
+    mcp: McpContext | None = None,
 ):
     """Compile a validated AgentPlan into a runnable LangGraph graph.
 
@@ -574,7 +612,7 @@ def compile_graph(
     # Fail fast at compile time if any agent references an unknown tool, rather than
     # discovering it mid-run.
     for spec in plan.agents:
-        get_tools(spec.tools, knowledge, data)
+        get_tools(spec.tools, knowledge, data, mcp)
     # Models that can't call tools answer by JSON; they can't be given tools or routing.
     json_models = frozenset(json_models or ())
     for spec in plan.agents:
@@ -588,11 +626,11 @@ def compile_graph(
             )
 
     if plan.orchestration_pattern == "sequential":
-        return _compile_sequential(plan, knowledge, data, json_models)
+        return _compile_sequential(plan, knowledge, data, json_models=json_models, mcp=mcp)
     if plan.orchestration_pattern == "parallel":
-        return _compile_parallel(plan, knowledge, data, json_models)
+        return _compile_parallel(plan, knowledge, data, json_models=json_models, mcp=mcp)
     if plan.orchestration_pattern == "supervisor":
-        return _compile_supervisor(plan, knowledge, data, json_models)
+        return _compile_supervisor(plan, knowledge, data, json_models=json_models, mcp=mcp)
     raise NotImplementedError(
         f"orchestration pattern '{plan.orchestration_pattern}' is not supported"
     )
@@ -602,12 +640,13 @@ def _compile_sequential(
     plan: AgentPlan,
     knowledge: KnowledgeContext | None = None,
     data: DataContext | None = None,
+    mcp: McpContext | None = None,
     json_models: frozenset[str] = frozenset(),
 ):
     ordered = _topological_order(plan.agents)
     builder = StateGraph(GraphState)
     for spec in ordered:
-        builder.add_node(spec.id, _make_node(spec, plan.bounds, knowledge=knowledge, data=data, json_models=json_models))
+        builder.add_node(spec.id, _make_node(spec, plan.bounds, knowledge=knowledge, data=data, mcp=mcp, json_models=json_models))
 
     builder.add_edge(START, ordered[0].id)
     for i, spec in enumerate(ordered):
@@ -628,6 +667,7 @@ def _compile_parallel(
     plan: AgentPlan,
     knowledge: KnowledgeContext | None = None,
     data: DataContext | None = None,
+    mcp: McpContext | None = None,
     json_models: frozenset[str] = frozenset(),
 ):
     """Wire the dependency DAG directly: agents with no deps fan out from START and run
@@ -640,7 +680,7 @@ def _compile_parallel(
 
     builder = StateGraph(GraphState)
     for spec in plan.agents:
-        builder.add_node(spec.id, _make_node(spec, plan.bounds, knowledge=knowledge, data=data, json_models=json_models))
+        builder.add_node(spec.id, _make_node(spec, plan.bounds, knowledge=knowledge, data=data, mcp=mcp, json_models=json_models))
 
     for spec in plan.agents:
         if not spec.depends_on:
@@ -679,6 +719,7 @@ def _make_supervisor(sup_spec: AgentSpec, worker_ids: list[str], cap: int):
                  duration_ms=int((time.monotonic() - started) * 1000), attempts=cap)
             return {"supervisor_steps": steps, "next_agent": "FINISH", "errors": [note.to_dict()]}
 
+        _check_stop(_stop_event(config))
         llm = get_llm(sup_spec.llm)
         messages: list[AnyMessage] = [
             SystemMessage(content=sup_spec.system_prompt + routing_instructions),
@@ -716,6 +757,7 @@ def _compile_supervisor(
     plan: AgentPlan,
     knowledge: KnowledgeContext | None = None,
     data: DataContext | None = None,
+    mcp: McpContext | None = None,
     json_models: frozenset[str] = frozenset(),
 ):
     workers = [a for a in plan.agents if a.id != plan.supervisor_id]
@@ -727,7 +769,7 @@ def _compile_supervisor(
     builder.add_node(sup_spec.id, _make_supervisor(sup_spec, worker_ids, cap))
     for w in workers:
         # Supervisor workers see all accumulated outputs (they carry no depends_on wiring).
-        builder.add_node(w.id, _make_node(w, plan.bounds, include_all_outputs=True, knowledge=knowledge, data=data, json_models=json_models))
+        builder.add_node(w.id, _make_node(w, plan.bounds, include_all_outputs=True, knowledge=knowledge, data=data, mcp=mcp, json_models=json_models))
         builder.add_edge(w.id, sup_spec.id)  # control returns to the router after each worker
 
     builder.add_edge(START, sup_spec.id)
@@ -754,6 +796,36 @@ def initial_state(task_input: dict[str, Any]) -> GraphState:
     }
 
 
+def _agent_invoker(
+    plan: AgentPlan,
+    agent_id: str,
+    task_input: dict[str, Any],
+    upstream_outputs: dict[str, Any] | None,
+    knowledge: KnowledgeContext | None,
+    data: DataContext | None,
+    mcp: McpContext | None,
+    json_models: set[str] | frozenset[str] | None,
+) -> Callable[[RunnableConfig], dict[str, Any]]:
+    """One agent node, ready to run with a run's config. KeyError for an unknown agent."""
+    spec = next((a for a in plan.agents if a.id == agent_id), None)
+    if spec is None:
+        raise KeyError(agent_id)
+    node = _make_node(spec, plan.bounds, knowledge=knowledge, data=data, mcp=mcp, json_models=frozenset(json_models or ()))
+    state = initial_state(task_input)
+    state["outputs"] = dict(upstream_outputs or {})
+
+    def invoke(config: RunnableConfig) -> dict[str, Any]:
+        result = node(state, config)
+        return {"outputs": result.get("outputs", {}), "errors": result.get("errors", []),
+                "halted": bool(result.get("halted", False))}
+
+    return invoke
+
+
+def _graph_invoker(graph, task_input: dict[str, Any]) -> Callable[[RunnableConfig], dict[str, Any]]:
+    return lambda config: graph.invoke(initial_state(task_input), {"recursion_limit": 50, **config})
+
+
 def run_single_agent(
     plan: AgentPlan,
     agent_id: str,
@@ -762,22 +834,35 @@ def run_single_agent(
     knowledge: KnowledgeContext | None = None,
     usage: UsageCollector | None = None,
     data: DataContext | None = None,
+    mcp: McpContext | None = None,
     json_models: set[str] | frozenset[str] | None = None,
 ) -> dict[str, Any]:
-    """Run one agent node in isolation (the per-agent endpoint path).
+    """Run one agent node in isolation (the per-agent endpoint path), under the plan's
+    time limit like a whole run (TimeoutError when it passes).
 
     `upstream_outputs` lets the caller supply the outputs this agent's `depends_on`
     would normally provide, without running the whole graph.
     """
-    spec = next((a for a in plan.agents if a.id == agent_id), None)
-    if spec is None:
-        raise KeyError(agent_id)
-    node = _make_node(spec, plan.bounds, knowledge=knowledge, data=data, json_models=frozenset(json_models or ()))
-    state = initial_state(task_input)
-    state["outputs"] = dict(upstream_outputs or {})
-    usage = usage if usage is not None else UsageCollector()
-    result = node(state, {"configurable": {"usage": usage}})
-    return {**result, "usage": usage.entries()}
+    invoke = _agent_invoker(plan, agent_id, task_input, upstream_outputs, knowledge, data, mcp, json_models)
+    return _run_bounded(invoke, plan.bounds, usage)
+
+
+def run_agent_events(
+    plan: AgentPlan,
+    agent_id: str,
+    task_input: dict[str, Any],
+    upstream_outputs: dict[str, Any] | None = None,
+    knowledge: KnowledgeContext | None = None,
+    usage: UsageCollector | None = None,
+    data: DataContext | None = None,
+    mcp: McpContext | None = None,
+    json_models: set[str] | frozenset[str] | None = None,
+    should_stop: Callable[[], bool] | None = None,
+) -> Iterator[tuple[str, dict[str, Any]]]:
+    """One agent on its own, with the same events, time limit and stop as
+    run_graph_events. KeyError (raised at once) for an unknown agent."""
+    invoke = _agent_invoker(plan, agent_id, task_input, upstream_outputs, knowledge, data, mcp, json_models)
+    return _run_events(invoke, plan.bounds, usage, should_stop)
 
 
 def run_graph(
@@ -787,23 +872,28 @@ def run_graph(
     bounded, not left to model good behavior).
 
     On timeout the caller gets TimeoutError as soon as the limit passes. The run's worker
-    thread can't be killed, so it finishes in the background and its result is dropped.
+    thread can't be killed, so it is told to stop and quits at its agents' next model or
+    tool call; whatever it was doing is dropped.
 
     The result includes `usage`: tokens per agent and model. Pass a collector to keep
     reading it after a timeout (it holds whatever was used up to then).
     """
+    return _run_bounded(_graph_invoker(graph, task_input), bounds, usage)
+
+
+def _run_bounded(
+    invoke: Callable[[RunnableConfig], dict[str, Any]], bounds: RunBounds, usage: UsageCollector | None
+) -> dict[str, Any]:
     import concurrent.futures
 
     usage = usage if usage is not None else UsageCollector()
+    stop = threading.Event()
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-    future = pool.submit(
-        graph.invoke,
-        initial_state(task_input),
-        {"recursion_limit": 50, "configurable": {"usage": usage}},
-    )
+    future = pool.submit(invoke, {"configurable": {"usage": usage, "stop": stop}})
     try:
         return {**future.result(timeout=bounds.timeout_s), "usage": usage.entries()}
     except concurrent.futures.TimeoutError as e:
+        stop.set()
         raise TimeoutError(f"the run exceeded its {bounds.timeout_s:g}s time limit") from e
     finally:
         # Never block on the worker: a `with` block here would wait for it to finish,
@@ -812,30 +902,43 @@ def run_graph(
 
 
 def run_graph_events(
-    graph, task_input: dict[str, Any], bounds: RunBounds, usage: UsageCollector | None = None
+    graph,
+    task_input: dict[str, Any],
+    bounds: RunBounds,
+    usage: UsageCollector | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> Iterator[tuple[str, dict[str, Any]]]:
     """Run a compiled graph and yield (event, data) pairs as it happens:
 
       run_started → node_started / node_retry / node_completed / node_failed /
       node_skipped … → run_completed (with the same outputs/errors/halted as run_graph)
-      or run_failed (timeout or an unexpected error).
+      or run_failed (timeout, stopped, or an unexpected error).
 
     Every event carries `at` (Unix time, seconds). The same wall-clock limit as run_graph
-    applies; on timeout the abandoned run finishes in the background, as there.
+    applies. `should_stop` is polled about once a second; when it returns True the run
+    ends at once with run_failed `RunStopped`. Either way the abandoned worker is told to
+    stop and quits at its agents' next model or tool call.
     """
+    return _run_events(_graph_invoker(graph, task_input), bounds, usage, should_stop)
+
+
+def _run_events(
+    invoke: Callable[[RunnableConfig], dict[str, Any]],
+    bounds: RunBounds,
+    usage: UsageCollector | None,
+    should_stop: Callable[[], bool] | None,
+) -> Iterator[tuple[str, dict[str, Any]]]:
     events: queue.Queue = queue.Queue()
     started = time.time()
     usage = usage if usage is not None else UsageCollector()
+    stop = threading.Event()
 
     def emit(event: str, **data: Any) -> None:
         events.put((event, {**data, "at": time.time()}))
 
     def work() -> None:
         try:
-            result = graph.invoke(
-                initial_state(task_input),
-                {"recursion_limit": 50, "configurable": {"emit": emit, "usage": usage}},
-            )
+            result = invoke({"configurable": {"emit": emit, "usage": usage, "stop": stop}})
             events.put(("__done__", result))
         except Exception as e:  # noqa: BLE001 — reported to the caller as run_failed
             events.put(("__error__", e))
@@ -844,36 +947,50 @@ def run_graph_events(
     yield "run_started", {"at": started, "timeout_s": bounds.timeout_s}
 
     deadline = started + bounds.timeout_s
-    while True:
-        remaining = deadline - time.time()
-        if remaining <= 0:
-            yield "run_failed", {
-                "at": time.time(),
-                "error_type": "RunTimeout",
-                "message": f"the run exceeded its {bounds.timeout_s:g}s time limit",
-                "limit_s": bounds.timeout_s,
-                "usage": usage.entries(),
-            }
-            return
-        try:
-            event, data = events.get(timeout=min(remaining, 1.0))
-        except queue.Empty:
-            continue
-        if event == "__done__":
-            yield "run_completed", {
-                "at": time.time(),
-                "duration_ms": int((time.time() - started) * 1000),
-                "outputs": data["outputs"],
-                "usage": usage.entries(),
-                "errors": data["errors"],
-                "halted": data["halted"],
-            }
-            return
-        if event == "__error__":
-            yield "run_failed", {
-                "at": time.time(),
-                "error_type": type(data).__name__,
-                "message": str(data) or "the run failed",
-            }
-            return
-        yield event, data
+    try:
+        while True:
+            if should_stop is not None and should_stop():
+                yield "run_failed", {
+                    "at": time.time(),
+                    "error_type": "RunStopped",
+                    "message": "you stopped this run",
+                    "usage": usage.entries(),
+                }
+                return
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                yield "run_failed", {
+                    "at": time.time(),
+                    "error_type": "RunTimeout",
+                    "message": f"the run exceeded its {bounds.timeout_s:g}s time limit",
+                    "limit_s": bounds.timeout_s,
+                    "usage": usage.entries(),
+                }
+                return
+            try:
+                event, data = events.get(timeout=min(remaining, 1.0))
+            except queue.Empty:
+                continue
+            if event == "__done__":
+                yield "run_completed", {
+                    "at": time.time(),
+                    "duration_ms": int((time.time() - started) * 1000),
+                    "outputs": data["outputs"],
+                    "usage": usage.entries(),
+                    "errors": data["errors"],
+                    "halted": data["halted"],
+                }
+                return
+            if event == "__error__":
+                yield "run_failed", {
+                    "at": time.time(),
+                    "error_type": type(data).__name__,
+                    "message": str(data) or "the run failed",
+                    "exception": data,  # for callers that answer with the typed error; not data to send
+                }
+                return
+            yield event, data
+    finally:
+        # However the run ended for the caller (done, timeout, stopped, or the caller went
+        # away), an abandoned worker stops at its next model or tool call.
+        stop.set()

@@ -41,7 +41,7 @@ function Flow({ plan }) {
   if (plan.orchestration_pattern === "supervisor") {
     const workers = plan.agents.filter((a) => a.id !== plan.supervisor_id).map((a) => a.id);
     return (
-      <div className="flow">
+      <div className="flow" tabIndex={0} role="region" aria-label="Execution flow">
         <Stage label="Router" nodes={[plan.supervisor_id]} router />
         <Arrow loop />
         <Stage label={`Workers (${workers.length})`} nodes={workers} />
@@ -55,9 +55,9 @@ function Flow({ plan }) {
       : parallelStages(plan.agents);
 
   return (
-    <div className="flow">
+    <div className="flow" tabIndex={0} role="region" aria-label="Execution flow">
       {stages.map((nodes, i) => (
-        <div key={i} style={{ display: "contents" }}>
+        <div key={i} className="contents">
           {i > 0 && <Arrow />}
           <Stage label={`Stage ${i + 1}`} nodes={nodes} />
         </div>
@@ -102,7 +102,7 @@ export function CompileStep({ project, onCompiled }) {
             actions={<Pill tone="accent">{plan.orchestration_pattern}</Pill>}
           >
             <Flow plan={plan} />
-            <p className="muted" style={{ marginTop: 14 }}>
+            <p className="muted mt-sm">
               {describe(plan)}
             </p>
           </Panel>
@@ -118,7 +118,7 @@ export function CompileStep({ project, onCompiled }) {
                   The current plan hasn't been built into a runnable graph yet.
                 </Callout>
               )}
-              <div style={{ marginTop: 12 }}>
+              <div className="mt-sm">
                 <Button
                   variant={project.compiled ? undefined : "primary"}
                   block
@@ -130,7 +130,7 @@ export function CompileStep({ project, onCompiled }) {
                 </Button>
               </div>
               {compile.error && (
-                <div style={{ marginTop: 12 }}>
+                <div className="mt-sm">
                   <ErrorCallout error={compile.error} />
                 </div>
               )}

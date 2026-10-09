@@ -91,7 +91,9 @@ test("a new project on a model without tool calling asks for no tools", async ({
   await expect(tray.getByRole("status")).toContainText("Gemma 3 12B IT can't call tools");
   await expect(tray.getByRole("button", { name: "lookup" })).toBeDisabled();
   await page.getByLabel("Task description").fill("Explain bike rebalancing");
-  await page.getByRole("button", { name: "Plan this team" }).click();
+  // Sending talks it through first; planning is the explicit Create plan step.
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await page.getByRole("region", { name: "Task brief" }).getByRole("button", { name: "Create plan" }).click();
   await expect(page.getByRole("link", { name: "Review plan" })).toBeVisible();
   const sent = await (await request.get(`${API}/__last_create`)).json();
   expect(sent.available_tools).toEqual([]);

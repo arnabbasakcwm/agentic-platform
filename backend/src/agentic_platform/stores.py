@@ -16,11 +16,12 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Iterator, Literal, Protocol
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .agent_schema import AgentPlan, EmbeddingConfig
 from .datasources import DataSourceConfig
 from .knowledge import KnowledgeChunk
+from .mcp_client import McpToolDef
 from .config import MONGODB_DB, MONGODB_TIMEOUT_MS, MONGODB_URI
 from .errors import EmailTakenError, StoreUnavailableError
 
@@ -839,7 +840,7 @@ class MongoKnowledgeStore:
 
 # ---------------------------------------------------------------------------- usage
 UsageKind = Literal[
-    "run", "deployed_run", "planner", "assistant", "embedding_index", "embedding_query", "bigquery_query",
+    "run", "deployed_run", "planner", "assistant", "embedding_index", "embedding_query", "bigquery_query", "mcp_call",
     "model_check",
 ]
 
@@ -1111,8 +1112,187 @@ class MongoDataSourceStore:
         return doc["tenant_id"] if doc else None
 
 
+# ---------------------------------------------------------------------------- MCP servers
+class McpTool(McpToolDef):
+    """A server's tool and whether agents may use it. Approval pins the definition: if
+    the server changes the tool, it is held back (`changed`) until approved again."""
+
+    approved: bool = False
+    approved_hash: str | None = None
+    changed: bool = False
+
+    def usable(self) -> bool:
+        return self.approved and not self.changed and self.approved_hash == self.definition_hash()
+
+
+McpAuthKind = Literal["none", "token", "header", "url", "custom"]
+
+
+class McpServer(BaseModel):
+    """A user's connection to a remote MCP server. The URL and header values live only in
+    `secret` (encrypted; see secrets_box), because a URL can carry the server's key;
+    `display_url` is the masked form that is safe to show."""
+
+    id: str
+    tenant_id: str
+    name: str = Field(min_length=1, max_length=100)
+    slug: str = Field(pattern=r"^[a-z0-9]{1,16}$")
+    display_url: str = Field(max_length=2_048)
+    host: str = Field(max_length=255)
+    transport: Literal["http", "sse"] = "http"
+    preset: str | None = Field(default=None, max_length=40)
+    # How the server is signed in to, as the user chose it in the console. Display only:
+    # it never changes what is sent or checked.
+    auth: McpAuthKind | None = None
+    header_names: list[str] = Field(default_factory=list, max_length=20)
+    secret: str
+    server_name: str = ""
+    server_version: str = ""
+    status: Literal["ok", "auth_failed", "unreachable"] = "ok"
+    status_message: str | None = None
+    tools: list[McpTool] = Field(default_factory=list, max_length=200)
+    project_ids: list[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=_now)
+    updated_at: datetime = Field(default_factory=_now)
+    checked_at: datetime = Field(default_factory=_now)
+
+    def usable_tools(self) -> list[McpTool]:
+        return [t for t in self.tools if t.usable()]
+
+    @model_validator(mode="after")
+    def _default_auth(self) -> "McpServer":
+        # Servers saved before `auth` existed: headers mean custom headers, else none.
+        if self.auth is None:
+            self.auth = "custom" if self.header_names else "none"
+        return self
+
+
+class McpServerStore(Protocol):
+    """Users' MCP servers. Every method is scoped by tenant."""
+
+    def add(self, server: McpServer) -> None: ...
+
+    def get(self, tenant_id: str, server_id: str) -> McpServer | None: ...
+
+    def list(self, tenant_id: str, project_id: str | None = None) -> list[McpServer]:
+        """The tenant's servers, newest first; with `project_id`, those attached to it."""
+        ...
+
+    def update(self, tenant_id: str, server_id: str, **changes: Any) -> McpServer | None: ...
+
+    def delete(self, tenant_id: str, server_id: str) -> bool: ...
+
+    def detach_project(self, tenant_id: str, project_id: str) -> int: ...
+
+
+class InMemoryMcpServerStore:
+    def __init__(self) -> None:
+        self._servers: dict[str, McpServer] = {}
+
+    def add(self, server: McpServer) -> None:
+        self._servers[server.id] = server.model_copy(deep=True)
+
+    def get(self, tenant_id: str, server_id: str) -> McpServer | None:
+        s = self._servers.get(server_id)
+        return s.model_copy(deep=True) if s and s.tenant_id == tenant_id else None
+
+    def list(self, tenant_id: str, project_id: str | None = None) -> list[McpServer]:
+        found = [
+            s for s in self._servers.values()
+            if s.tenant_id == tenant_id and (project_id is None or project_id in s.project_ids)
+        ]
+        return [s.model_copy(deep=True) for s in sorted(found, key=lambda s: s.created_at, reverse=True)]
+
+    def update(self, tenant_id: str, server_id: str, **changes: Any) -> McpServer | None:
+        s = self._servers.get(server_id)
+        if s is None or s.tenant_id != tenant_id:
+            return None
+        updated = McpServer.model_validate({**s.model_dump(), **_plain(changes), "updated_at": _now()})
+        self._servers[server_id] = updated
+        return updated.model_copy(deep=True)
+
+    def delete(self, tenant_id: str, server_id: str) -> bool:
+        s = self._servers.get(server_id)
+        if s is None or s.tenant_id != tenant_id:
+            return False
+        del self._servers[server_id]
+        return True
+
+    def detach_project(self, tenant_id: str, project_id: str) -> int:
+        count = 0
+        for s in self._servers.values():
+            if s.tenant_id == tenant_id and project_id in s.project_ids:
+                s.project_ids = [p for p in s.project_ids if p != project_id]
+                count += 1
+        return count
+
+
+class MongoMcpServerStore:
+    """`mcp_servers`, one document per server, keyed by tenant."""
+
+    def __init__(self, db: "Database"):
+        self._servers = db["mcp_servers"]
+        self._ready = False
+
+    def _ensure_ready(self) -> None:
+        if not self._ready:
+            self._servers.create_index([("tenant_id", 1), ("created_at", -1)])
+            self._ready = True
+
+    @staticmethod
+    def _out(doc: dict[str, Any]) -> McpServer:
+        doc = dict(doc)
+        doc["id"] = doc.pop("_id")
+        return McpServer.model_validate(doc)
+
+    def add(self, server: McpServer) -> None:
+        body = server.model_dump()
+        body["_id"] = body.pop("id")
+        with _mongo_errors():
+            self._ensure_ready()
+            self._servers.insert_one(body)
+
+    def get(self, tenant_id: str, server_id: str) -> McpServer | None:
+        with _mongo_errors():
+            self._ensure_ready()
+            doc = self._servers.find_one({"_id": server_id, "tenant_id": tenant_id})
+        return self._out(doc) if doc else None
+
+    def list(self, tenant_id: str, project_id: str | None = None) -> list[McpServer]:
+        query: dict[str, Any] = {"tenant_id": tenant_id}
+        if project_id is not None:
+            query["project_ids"] = project_id
+        with _mongo_errors():
+            self._ensure_ready()
+            docs = list(self._servers.find(query).sort("created_at", -1))
+        return [self._out(d) for d in docs]
+
+    def update(self, tenant_id: str, server_id: str, **changes: Any) -> McpServer | None:
+        with _mongo_errors():
+            self._ensure_ready()
+            result = self._servers.update_one(
+                {"_id": server_id, "tenant_id": tenant_id},
+                {"$set": {**_plain(changes), "updated_at": _now()}},
+            )
+        return self.get(tenant_id, server_id) if result.matched_count == 1 else None
+
+    def delete(self, tenant_id: str, server_id: str) -> bool:
+        with _mongo_errors():
+            result = self._servers.delete_one({"_id": server_id, "tenant_id": tenant_id})
+        return result.deleted_count == 1
+
+    def detach_project(self, tenant_id: str, project_id: str) -> int:
+        with _mongo_errors():
+            result = self._servers.update_many(
+                {"tenant_id": tenant_id, "project_ids": project_id}, {"$pull": {"project_ids": project_id}}
+            )
+        return result.modified_count
+
+
 # ---------------------------------------------------------------------------- runs
-RUNS_KEPT = 5  # per project and kind
+RUNS_KEPT = 10  # per project and kind
+# A run asked to stop ends within seconds; one still "running" this long after was orphaned.
+RUN_STOP_GRACE_S = 30
 
 
 class RunRecord(BaseModel):
@@ -1137,6 +1317,7 @@ class RunRecord(BaseModel):
     error: dict[str, Any] | None = None  # why the whole run failed (timeout, not deployed, …)
     usage: dict[str, Any] | None = None
     timeout_s: float = 300
+    stop_requested: bool = False  # the user pressed Stop; the process running it ends it
     started_at: datetime = Field(default_factory=_now)
     finished_at: datetime | None = None
     updated_at: datetime = Field(default_factory=_now)
@@ -1146,6 +1327,12 @@ class RunRecord(BaseModel):
         restarted mid-run): reported as failed, not running forever."""
         now = now or datetime.now(timezone.utc)
         updated = self.updated_at if self.updated_at.tzinfo else self.updated_at.replace(tzinfo=timezone.utc)
+        if self.status == "running" and self.stop_requested and (now - updated).total_seconds() > RUN_STOP_GRACE_S:
+            # Asked to stop, and the process running it never ended it (it had already died).
+            return self.model_copy(update={
+                "status": "failed",
+                "error": {"error_type": "RunStopped", "message": "you stopped this run"},
+            })
         if self.status == "running" and (now - updated).total_seconds() > self.timeout_s + 120:
             return self.model_copy(update={
                 "status": "failed",
@@ -1374,6 +1561,12 @@ def make_datasource_store() -> DataSourceStore:
     if MONGODB_URI:
         return MongoDataSourceStore(mongo_database(MONGODB_URI, MONGODB_DB))
     return InMemoryDataSourceStore()
+
+
+def make_mcp_store() -> McpServerStore:
+    if MONGODB_URI:
+        return MongoMcpServerStore(mongo_database(MONGODB_URI, MONGODB_DB))
+    return InMemoryMcpServerStore()
 
 
 def make_stores() -> tuple[ProjectStore, UserStore, KnowledgeStore, UsageStore]:

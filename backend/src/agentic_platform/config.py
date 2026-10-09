@@ -96,3 +96,18 @@ BIGQUERY_PROJECT: str | None = os.environ.get("BIGQUERY_PROJECT") or None
 BIGQUERY_MAX_BYTES: int = int(os.environ.get("BIGQUERY_MAX_BYTES") or 1_000_000_000)
 BIGQUERY_MAX_ROWS: int = int(os.environ.get("BIGQUERY_MAX_ROWS") or 200)
 BIGQUERY_TIMEOUT_MS: int = int(os.environ.get("BIGQUERY_TIMEOUT_MS") or 60_000)
+
+# Secrets the platform stores for users (MCP server URLs and headers), encrypted at rest
+# with this Fernet key. Generate one with:
+#   uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+PLATFORM_SECRET_KEY: str | None = os.environ.get("PLATFORM_SECRET_KEY") or None
+
+# MCP servers (see docs/mcp_setup.md). Remote servers only, over HTTPS; plain http to this
+# machine is allowed only for local development.
+MCP_ALLOW_INSECURE_LOCAL: bool = os.environ.get("MCP_ALLOW_INSECURE_LOCAL", "").lower() in ("1", "true", "yes")
+MCP_CALL_TIMEOUT_S: float = float(os.environ.get("MCP_CALL_TIMEOUT_S") or 60)
+MCP_MAX_RESULT_CHARS: int = int(os.environ.get("MCP_MAX_RESULT_CHARS") or 12_000)
+
+# One model request may take this long before the client gives up and the agent's retry
+# loop sees the error. Without it a stalled provider call waits forever.
+LLM_REQUEST_TIMEOUT_S: float = float(os.environ.get("LLM_REQUEST_TIMEOUT_S") or 180)

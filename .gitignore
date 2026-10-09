@@ -1,14 +1,68 @@
-.venv/
-__pycache__/
-*.pyc
+# ----------------------------------------------------------------- secrets
+# Real environment files hold provider keys, JWT_SECRET and PLATFORM_SECRET_KEY.
+# Only the *.example templates are committed.
 .env
-.pytest_cache/
+.env.*
+!.env.example
+!.env.production.example
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+*-credentials.json
+service-account*.json
+gcp-wif*.json
+
+# ----------------------------------------------------------------- python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
 *.egg-info/
+.eggs/
+build/
+.pytest_cache/
 .ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
 # Built Linux/arm64 dependencies for AgentCore deployments
 .deploy-cache/
 
+# ----------------------------------------------------------------- node / frontend
+node_modules/
+frontend/dist/
+frontend/.vite/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
 # Playwright output
 frontend/e2e/screenshots/
 frontend/test-results/
 frontend/playwright-report/
+frontend/blob-report/
+frontend/playwright/.cache/
+
+# ----------------------------------------------------------------- deployment
+# Database dumps made by ./deploy.sh backup
+backups/
+*.archive.gz
+
+# ----------------------------------------------------------------- editors / OS
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ----------------------------------------------------------------- logs
+*.log
+logs/

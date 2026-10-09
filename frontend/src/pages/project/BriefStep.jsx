@@ -79,14 +79,26 @@ function AgentSettings({ project, tools, providers, onSaved, savedVersion }) {
   const hasData = (project.data_sources?.sources ?? 0) > 0;
   const hasKnowledge = (project.knowledge?.documents ?? 0) > 0;
   // knowledge_search only makes sense with files attached (the server checks too).
-  const toolList = (tools.tools ?? []).filter(
-    (t) =>
-      (t.name !== "knowledge_search" || hasKnowledge) &&
-      (!SQL_TOOLS.has(t.name) || hasData),
-  );
+  const toolList = [
+    ...(tools.tools ?? []).filter(
+      (t) =>
+        (t.name !== "knowledge_search" || hasKnowledge) &&
+        (!SQL_TOOLS.has(t.name) || hasData),
+    ),
+    // Approved tools of the MCP servers attached to this project (the server checks too).
+    ...(project.mcp?.tools ?? []).map((t) => ({
+      name: t.name,
+      label: `${t.server} · ${t.tool}`,
+      description: t.description || t.tool,
+      side_effect: t.side_effect,
+      mcp: true,
+    })),
+  ];
   const enabledExternal = new Set(project.side_effect_tools_enabled ?? []);
+  // Registry tools that send data out need this project's opt-in; an MCP server's opt-in
+  // was attaching it, so its tools aren't listed here.
   const external = new Set(
-    toolList.filter((t) => t.side_effect).map((t) => t.name),
+    toolList.filter((t) => t.side_effect && !t.mcp).map((t) => t.name),
   );
 
   const changed = plan.agents.filter((a) => {
@@ -254,7 +266,7 @@ function AgentSettings({ project, tools, providers, onSaved, savedVersion }) {
                         disabled={save.busy || (!on && noTools)}
                       >
                         {on && <Icon name="check" size={12} />}
-                        {tool.name}
+                        {tool.label ?? tool.name}
                       </button>
                     );
                   })}

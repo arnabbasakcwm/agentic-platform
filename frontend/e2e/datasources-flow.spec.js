@@ -39,16 +39,20 @@ for (const scheme of ["light", "dark"]) {
     await connectSource(request);
 
     await page.goto(`/#/projects/${PROJECT}/brief`);
-    const data = page.locator(".stepper").getByRole("link", { name: /Data/ });
+    // Databases live on the Resources step, in their own tab.
+    const data = page.locator(".stepper").getByRole("link", { name: /Resources/ });
     await expect(data).toContainText("Optional");
     await data.click();
-    await expect(page).toHaveURL(/\/data$/);
+    await expect(page).toHaveURL(/\/resources$/);
+    await page.getByRole("tab", { name: /Databases/ }).click();
+    await expect(page).toHaveURL(/\/resources\/databases$/);
     await expect(page.getByText("No data sources attached")).toBeVisible();
 
     await page.getByRole("button", { name: "Attach Bikeshare" }).click();
     const attached = page.getByRole("region", { name: "Attached: Bikeshare" });
     await expect(attached).toContainText("mydata.trips");
-    await expect(data).toContainText("2 tables");
+    await expect(data).toContainText("1 db");
+    await expect(page.getByRole("tab", { name: /Databases/ })).toContainText("1");
     await expect(page.getByText("No agent can query this data yet")).toBeVisible();
 
     await page.getByRole("button", { name: "Give agents access" }).click();
@@ -85,7 +89,9 @@ for (const scheme of ["light", "dark"]) {
     expect(await axeProblems(page, "new project data")).toEqual([]);
 
     await page.getByLabel("Task description").fill("Find the busiest bike stations");
-    await page.getByRole("button", { name: "Plan this team" }).click();
+    // Sending talks it through first; planning is the explicit Create plan step.
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    await page.getByRole("region", { name: "Task brief" }).getByRole("button", { name: "Create plan" }).click();
     await expect(page.getByRole("link", { name: /Open project|Review plan/ }).first()).toBeVisible();
     const sent = await (await request.get(`${API}/__last_create`)).json();
     expect(sent.datasource_ids).toEqual([sourceId]);

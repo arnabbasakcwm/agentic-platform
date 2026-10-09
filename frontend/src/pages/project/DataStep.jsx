@@ -90,7 +90,7 @@ function AccessPanel({ project, data, onRevised }) {
   );
 }
 
-/** The project's data sources: attach, detach, see who can query, test a query. */
+/** The Resources step's Databases tab: attach, detach, see who can query, test a query. */
 export function DataStep({ project, onRevised, onDataChanged }) {
   const [data, setData] = useState(null);
   const load = useAction();
@@ -133,107 +133,102 @@ export function DataStep({ project, onRevised, onDataChanged }) {
 
   if (!data) {
     return (
-      <div className="page">
-        <Panel>
-          {load.error ? (
-            <ErrorCallout error={load.error} />
-          ) : (
-            <Skeleton lines={4} />
-          )}
-        </Panel>
-      </div>
+      <Panel>
+        {load.error ? (
+          <ErrorCallout error={load.error} />
+        ) : (
+          <Skeleton lines={4} />
+        )}
+      </Panel>
     );
   }
 
+  // The Resources step provides the page, its tabs and the action bar.
   return (
-    <div className="page">
-      <div className="stack">
-        <Panel
-          title="Data for this project"
-          subtitle="This project's agents query only the BigQuery sources attached here — read-only, and capped per query."
-          actions={
-            <LinkButton href={paths.data}>Manage data sources</LinkButton>
-          }
-        >
-          <div className="stack">
-            {!data.configured && (
-              <Callout tone="warn" title="BigQuery isn't set up on this server">
-                See <code>docs/bigquery_setup.md</code>.
-              </Callout>
-            )}
-            {data.attached.length === 0 ? (
-              <Empty title="No data sources attached">
-                {data.available.length > 0
-                  ? "Attach one below so agents can query its tables."
-                  : "Connect BigQuery on the Data sources page first."}
-              </Empty>
-            ) : (
-              data.attached.map((s) => (
-                <section
-                  key={s.id}
-                  className="dsource"
-                  aria-label={`Attached: ${s.name}`}
-                >
-                  <div className="dsource__head">
-                    <Icon name="database" size={16} />
-                    <strong>{s.name}</strong>
-                    <span className="muted dsource__sub">
-                      {s.billing_project}
-                    </span>
-                    <Button
-                      size="sm"
-                      onClick={() => detach(s)}
-                      disabled={change.busy}
-                      aria-label={`Detach ${s.name}`}
-                    >
-                      Detach
-                    </Button>
-                  </div>
-                  <SourceTables source={s} />
-                  {s.tables.length > 0 && (
-                    <TestQuery source={s} limits={data.limits} />
-                  )}
-                </section>
-              ))
-            )}
-            <p className="muted dsection__hint">
-              Query results are sent to the model provider of the agents that
-              query them. The data itself stays in BigQuery: every query runs
-              there, and nothing is copied into the platform.
-            </p>
-            <ErrorCallout error={change.error} />
-          </div>
-        </Panel>
-
-        {data.available.length > 0 && (
-          <Panel title="Your other data sources">
-            <ul className="dlist">
-              {data.available.map((s) => (
-                <li key={s.id}>
-                  <Icon name="database" size={15} />
-                  <span>
-                    <strong>{s.name}</strong>{" "}
-                    <span className="muted">
-                      {s.tables.length} table{s.tables.length === 1 ? "" : "s"}
-                    </span>
+    <div className="stack">
+      <Panel
+        title="Data for this project"
+        subtitle="This project's agents query only the BigQuery sources attached here — read-only, and capped per query."
+        actions={<LinkButton href={paths.data}>Manage data sources</LinkButton>}
+      >
+        <div className="stack">
+          {!data.configured && (
+            <Callout tone="warn" title="BigQuery isn't set up on this server">
+              See <code>docs/bigquery_setup.md</code>.
+            </Callout>
+          )}
+          {data.attached.length === 0 ? (
+            <Empty title="No data sources attached">
+              {data.available.length > 0
+                ? "Attach one below so agents can query its tables."
+                : "Connect BigQuery on the Data sources page first."}
+            </Empty>
+          ) : (
+            data.attached.map((s) => (
+              <section
+                key={s.id}
+                className="dsource"
+                aria-label={`Attached: ${s.name}`}
+              >
+                <div className="dsource__head">
+                  <Icon name="database" size={16} />
+                  <strong>{s.name}</strong>
+                  <span className="muted dsource__sub">
+                    {s.billing_project}
                   </span>
                   <Button
                     size="sm"
-                    onClick={() => attach(s)}
+                    onClick={() => detach(s)}
                     disabled={change.busy}
-                    aria-label={`Attach ${s.name}`}
+                    aria-label={`Detach ${s.name}`}
                   >
-                    <Icon name="plus" size={12} />
-                    Attach
+                    Detach
                   </Button>
-                </li>
-              ))}
-            </ul>
-          </Panel>
-        )}
+                </div>
+                <SourceTables source={s} />
+                {s.tables.length > 0 && (
+                  <TestQuery source={s} limits={data.limits} />
+                )}
+              </section>
+            ))
+          )}
+          <p className="muted dsection__hint">
+            Query results are sent to the model provider of the agents that
+            query them. The data itself stays in BigQuery: every query runs
+            there, and nothing is copied into the platform.
+          </p>
+          <ErrorCallout error={change.error} />
+        </div>
+      </Panel>
 
-        <AccessPanel project={project} data={data} onRevised={onRevised} />
-      </div>
+      {data.available.length > 0 && (
+        <Panel title="Your other data sources">
+          <ul className="dlist">
+            {data.available.map((s) => (
+              <li key={s.id}>
+                <Icon name="database" size={15} />
+                <span>
+                  <strong>{s.name}</strong>{" "}
+                  <span className="muted">
+                    {s.tables.length} table{s.tables.length === 1 ? "" : "s"}
+                  </span>
+                </span>
+                <Button
+                  size="sm"
+                  onClick={() => attach(s)}
+                  disabled={change.busy}
+                  aria-label={`Attach ${s.name}`}
+                >
+                  <Icon name="plus" size={12} />
+                  Attach
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </Panel>
+      )}
+
+      <AccessPanel project={project} data={data} onRevised={onRevised} />
     </div>
   );
 }
