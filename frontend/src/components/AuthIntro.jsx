@@ -22,30 +22,37 @@ const POINTS = [
 
 /** A small sequential team, drawn: three agents handing work along. Decorative. */
 function TeamSketch() {
-  const agents = [
-    { x: 24, label: "Researcher" },
-    { x: 152, label: "Analyst" },
-    { x: 280, label: "Writer" },
-  ];
+  const W = 100; // card width
+  const GAP = 32; // space between cards, holding the arrow
+  const agents = ["Researcher", "Analyst", "Writer"].map((label, i) => ({
+    label,
+    x: 18 + i * (W + GAP),
+  }));
   return (
     <svg className="authintro__sketch" viewBox="0 0 400 96" aria-hidden="true" focusable="false">
-      {agents.slice(0, -1).map((a) => (
-        <g key={a.label} className="authintro__edge">
-          <path d={`M${a.x + 96} 48 H${a.x + 128}`} />
-          <path d={`M${a.x + 122} 43 l6 5 -6 5`} />
-        </g>
-      ))}
+      {agents.slice(0, -1).map((a) => {
+        // The arrow stops short of both cards.
+        const from = a.x + W + 6;
+        const to = a.x + W + GAP - 6;
+        return (
+          <g key={a.label} className="authintro__edge">
+            <path d={`M${from} 48 H${to}`} />
+            <path d={`M${to - 5} 44 l5 4 -5 4`} />
+          </g>
+        );
+      })}
       {agents.map((a, i) => (
         <g
           key={a.label}
           className={`authintro__node authintro__node--${i + 1}${i === 1 ? " authintro__node--on" : ""}`}
         >
-          <rect x={a.x} y={24} width={96} height={48} rx={10} />
-          <rect className="authintro__bar" x={a.x} y={24} width={4} height={48} rx={2} />
-          <text x={a.x + 16} y={45}>
+          <rect x={a.x} y={24} width={W} height={48} rx={10} />
+          {/* The agent's colour: a short tick inside the card, clear of its rounded corners. */}
+          <rect className="authintro__bar" x={a.x + 10} y={36} width={4} height={24} rx={2} />
+          <text x={a.x + 22} y={45}>
             {a.label}
           </text>
-          <text className="authintro__state" x={a.x + 16} y={60}>
+          <text className="authintro__state" x={a.x + 22} y={60}>
             {i === 0 ? "Completed" : i === 1 ? "Running" : "Queued"}
           </text>
         </g>
