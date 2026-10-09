@@ -3333,15 +3333,6 @@ code {
   pointer-events: none;
 }
 
-/* The graph background: the standard hand, as over an agent. */
-.diagram .react-flow__pane.draggable {
-  cursor: pointer;
-}
-
-.diagram .react-flow__pane.dragging {
-  cursor: grabbing;
-}
-
 .diagram .react-flow__node {
   cursor: default;
 }
