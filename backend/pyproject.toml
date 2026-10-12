@@ -52,3 +52,14 @@ markers = [
     "e2e: makes real LLM API calls, excluded from the default test run",
 ]
 addopts = "-m 'not e2e'"
+
+[tool.uv]
+# Windows Smart App Control blocks unsigned compiled files it doesn't recognise. On the dev
+# machine it blocks orjson 3.12.x and rpds-py 2026.x (the API then can't even import
+# LangGraph), but trusts the releases below. Keep these two under those versions until
+# newer ones load there; check with:
+#   uv run python -c "import orjson, rpds"
+constraint-dependencies = [
+    "orjson<3.12",
+    "rpds-py<2026",
+]
