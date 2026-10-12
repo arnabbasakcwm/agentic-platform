@@ -245,6 +245,31 @@ class RunNotStoppableError(PlatformError):
         super().__init__(f"run {run_id} runs on AWS and can't be stopped from here; it ends at its time limit")
 
 
+class AdminNotFoundError(PlatformError):
+    """An admin route asked for by a non-admin, or an unknown user: both read as a plain
+    404, so the admin area isn't shown to exist."""
+
+    def __init__(self) -> None:
+        super().__init__("not found")
+
+
+class MasterAdminRequiredError(PlatformError):
+    """Only the master admin adds and removes admins; other admins only read usage."""
+
+    def __init__(self) -> None:
+        super().__init__("only the master admin can add or remove admins")
+
+
+class MasterAdminLockedError(PlatformError):
+    """The master admin's role isn't changed through the API, so the platform always has
+    one; it's moved on the server with scripts/set_role.py."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "the master admin's role can't be changed here; it's moved on the server with scripts/set_role.py"
+        )
+
+
 class RunNotFoundError(PlatformError):
     def __init__(self, run_id: str):
         super().__init__(f"run not found: {run_id}")

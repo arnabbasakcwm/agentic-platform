@@ -33,9 +33,9 @@ const outputCell = (row) =>
   isData(row) ? "—" : formatCount(row.output_tokens);
 import { useAction } from "../lib/useAction.js";
 
-const RANGES = [7, 30, 90];
+export const RANGES = [7, 30, 90];
 
-function Stat({ label, value, hint }) {
+export function Stat({ label, value, hint }) {
   return (
     <div className="kstat">
       <span className="kstat__value">{value}</span>
@@ -46,7 +46,7 @@ function Stat({ label, value, hint }) {
 }
 
 // Nothing priced at all (cost 0 but unpriced tokens) reads as "price not set", not "$0.00".
-const costCell = (row, currency) =>
+export const costCell = (row, currency) =>
   row.cost === null ||
   row.cost === undefined ||
   (row.cost === 0 && (row.unpriced_tokens > 0 || row.unpriced_bytes > 0)) ? (
@@ -60,7 +60,7 @@ const costCell = (row, currency) =>
     </>
   );
 
-function ModelsTable({ rows, currency }) {
+export function ModelsTable({ rows, currency }) {
   return (
     <table className="table">
       <thead>
@@ -99,7 +99,7 @@ function ModelsTable({ rows, currency }) {
   );
 }
 
-function KindsTable({ rows, currency }) {
+export function KindsTable({ rows, currency }) {
   return (
     <table className="table">
       <thead>
@@ -128,7 +128,8 @@ function KindsTable({ rows, currency }) {
   );
 }
 
-function ProjectsTable({ rows, currency }) {
+/** `linkProjects` off for views of someone else's usage, whose projects can't be opened. */
+export function ProjectsTable({ rows, currency, linkProjects = true }) {
   return (
     <table className="table">
       <thead>
@@ -143,7 +144,9 @@ function ProjectsTable({ rows, currency }) {
         {rows.map((p) => (
           <tr key={p.project_id ?? "none"}>
             <td>
-              {p.exists ? (
+              {p.exists && !linkProjects ? (
+                <span className="table__title">{projectTitle(p.name, 60)}</span>
+              ) : p.exists ? (
                 <a
                   className="table__title"
                   href={paths.project(p.project_id, "run")}
@@ -320,6 +323,113 @@ function DeployedSync({ deployments, available, onSynced }) {
   );
 }
 
+/**
+ * A usage dashboard body (`GET /usage` shape): totals, cost per day, by model, activity
+ * and project, and recent runs with each agent's tokens. Shared by the Usage page and
+ * the admin's view of one user.
+ */
+export function UsageDashboard({
+  data,
+  days,
+  pricing,
+  showProjects = true,
+  linkProjects = true,
+  emptyHint,
+}) {
+  const currency = data.currency ?? "USD";
+  const totals = data.totals;
+  return (
+    <>
+      <div className="kstats" aria-label="Totals for the period">
+        <Stat
+          label="Estimated cost"
+          value={`~${formatCost(totals.cost, currency)}`}
+          hint={currency}
+        />
+        <Stat label="Input tokens" value={formatTokens(totals.input_tokens)} />
+        <Stat label="Output tokens" value={formatTokens(totals.output_tokens)} />
+        <Stat label="Runs" value={formatCount(totals.runs)} />
+        <Stat label="Model calls" value={formatCount(totals.calls)} />
+        {isData(totals) && (
+          <Stat
+            label="BigQuery billed"
+            value={formatBytes(totals.bytes_billed)}
+            hint="price not set"
+          />
+        )}
+      </div>
+
+      {totals.calls === 0 ? (
+        <Panel>
+          <Empty title="No usage in this period">{emptyHint}</Empty>
+        </Panel>
+      ) : (
+        <div className="stack">
+          {(totals.unpriced_tokens > 0 || pricing?.unpriced?.length > 0) && (
+            <Callout tone="warn" title="Some models have no price yet">
+              {formatCount(totals.unpriced_tokens)} tokens in this period
+              aren&apos;t included in the cost
+              {pricing?.unpriced?.length > 0 && (
+                <>
+                  {" "}
+                  (<span className="mono">{pricing.unpriced.join(", ")}</span>)
+                </>
+              )}
+              . Add their prices to{" "}
+              <code>{pricing?.file ?? "backend/pricing.json"}</code> and
+              restart the API.
+            </Callout>
+          )}
+
+          <Panel title="Estimated cost per day" subtitle={`Last ${days} days`}>
+            <CostChart days={data.by_day} currency={currency} />
+          </Panel>
+
+          <Panel title="By model" flush>
+            <ModelsTable rows={data.by_model} currency={currency} />
+          </Panel>
+
+          <Panel title="By activity" flush>
+            <KindsTable rows={data.by_kind} currency={currency} />
+          </Panel>
+
+          {showProjects && (
+            <Panel title="By project" flush>
+              <ProjectsTable
+                rows={data.by_project}
+                currency={currency}
+                linkProjects={linkProjects}
+              />
+            </Panel>
+          )}
+
+          <Panel
+            title="Recent runs"
+            subtitle={
+              data.recent_runs.length
+                ? "Open a run to see each agent's model and tokens."
+                : undefined
+            }
+            flush
+          >
+            {data.recent_runs.length === 0 ? (
+              <div className="panel__body">
+                <Empty>No runs in this period.</Empty>
+              </div>
+            ) : (
+              <ul className="urun-list">
+                {data.recent_runs.map((run) => (
+                  <RunRow key={run.run_id} run={run} currency={currency} />
+                ))}
+              </ul>
+            )}
+          </Panel>
+        </div>
+      )}
+    </>
+  );
+}
+
 /** Models, tokens and estimated cost of everything the user ran. */
 export function UsagePage({ projects }) {
   const [days, setDays] = useState(30);
@@ -342,9 +452,6 @@ export function UsagePage({ projects }) {
       .then(setPricing)
       .catch(() => {});
   }, []);
-
-  const currency = data?.currency ?? "USD";
-  const totals = data?.totals;
 
   return (
     <div className="page">
@@ -398,105 +505,13 @@ export function UsagePage({ projects }) {
             available={data.sync_available !== false}
             onSynced={() => setReload((n) => n + 1)}
           />
-          <div className="kstats" aria-label="Totals for the period">
-            <Stat
-              label="Estimated cost"
-              value={`~${formatCost(totals.cost, currency)}`}
-              hint={currency}
-            />
-            <Stat
-              label="Input tokens"
-              value={formatTokens(totals.input_tokens)}
-            />
-            <Stat
-              label="Output tokens"
-              value={formatTokens(totals.output_tokens)}
-            />
-            <Stat label="Runs" value={formatCount(totals.runs)} />
-            <Stat label="Model calls" value={formatCount(totals.calls)} />
-            {isData(totals) && (
-              <Stat
-                label="BigQuery billed"
-                value={formatBytes(totals.bytes_billed)}
-                hint="price not set"
-              />
-            )}
-          </div>
-
-          {totals.calls === 0 ? (
-            <Panel>
-              <Empty title="No usage in this period">
-                Plan a project, run it, or add knowledge files — every model
-                call is counted here.
-              </Empty>
-            </Panel>
-          ) : (
-            <div className="stack">
-              {(totals.unpriced_tokens > 0 ||
-                pricing?.unpriced?.length > 0) && (
-                <Callout tone="warn" title="Some models have no price yet">
-                  {formatCount(totals.unpriced_tokens)} tokens in this period
-                  aren&apos;t included in the cost
-                  {pricing?.unpriced?.length > 0 && (
-                    <>
-                      {" "}
-                      (
-                      <span className="mono">
-                        {pricing.unpriced.join(", ")}
-                      </span>
-                      )
-                    </>
-                  )}
-                  . Add their prices to{" "}
-                  <code>{pricing?.file ?? "backend/pricing.json"}</code> and
-                  restart the API.
-                </Callout>
-              )}
-
-              <Panel
-                title="Estimated cost per day"
-                subtitle={`Last ${days} days`}
-              >
-                <CostChart days={data.by_day} currency={currency} />
-              </Panel>
-
-              <Panel title="By model" flush>
-                <ModelsTable rows={data.by_model} currency={currency} />
-              </Panel>
-
-              <Panel title="By activity" flush>
-                <KindsTable rows={data.by_kind} currency={currency} />
-              </Panel>
-
-              {!projectId && (
-                <Panel title="By project" flush>
-                  <ProjectsTable rows={data.by_project} currency={currency} />
-                </Panel>
-              )}
-
-              <Panel
-                title="Recent runs"
-                subtitle={
-                  data.recent_runs.length
-                    ? "Open a run to see each agent's model and tokens."
-                    : undefined
-                }
-                flush
-              >
-                {data.recent_runs.length === 0 ? (
-                  <div className="panel__body">
-                    <Empty>No runs in this period.</Empty>
-                  </div>
-                ) : (
-                  <ul className="urun-list">
-                    {data.recent_runs.map((run) => (
-                      <RunRow key={run.run_id} run={run} currency={currency} />
-                    ))}
-                  </ul>
-                )}
-              </Panel>
-            </div>
-          )}
+          <UsageDashboard
+            data={data}
+            days={days}
+            pricing={pricing}
+            showProjects={!projectId}
+            emptyHint="Plan a project, run it, or add knowledge files — every model call is counted here."
+          />
 
           <p className="unotes muted">
             Costs are estimates from list prices in{" "}

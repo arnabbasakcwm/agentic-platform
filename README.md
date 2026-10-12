@@ -313,6 +313,9 @@ signed-in user's projects. Interactive docs: http://127.0.0.1:8000/docs.
 | `GET /projects/{id}/mcp` | The servers attached to a project, and which tools its agents use |
 | `POST` / `DELETE /projects/{id}/mcp/{server_id}` | Attach / detach a server |
 | `DELETE /mcp/{id}` | Remove a server (refused while a plan uses its tools) |
+| `GET /admin/users?days=30` | Admins only: every user with their tokens, estimated cost, runs and last activity, plus totals |
+| `GET /admin/users/{id}/usage?days=30&project_id=` | Admins only: one user's full usage dashboard, optionally for one of their projects (no project contents) |
+| `PUT /admin/users/{id}/role` | Master admin only: make a user an admin or a plain user (the master's own role can't be changed here) |
 | `GET /usage?days=30&project_id=` | Models, tokens and estimated cost: totals, per day, per model, per project, per activity, recent runs |
 | `POST /usage/sync` | Read deployed runtimes' usage logs now, counting runs invoked straight through AWS |
 | `GET /usage/pricing` | The price table in use, and models you've used that have no price |

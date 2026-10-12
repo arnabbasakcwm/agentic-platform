@@ -205,6 +205,17 @@ export const api = {
   removeDeployment: (id) =>
     request(`/projects/${id}/deployment`, { method: "DELETE" }),
   // ---- usage: models, tokens and estimated cost.
+  // ---- admin (admins only; anyone else gets 404)
+  adminUsers: (days = 30) => request(`/admin/users?days=${days}`),
+  adminUserUsage: (userId, days = 30, projectId) =>
+    request(
+      `/admin/users/${encodeURIComponent(userId)}/usage?days=${days}${projectId ? `&project_id=${encodeURIComponent(projectId)}` : ""}`,
+    ),
+  setUserRole: (userId, role) =>
+    request(`/admin/users/${encodeURIComponent(userId)}/role`, {
+      method: "PUT",
+      body: { role },
+    }),
   usage: (days = 30, projectId) =>
     request(
       `/usage?days=${days}${projectId ? `&project_id=${encodeURIComponent(projectId)}` : ""}`,

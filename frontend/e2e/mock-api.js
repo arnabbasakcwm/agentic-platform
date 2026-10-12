@@ -327,6 +327,19 @@ function usageBody(days, projectId) {
 
 // The last project-creation request, for tests to inspect.
 const created = { last: null };
+// Admin: users with usage, and whether the signed-in e2e user (u1) is an admin.
+function adminSeed() {
+  return [
+    { id: "u1", email: "e2e@example.com", role: "user", created_at: "2026-10-01T00:00:00Z", projects: 1,
+      last_active: "2026-10-12T05:00:00Z", calls: 40, input_tokens: 120000, output_tokens: 9000, cost: 0.42, unpriced_tokens: 0, runs: 6, deployed_runs: 1 },
+    { id: "u2", email: "ada@example.com", role: "user", created_at: "2026-10-03T00:00:00Z", projects: 3,
+      last_active: "2026-10-11T09:00:00Z", calls: 90, input_tokens: 800000, output_tokens: 60000, cost: 2.75, unpriced_tokens: 1200, runs: 14, deployed_runs: 0 },
+    { id: "u3", email: "bob@example.com", role: "user", created_at: "2026-10-05T00:00:00Z", projects: 0,
+      last_active: null, calls: 0, input_tokens: 0, output_tokens: 0, cost: 0, unpriced_tokens: 0, runs: 0, deployed_runs: 0 },
+  ];
+}
+const admin = { users: adminSeed() };
+const me = () => admin.users.find((u) => u.id === "u1");
 // The last intake conversation sent, for tests to inspect.
 const briefChats = { last: null };
 
@@ -617,6 +630,7 @@ function reset() {
   savedRuns.list = [];
   Object.assign(deploys, { available: false, current: null, count: 0 });
   created.last = null;
+  admin.users = adminSeed();
   briefChats.last = null;
 }
 
@@ -816,8 +830,87 @@ const server = http.createServer(async (req, res) => {
     }
     return send(res, 200, {
       access_token: "e2e-token", token_type: "bearer", expires_in: 3600,
-      user: { id: "u1", email: body.email, created_at: "2026-10-01T00:00:00Z" },
+      user: { id: "u1", email: body.email, role: me().role, created_at: "2026-10-01T00:00:00Z" },
     });
+  }
+  // Test hooks: make the signed-in e2e user the master admin, or an ordinary admin
+  // (with Ada as the master).
+  if (path === "/__as_admin" && req.method === "POST") {
+    me().role = "master";
+    return send(res, 200, { ok: true });
+  }
+  if (path === "/__as_sub_admin" && req.method === "POST") {
+    me().role = "admin";
+    admin.users.find((u) => u.id === "u2").role = "master";
+    return send(res, 200, { ok: true });
+  }
+  if (path.startsWith("/admin/")) {
+    if (!["admin", "master"].includes(me().role)) return send(res, 404, { error_type: "NotFound", message: "not found", details: null });
+    if (path === "/admin/users" && req.method === "GET") {
+      const users = admin.users;
+      const sum = (k) => users.reduce((n, u) => n + u[k], 0);
+      return send(res, 200, {
+        days: Number(new URL(req.url, "http://x").searchParams.get("days") ?? 30), currency: "USD",
+        totals: { users: users.length, active_users: users.filter((u) => u.calls > 0).length,
+          admins: users.filter((u) => ["admin", "master"].includes(u.role)).length, calls: sum("calls"),
+          input_tokens: sum("input_tokens"), output_tokens: sum("output_tokens"), cost: sum("cost"), unpriced_tokens: sum("unpriced_tokens") },
+        users,
+      });
+    }
+    const usage = path.match(/^\/admin\/users\/([^/]+)\/usage$/);
+    if (usage) {
+      const u = admin.users.find((x) => x.id === usage[1]);
+      if (!u) return send(res, 404, { error_type: "NotFound", message: "not found", details: null });
+      const q = new URL(req.url, "http://x").searchParams;
+      const days = Number(q.get("days") ?? 30);
+      const projectId = q.get("project_id");
+      // Two projects: an unnamed one (labelled by id, never its brief) and a named one.
+      const projects = u.calls
+        ? [{ project_id: "p1p1p1p1", name: "Untitled project · p1p1p1" }, { project_id: "p2p2p2p2", name: "Invoices" }]
+        : [];
+      if (projectId && !projects.some((x) => x.project_id === projectId)) {
+        return send(res, 404, { error_type: "NotFound", message: "not found", details: null });
+      }
+      const share = projectId === "p2p2p2p2" ? 0.25 : projectId ? 0.75 : 1;
+      const n = (v) => Math.round(v * share);
+      const row = { calls: n(u.calls), input_tokens: n(u.input_tokens), output_tokens: n(u.output_tokens),
+        cost: +(u.cost * share).toFixed(4), unpriced_tokens: n(u.unpriced_tokens), bytes_billed: 0, unpriced_bytes: 0 };
+      const by_day = Array.from({ length: days }, (_, i) => {
+        const d = new Date(Date.UTC(2026, 9, 12) - (days - 1 - i) * 86400000).toISOString().slice(0, 10);
+        return { date: d, cost: i === days - 1 ? row.cost : 0, input_tokens: 0, output_tokens: 0, calls: 0 };
+      });
+      const recent_runs = u.calls ? [{
+        run_id: "run-a", project_id: projectId ?? "p2p2p2p2", project: projectId === "p1p1p1p1" ? "Untitled project · p1p1p1" : "Invoices",
+        at: "2026-10-11T09:00:00Z", deployed: false, via: null, input_tokens: 4000, output_tokens: 300, cost: 0.02, unpriced_tokens: 0,
+        agents: [{ agent_id: "researcher", kind: "run", provider: "google_genai", model: "gemini-3.1-pro-preview", estimated: false,
+          calls: 2, input_tokens: 4000, output_tokens: 300, cost: 0.02, unpriced_tokens: 0, bytes_billed: 0 }],
+      }] : [];
+      const by_project = projects
+        .filter((x) => !projectId || x.project_id === projectId)
+        .map((x) => ({ ...row, project_id: x.project_id, name: x.name, exists: true, runs: u.runs }));
+      return send(res, 200, {
+        user: { id: u.id, email: u.email, role: u.role, created_at: u.created_at, role_changed_at: null, projects: projects.length },
+        projects, currency: "USD",
+        totals: { ...row, runs: u.runs, estimated_tokens: 0 }, by_day,
+        by_model: u.calls ? [{ ...row, provider: "google_genai", model: "gemini-3.1-pro-preview", priced: true, estimated: false }] : [],
+        by_project,
+        by_kind: u.calls ? [{ ...row, kind: "run" }] : [], recent_runs,
+      });
+    }
+    const role = path.match(/^\/admin\/users\/([^/]+)\/role$/);
+    if (role && req.method === "PUT") {
+      const body = await readBody(req);
+      const u = admin.users.find((x) => x.id === role[1]);
+      if (!u) return send(res, 404, { error_type: "NotFound", message: "not found", details: null });
+      if (me().role !== "master") {
+        return send(res, 403, { error_type: "MasterAdminRequired", message: "only the master admin can add or remove admins", details: null });
+      }
+      if (u.role === "master") {
+        return send(res, 409, { error_type: "MasterAdmin", message: "the master admin's role can't be changed here", details: null });
+      }
+      u.role = body.role;
+      return send(res, 200, { user: { id: u.id, email: u.email, role: u.role, created_at: u.created_at } });
+    }
   }
   // The new-project conversation, scripted like the real intake assistant: a greeting
   // gets questions and no brief; a short request gets questions and a draft brief; a
@@ -898,7 +991,7 @@ const server = http.createServer(async (req, res) => {
     knowledgeBody();
     return send(res, 200, project);
   }
-  if (path === "/auth/me") return send(res, 200, { id: "u1", email: "e2e@example.com", created_at: "2026-10-01T00:00:00Z" });
+  if (path === "/auth/me") return send(res, 200, { id: "u1", email: "e2e@example.com", role: me().role, created_at: "2026-10-01T00:00:00Z" });
   if (path === "/projects") {
     if (project.deleted) return send(res, 200, { projects: [] });
     return send(res, 200, {

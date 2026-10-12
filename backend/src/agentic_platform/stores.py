@@ -36,6 +36,11 @@ def _now() -> datetime:
     return now.replace(microsecond=now.microsecond // 1000 * 1000)
 
 
+# Roles: every admin role sees the admin area; only the master manages admins.
+ROLES = ("user", "admin", "master")
+ADMIN_ROLES = frozenset({"admin", "master"})
+
+
 class UserRecord(BaseModel):
     id: str
     # Stored lowercased: it is the login identifier and must be unique case-insensitively.
@@ -43,6 +48,12 @@ class UserRecord(BaseModel):
     # An Argon2 hash (see auth.py) — the password itself is never stored or logged.
     password_hash: str
     created_at: datetime = Field(default_factory=_now)
+    # Admins see every user's usage and cost (never their projects' contents). The one
+    # master admin also alone adds and removes admins. Read from the store on every
+    # request, so a change applies at once; tokens never carry it.
+    role: Literal["user", "admin", "master"] = "user"
+    role_changed_by: str | None = None
+    role_changed_at: datetime | None = None
 
 
 # A project keeps only its most recent chat messages; older ones are dropped.
@@ -251,6 +262,14 @@ class UserStore(Protocol):
 
     def get_by_email(self, email: str) -> UserRecord | None: ...
 
+    def list_all(self) -> list[UserRecord]:
+        """Every user, newest first (the admin view)."""
+        ...
+
+    def set_role(self, user_id: str, role: str, by: str | None) -> UserRecord | None:
+        """Set a user's role, recording who changed it; None if there's no such user."""
+        ...
+
 
 class InMemoryProjectStore:
     """Process-local store: the no-database fallback, and what the offline tests use."""
@@ -362,6 +381,19 @@ class InMemoryUserStore:
             if record.email == email:
                 return record.model_copy()
         return None
+
+    def list_all(self) -> list[UserRecord]:
+        return [r.model_copy() for r in sorted(self._records.values(), key=lambda r: r.created_at, reverse=True)]
+
+    def set_role(self, user_id: str, role: str, by: str | None) -> UserRecord | None:
+        record = self._records.get(user_id)
+        if record is None:
+            return None
+        updated = UserRecord.model_validate(
+            {**record.model_dump(), "role": role, "role_changed_by": by, "role_changed_at": _now()}
+        )
+        self._records[user_id] = updated
+        return updated.model_copy()
 
 
 def mongo_database(
@@ -541,6 +573,20 @@ class MongoUserStore:
         with _mongo_errors():
             doc = self._users.find_one({"email": email})
         return self._from_doc(doc) if doc else None
+
+    def list_all(self) -> list[UserRecord]:
+        with _mongo_errors():
+            docs = list(self._users.find({}).sort("created_at", -1))
+        return [self._from_doc(d) for d in docs]
+
+    def set_role(self, user_id: str, role: str, by: str | None) -> UserRecord | None:
+        if role not in ROLES:
+            raise ValueError(f"unknown role: {role}")
+        with _mongo_errors():
+            result = self._users.update_one(
+                {"_id": user_id}, {"$set": {"role": role, "role_changed_by": by, "role_changed_at": _now()}}
+            )
+        return self.get(user_id) if result.matched_count == 1 else None
 
 
 # ---------------------------------------------------------------------------- knowledge
@@ -883,6 +929,10 @@ class UsageStore(Protocol):
         """Which of these run ids already have records (so a sync never counts twice)."""
         ...
 
+    def list_all(self, since: datetime) -> list[UsageRecord]:
+        """Every tenant's records since `since`, oldest first (the admin view only)."""
+        ...
+
 
 class InMemoryUsageStore:
     def __init__(self) -> None:
@@ -902,6 +952,10 @@ class InMemoryUsageStore:
         wanted = set(run_ids)
         return {r.run_id for r in self._records if r.tenant_id == tenant_id and r.run_id in wanted}
 
+    def list_all(self, since: datetime) -> list[UsageRecord]:
+        found = [r for r in self._records if r.at >= since]
+        return [r.model_copy() for r in sorted(found, key=lambda r: r.at)]
+
 
 class MongoUsageStore:
     """`usage_events`, one document per record, indexed by tenant and time. Totals are
@@ -915,6 +969,7 @@ class MongoUsageStore:
         if not self._index_ready:
             self._events.create_index([("tenant_id", 1), ("at", 1)])
             self._events.create_index([("tenant_id", 1), ("run_id", 1)])
+            self._events.create_index([("at", 1)])  # the admin view reads every tenant
             self._index_ready = True
 
     def add_many(self, records: list[UsageRecord]) -> None:
@@ -949,6 +1004,16 @@ class MongoUsageStore:
             self._ensure_index()
             found = self._events.distinct("run_id", {"tenant_id": tenant_id, "run_id": {"$in": list(run_ids)}})
         return set(found)
+
+    def list_all(self, since: datetime) -> list[UsageRecord]:
+        with _mongo_errors():
+            self._ensure_index()
+            docs = list(self._events.find({"at": {"$gte": since}}).sort("at", 1))
+        out = []
+        for d in docs:
+            d["id"] = d.pop("_id")
+            out.append(UsageRecord.model_validate(d))
+        return out
 
 
 # ---------------------------------------------------------------------------- data sources

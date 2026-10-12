@@ -773,6 +773,43 @@ whenever a change departs from or extends the contract above — don't silently 
     `DOMAIN`, `MONGO_ROOT_*`, `JWT_SECRET` and `PLATFORM_SECRET_KEY`.
   - **Setup guide:** `docs/deployment.md`.
 
+### 2026-10-12 — Admins see every user's usage; roles live in the database
+- **Why:** each user is their own tenant, so nobody could see who uses the platform or
+  what each user spends.
+- **Rule:**
+  - **The role** is `UserRecord.role` (`user` | `admin`, default `user`, so no migration),
+    with `role_changed_by` / `role_changed_at`. `current_user` reads it from the store on
+    every request and the JWT carries only the user id, so a change applies on the user's
+    next request.
+  - **Access:** `require_admin` guards every `/admin/*` route. For anyone else they're a
+    404 `NotFound`, like another user's project.
+  - **Usage only:**
+    - `GET /admin/users` gives per-user tokens, cost (as recorded, unpriced kept apart),
+      calls, runs, projects and last activity, plus totals (`UsageStore.list_all`,
+      `usage.by_tenant`).
+    - `GET /admin/users/{id}/usage` is the user's own `/usage` dashboard (optionally for
+      one of their projects, `project_id`; another user's project is a 404), plus their
+      project list for the filter. Projects are labelled by their given name, else
+      "Untitled project · <id>", **never** by the brief, because an unnamed project's
+      display name is the brief's first line.
+    - Briefs, plans, run inputs and outputs, files and password hashes are never
+      returned.
+  - **Roles (amended 2026-10-12):** `user`, `admin` and one `master`. Every admin sees
+    usage; only the master adds and removes admins (`PUT /admin/users/{id}/role`,
+    `require_master`), so admins can't remove one another. Another admin gets 403
+    `MasterAdminRequired`. The API never makes anyone master, and the master's own role
+    can't be changed there (409 `MasterAdmin`), so the platform always has one. The master
+    is set on the server with `scripts/set_role.py <email> master`, which moves the role
+    (the previous master becomes an admin) and refuses to demote the master directly.
+  - **Audit:** every admin read and role change writes a log line (admin id, action,
+    target id) until observability exists.
+  - **Console:** an Admin sidebar item and page (`pages/AdminPage.jsx`), shown only when
+    `/auth/me` says `role: "admin"` or `"master"`; role controls show only to the
+    master. Each user opens a full usage page (`#/admin/users/<id>`,
+    `pages/AdminUserPage.jsx`) built from the same
+    `UsageDashboard` as the Usage page. Admin views never link into a user's projects,
+    which an admin can't open.
+
 ## Working style — verify-and-retry, always
 
 Never mark something done because the code looks right.

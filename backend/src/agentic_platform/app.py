@@ -17,7 +17,7 @@ import re
 import threading
 import time
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, Literal
 
 from botocore.exceptions import BotoCoreError, ClientError
@@ -59,7 +59,10 @@ from . import mcp_client as mc
 from . import secrets_box
 from .deploy import build_package, remove_deployment, run_deployment, runtime_environment, runtime_name
 from .errors import (
+    AdminNotFoundError,
     AuthenticationError,
+    MasterAdminLockedError,
+    MasterAdminRequiredError,
     EmailTakenError,
     MissingProviderKeyError,
     DeployedRunError,
@@ -104,6 +107,7 @@ from .graph_builder import (
 )
 from .meta_planner_prompt import discuss_brief, plan_project, revise_plan
 from .stores import (
+    ADMIN_ROLES,
     DataSource,
     ModelCapability,
     RunRecord,
@@ -288,7 +292,7 @@ def current_user(
 
 
 def _public_user(user: UserRecord) -> dict[str, Any]:
-    return {"id": user.id, "email": user.email, "created_at": user.created_at}
+    return {"id": user.id, "email": user.email, "role": user.role, "created_at": user.created_at}
 
 
 def _session(user: UserRecord) -> dict[str, Any]:
@@ -1620,6 +1624,137 @@ def test_mcp_tool(server_id: str, req: McpTestRequest, user: UserRecord = Depend
     return {"output": output}
 
 
+# --------------------------------------------------------------------------- admin
+# Admins see every user's usage and cost, never their projects' contents (briefs, plans,
+# run inputs and outputs, files). The one master admin alone adds and removes admins.
+# Roles live on the user and are read on every request.
+class RoleRequest(BaseModel):
+    role: Literal["user", "admin"]
+
+
+def require_admin(user: UserRecord = Depends(current_user)) -> UserRecord:
+    """The signed-in user, if an admin. Anyone else gets the same 404 as an unknown
+    route, so the admin area isn't even shown to exist."""
+    if user.role not in ADMIN_ROLES:
+        raise AdminNotFoundError()
+    return user
+
+
+def require_master(user: UserRecord = Depends(require_admin)) -> UserRecord:
+    """The signed-in user, if the master admin. Other admins know the admin area exists,
+    so they get a plain 403; non-admins still get the 404."""
+    if user.role != "master":
+        raise MasterAdminRequiredError()
+    return user
+
+
+def _range_start(days: int) -> tuple[date, int, datetime]:
+    days = min(max(days, 1), 366)
+    start = datetime.now(timezone.utc).date() - timedelta(days=days - 1)
+    return start, days, datetime(start.year, start.month, start.day, tzinfo=timezone.utc)
+
+
+@app.get("/admin/users")
+def admin_users(days: int = 30, admin: UserRecord = Depends(require_admin)) -> dict[str, Any]:
+    """Every user, with their tokens and estimated cost over the last `days` days, and
+    platform totals. Usage only: no project contents."""
+    _, days, since = _range_start(days)
+    records = [r.model_dump() for r in _usage.list_all(since)]
+    per_user = usage_mod.by_tenant(records)
+    currency = usage_mod.prices().get("currency", "USD")
+    users = []
+    for u in _users.list_all():
+        totals = per_user.get(u.id) or {
+            "calls": 0, "input_tokens": 0, "output_tokens": 0, "cost": 0.0, "unpriced_tokens": 0,
+            "last_active": None, "runs": 0, "deployed_runs": 0,
+        }
+        users.append({
+            "id": u.id,
+            "email": u.email,
+            "role": u.role,
+            "created_at": u.created_at,
+            "projects": len(_store.list_for_tenant(u.id)),
+            **totals,
+        })
+    logger.info("admin %s listed users (days=%d)", admin.id, days)
+    return {
+        "days": days,
+        "currency": currency,
+        "totals": {
+            "users": len(users),
+            "active_users": sum(1 for u in users if u["calls"] > 0),
+            "admins": sum(1 for u in users if u["role"] in ADMIN_ROLES),
+            "calls": sum(u["calls"] for u in users),
+            "input_tokens": sum(u["input_tokens"] for u in users),
+            "output_tokens": sum(u["output_tokens"] for u in users),
+            "cost": round(sum(u["cost"] for u in users), 6),
+            "unpriced_tokens": sum(u["unpriced_tokens"] for u in users),
+        },
+        "users": users,
+    }
+
+
+def _admin_project_names(user_id: str) -> dict[str, str]:
+    """A user's projects as an admin may see them: the project's own name if the user gave
+    it one, never the brief (an unnamed project's display name is the brief's first line,
+    which is the user's content)."""
+    return {p.id: p.name or f"Untitled project · {p.id[:6]}" for p in _store.list_for_tenant(user_id)}
+
+
+@app.get("/admin/users/{user_id}/usage")
+def admin_user_usage(
+    user_id: str,
+    days: int = 30,
+    project_id: str | None = None,
+    admin: UserRecord = Depends(require_admin),
+) -> dict[str, Any]:
+    """One user's usage, exactly as their own Usage page counts it (totals, by day, model,
+    project name and kind of work, recent runs with each agent's tokens), optionally for
+    one of their projects. Starts no sync and shows no project contents."""
+    target = _users.get(user_id)
+    if target is None:
+        raise AdminNotFoundError()
+    names = _admin_project_names(user_id)
+    if project_id is not None and project_id not in names:
+        raise AdminNotFoundError()
+    start, days, since = _range_start(days)
+    records = [r.model_dump() for r in _usage.list(user_id, since, project_id)]
+    body = usage_mod.dashboard(
+        records, start=start, days=days, project_names=names,
+        currency=usage_mod.prices().get("currency", "USD"),
+    )
+    logger.info(
+        "admin %s viewed usage of user %s (days=%d%s)", admin.id, user_id, days,
+        f", project={project_id}" if project_id else "",
+    )
+    user = {
+        **_public_user(target),
+        "role_changed_at": target.role_changed_at,
+        "projects": len(names),
+    }
+    projects = [{"project_id": pid, "name": name} for pid, name in names.items()]
+    return {"user": user, "projects": projects, **body}
+
+
+@app.put("/admin/users/{user_id}/role")
+def admin_set_role(
+    user_id: str, req: RoleRequest, admin: UserRecord = Depends(require_master)
+) -> dict[str, Any]:
+    """Make a user an admin, or take it away (master admin only). The master's own role
+    can't be changed here, so the platform always has one; admins can't remove each
+    other."""
+    target = _users.get(user_id)
+    if target is None:
+        raise AdminNotFoundError()
+    if target.role == "master":
+        raise MasterAdminLockedError()
+    updated = _users.set_role(user_id, req.role, admin.id)
+    if updated is None:
+        raise AdminNotFoundError()
+    logger.info("admin %s set role of user %s to %s", admin.id, user_id, req.role)
+    return {"user": {**_public_user(updated), "role_changed_at": updated.role_changed_at}}
+
+
 # --------------------------------------------------------------------------- usage
 def _record_usage(
     tenant_id: str,
@@ -2881,6 +3016,21 @@ def _handle_run_not_found(_req: Request, exc: RunNotFoundError):
 @app.exception_handler(ModelCannotCallToolsError)
 def _handle_cannot_call_tools(_req: Request, exc: ModelCannotCallToolsError):
     return _error_response(422, "ModelCannotCallTools", str(exc))
+
+
+@app.exception_handler(AdminNotFoundError)
+def _handle_admin_not_found(_req: Request, exc: AdminNotFoundError):
+    return _error_response(404, "NotFound", str(exc))
+
+
+@app.exception_handler(MasterAdminRequiredError)
+def _handle_master_required(_req: Request, exc: MasterAdminRequiredError):
+    return _error_response(403, "MasterAdminRequired", str(exc))
+
+
+@app.exception_handler(MasterAdminLockedError)
+def _handle_master_locked(_req: Request, exc: MasterAdminLockedError):
+    return _error_response(409, "MasterAdmin", str(exc))
 
 
 @app.exception_handler(McpError)

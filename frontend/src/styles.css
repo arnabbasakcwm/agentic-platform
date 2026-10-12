@@ -928,6 +928,7 @@ input[type="text"],
 input[type="number"],
 input[type="email"],
 input[type="url"],
+input[type="search"],
 input[type="password"],
 select,
 textarea {
@@ -4220,6 +4221,13 @@ code {
   min-width: 200px;
 }
 
+/* A search box in the filter bar sits inline with the other controls. */
+.ufilters input[type="search"] {
+  width: auto;
+  flex: 0 1 260px;
+  min-width: 180px;
+}
+
 .kstat__hint {
   font-size: var(--text-caption);
   color: var(--text-muted);
@@ -6027,4 +6035,45 @@ body.is-resizing {
   .table--stack .table__actions {
     margin-left: auto;
   }
+}
+
+/* ================================================================ admin */
+.admin__email {
+  font-weight: 600;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.admin__title {
+  overflow-wrap: anywhere;
+}
+
+.admin__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-xs) var(--space-md);
+}
+
+.admin__actions {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.admin__confirm {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-xs);
+  white-space: normal;
+}
+
+.admin__confirm-text {
+  font-size: var(--text-xs);
+  max-width: 260px;
+}
+
+.admin__note {
+  font-size: var(--text-xs);
 }

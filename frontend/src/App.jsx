@@ -16,7 +16,11 @@ import { NewProjectPage } from "./pages/NewProjectPage.jsx";
 import { ProjectWorkspace } from "./pages/ProjectWorkspace.jsx";
 import { ProjectsPage } from "./pages/ProjectsPage.jsx";
 import { UsagePage } from "./pages/UsagePage.jsx";
+import { AdminPage } from "./pages/AdminPage.jsx";
+import { AdminUserPage } from "./pages/AdminUserPage.jsx";
+import { isAdminRole } from "./lib/admin.js";
 import { ErrorBoundary } from "./components/ErrorBoundary.jsx";
+import { Empty } from "./components/ui.jsx";
 
 const COLLAPSED_KEY = "agentic-platform.sidebar-collapsed";
 const STEP_LABELS = {
@@ -45,6 +49,10 @@ function crumbsFor(route, projects) {
   if (route.page === "data") return [{ label: "Data sources" }];
   if (route.page === "mcp") return [{ label: "MCP servers" }];
   if (route.page === "usage") return [{ label: "Usage" }];
+  if (route.page === "admin") return [{ label: "Admin" }];
+  if (route.page === "adminUser") {
+    return [{ label: "Admin", href: paths.admin }, { label: "User" }];
+  }
   if (route.page === "project") {
     const known = projects?.find((p) => p.project_id === route.id);
     return [
@@ -238,6 +246,20 @@ function Console() {
             {route.page === "data" && <DataSourcesPage />}
             {route.page === "mcp" && <McpServersPage />}
             {route.page === "usage" && <UsagePage projects={projects} />}
+            {(route.page === "admin" || route.page === "adminUser") &&
+              (isAdminRole(user?.role) ? (
+                route.page === "admin" ? (
+                  <AdminPage me={user} />
+                ) : (
+                  <AdminUserPage key={route.id} userId={route.id} me={user} />
+                )
+              ) : (
+                <div className="page">
+                  <Empty title="Not found">
+                    There&apos;s nothing at this address.
+                  </Empty>
+                </div>
+              ))}
             {route.page === "new" && (
               <NewProjectPage
                 tools={tools}

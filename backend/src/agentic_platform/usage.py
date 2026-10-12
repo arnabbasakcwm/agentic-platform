@@ -323,3 +323,35 @@ def summarize(entries: list[dict[str, Any]], table: dict[str, Any] | None = None
         "cost": round(sum(e["cost"] for e in priced if e["cost"] is not None), 6),
         "unpriced_models": sorted({f"{e['provider']}/{e['model']}" for e in priced if e["cost"] is None}),
     }
+
+
+def by_tenant(records: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Per-user totals for the admin view, from stored usage records (dicts with
+    UsageRecord fields), counted the same way as each user's own Usage page: costs as
+    recorded, and unpriced tokens kept apart rather than guessed."""
+    out: dict[str, dict[str, Any]] = {}
+    runs: dict[str, set[str]] = {}
+    deployed: dict[str, set[str]] = {}
+    for r in records:
+        t = out.setdefault(r["tenant_id"], {
+            "calls": 0, "input_tokens": 0, "output_tokens": 0, "cost": 0.0, "unpriced_tokens": 0,
+            "last_active": None,
+        })
+        t["calls"] += r["calls"]
+        t["input_tokens"] += r["input_tokens"]
+        t["output_tokens"] += r["output_tokens"]
+        if r["cost"] is None:
+            t["unpriced_tokens"] += r["input_tokens"] + r["output_tokens"]
+        else:
+            t["cost"] += r["cost"]
+        if t["last_active"] is None or r["at"] > t["last_active"]:
+            t["last_active"] = r["at"]
+        if r.get("run_id") and r["kind"] in RUN_KINDS:
+            runs.setdefault(r["tenant_id"], set()).add(r["run_id"])
+            if r["kind"] == "deployed_run":
+                deployed.setdefault(r["tenant_id"], set()).add(r["run_id"])
+    for tenant_id, t in out.items():
+        t["cost"] = round(t["cost"], 6)
+        t["runs"] = len(runs.get(tenant_id, ()))
+        t["deployed_runs"] = len(deployed.get(tenant_id, ()))
+    return out

@@ -7,6 +7,8 @@
 //   #/data                     data sources (BigQuery) agents may query
 //   #/mcp                      MCP servers whose tools agents may call
 //   #/usage                    models, tokens and cost
+//   #/admin                    every user's usage and cost (admins only)
+//   #/admin/users/<id>         one user's full usage dashboard (admins only)
 //   #/projects/<id>/<step>     one project, at a step of its workflow
 //   #/projects/<id>/resources/<tab>   the Resources step's documents | databases | tools
 
@@ -37,6 +39,11 @@ export function parseRoute(hash) {
   if (first === "data") return { page: "data" };
   if (first === "mcp") return { page: "mcp" };
   if (first === "usage") return { page: "usage" };
+  if (first === "admin") {
+    return id === "users" && step
+      ? { page: "adminUser", id: step }
+      : { page: "admin" };
+  }
   if (first === "projects" && id) {
     if (MOVED_STEPS[step]) {
       return { page: "project", id, step: "resources", tab: MOVED_STEPS[step] };
@@ -81,6 +88,8 @@ export const paths = {
   data: "#/data",
   mcp: "#/mcp",
   usage: "#/usage",
+  admin: "#/admin",
+  adminUser: (id) => `#/admin/users/${encodeURIComponent(id)}`,
   project: (id, step = "plan", tab = null) =>
     tab ? `#/projects/${id}/${step}/${tab}` : `#/projects/${id}/${step}`,
 };

@@ -1,3 +1,4 @@
+import { isAdminRole } from "../lib/admin.js";
 import { projectName } from "../lib/format.js";
 import { paths } from "../lib/router.js";
 import { Icon } from "./icons.jsx";
@@ -112,6 +113,14 @@ export function Sidebar({
           label="Usage"
           active={route.page === "usage"}
         />
+        {isAdminRole(user?.role) && (
+          <NavItem
+            href={paths.admin}
+            icon="shield"
+            label="Admin"
+            active={route.page === "admin" || route.page === "adminUser"}
+          />
+        )}
 
         {recent.length > 0 && (
           <div className="sidebar__recent">

@@ -561,3 +561,34 @@ def test_a_project_can_be_renamed_without_touching_its_plan(store):
     assert store.rename("missing", "x") is None
     assert brief_title("x" * 100).endswith("…") and len(brief_title("x" * 100)) == 72
     assert brief_title("   ") == "Untitled project"
+
+
+# ------------------------------------------------------------------ admin: roles and all-tenant usage
+def test_users_have_a_role_listed_newest_first_and_settable(users):
+    from datetime import timedelta
+
+    older, newer = _user("old@example.com"), _user("new@example.com")
+    newer.created_at = older.created_at + timedelta(seconds=5)
+    users.create(older)
+    users.create(newer)
+    assert [u.email for u in users.list_all()] == ["new@example.com", "old@example.com"]
+    assert users.get(older.id).role == "user"  # the default: no migration needed
+    promoted = users.set_role(older.id, "admin", by=newer.id)
+    assert promoted.role == "admin" and promoted.role_changed_by == newer.id and promoted.role_changed_at
+    assert users.get(older.id).role == "admin"
+    assert users.set_role("nobody", "admin", by=None) is None
+
+
+def test_usage_can_be_read_across_tenants_for_admins(backend):
+    from datetime import datetime, timedelta, timezone
+
+    from agentic_platform.stores import InMemoryUsageStore, MongoUsageStore, UsageRecord
+
+    store = InMemoryUsageStore() if backend is None else MongoUsageStore(backend)
+    now = datetime.now(timezone.utc)
+    rec = lambda i, tenant, at: UsageRecord(id=f"r{i}", tenant_id=tenant, at=at, kind="run",
+                                            provider="google_genai", model="m", calls=1, input_tokens=10)
+    store.add_many([rec(1, "a", now - timedelta(days=40)), rec(2, "a", now), rec(3, "b", now)])
+    found = store.list_all(now - timedelta(days=1))
+    assert sorted(r.tenant_id for r in found) == ["a", "b"]
+    assert store.list("a", now - timedelta(days=1)) and len(store.list("a", now - timedelta(days=1))) == 1
