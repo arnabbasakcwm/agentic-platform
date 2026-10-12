@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { CostChart } from "../components/CostChart.jsx";
 import { Icon } from "../components/icons.jsx";
+import { ShowMore } from "../components/ShowMore.jsx";
 import {
   Button,
   Callout,
@@ -13,7 +14,7 @@ import {
 } from "../components/ui.jsx";
 import { api } from "../lib/api.js";
 import { fullDate, projectName, projectTitle, timeAgo } from "../lib/format.js";
-import { paths } from "../lib/router.js";
+import { USAGE_TABS, paths } from "../lib/router.js";
 import { formatBytes } from "../lib/datasources.js";
 import {
   formatCost,
@@ -323,10 +324,86 @@ function DeployedSync({ deployments, available, onSynced }) {
   );
 }
 
+const TAB_LABELS = {
+  models: "Models",
+  activity: "Activity",
+  projects: "Projects",
+  runs: "Runs",
+};
+
+// The dashboard field each tab lists.
+const TAB_ROWS = {
+  models: "by_model",
+  activity: "by_kind",
+  projects: "by_project",
+  runs: "recent_runs",
+};
+
+/** The breakdown tabs, with a count on each. Arrow keys move between them. */
+function UsageTabs({ tabs, current, onChange, idPrefix }) {
+  function onKeyDown(e) {
+    const step = { ArrowRight: 1, ArrowLeft: -1 }[e.key];
+    const edge = { Home: 0, End: tabs.length - 1 }[e.key];
+    if (step === undefined && edge === undefined) return;
+    e.preventDefault();
+    const at = tabs.findIndex((x) => x.key === current);
+    const next =
+      edge ?? (at + step + tabs.length) % tabs.length;
+    onChange(tabs[next].key);
+    document.getElementById(`${idPrefix}-tab-${tabs[next].key}`)?.focus();
+  }
+  return (
+    <div
+      className="segmented usage__tabs"
+      role="tablist"
+      aria-label="Usage breakdown"
+      onKeyDown={onKeyDown}
+    >
+      {tabs.map(({ key, label, count }) => (
+        <button
+          key={key}
+          type="button"
+          role="tab"
+          id={`${idPrefix}-tab-${key}`}
+          aria-controls={`${idPrefix}-panel`}
+          aria-selected={current === key}
+          tabIndex={current === key ? 0 : -1}
+          className={
+            current === key
+              ? "segmented__item segmented__item--on"
+              : "segmented__item"
+          }
+          onClick={() => onChange(key)}
+        >
+          {label}
+          <span className="count-chip">{count}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** How costs are counted, closed by default to keep the page short. */
+export function CostNotes({ children }) {
+  return (
+    <details className="unotes">
+      <summary>How costs are counted</summary>
+      <p className="muted">
+        Costs are estimates from list prices in <code>backend/pricing.json</code>{" "}
+        (with each price&apos;s source and date), recorded at the time of use.
+        Token counts are what the provider reported; embedding tokens are
+        estimated (~4 characters per token). Gemini&apos;s thinking tokens count
+        as output. {children}
+      </p>
+    </details>
+  );
+}
+
 /**
- * A usage dashboard body (`GET /usage` shape): totals, cost per day, by model, activity
- * and project, and recent runs with each agent's tokens. Shared by the Usage page and
- * the admin's view of one user.
+ * A usage dashboard body (`GET /usage` shape): totals and cost per day on top, then the
+ * breakdowns (models, activity, projects, recent runs with each agent's tokens) as tabs,
+ * each list showing its first rows until opened. Shared by the Usage page and the
+ * admin's view of one user; the parent owns the tab (`tab` / `onTabChange`).
  */
 export function UsageDashboard({
   data,
@@ -335,9 +412,18 @@ export function UsageDashboard({
   showProjects = true,
   linkProjects = true,
   emptyHint,
+  tab,
+  onTabChange,
+  resetKey = "",
+  idPrefix = "usage",
 }) {
   const currency = data.currency ?? "USD";
   const totals = data.totals;
+  const tabs = USAGE_TABS.filter((key) => key !== "projects" || showProjects).map(
+    (key) => ({ key, label: TAB_LABELS[key], count: data[TAB_ROWS[key]].length }),
+  );
+  // A tab that isn't shown (Projects, with one project filtered) falls back to the first.
+  const current = tabs.some((x) => x.key === tab) ? tab : tabs[0].key;
   return (
     <>
       <div className="kstats" aria-label="Totals for the period">
@@ -385,45 +471,65 @@ export function UsageDashboard({
             <CostChart days={data.by_day} currency={currency} />
           </Panel>
 
-          <Panel title="By model" flush>
-            <ModelsTable rows={data.by_model} currency={currency} />
-          </Panel>
-
-          <Panel title="By activity" flush>
-            <KindsTable rows={data.by_kind} currency={currency} />
-          </Panel>
-
-          {showProjects && (
-            <Panel title="By project" flush>
-              <ProjectsTable
-                rows={data.by_project}
-                currency={currency}
-                linkProjects={linkProjects}
-              />
-            </Panel>
-          )}
-
-          <Panel
-            title="Recent runs"
-            subtitle={
-              data.recent_runs.length
-                ? "Open a run to see each agent's model and tokens."
-                : undefined
-            }
-            flush
+          <UsageTabs
+            tabs={tabs}
+            current={current}
+            onChange={onTabChange}
+            idPrefix={idPrefix}
+          />
+          <div
+            role="tabpanel"
+            id={`${idPrefix}-panel`}
+            aria-labelledby={`${idPrefix}-tab-${current}`}
+            className="panel usage__panel"
           >
-            {data.recent_runs.length === 0 ? (
-              <div className="panel__body">
-                <Empty>No runs in this period.</Empty>
-              </div>
-            ) : (
-              <ul className="urun-list">
-                {data.recent_runs.map((run) => (
-                  <RunRow key={run.run_id} run={run} currency={currency} />
-                ))}
-              </ul>
+            {current === "models" && (
+              <ShowMore key={resetKey} rows={data.by_model} noun="models">
+                {(rows) => <ModelsTable rows={rows} currency={currency} />}
+              </ShowMore>
             )}
-          </Panel>
+            {current === "activity" && (
+              <ShowMore key={resetKey} rows={data.by_kind} noun="activities">
+                {(rows) => <KindsTable rows={rows} currency={currency} />}
+              </ShowMore>
+            )}
+            {current === "projects" && (
+              <ShowMore key={resetKey} rows={data.by_project} noun="projects">
+                {(rows) => (
+                  <ProjectsTable
+                    rows={rows}
+                    currency={currency}
+                    linkProjects={linkProjects}
+                  />
+                )}
+              </ShowMore>
+            )}
+            {current === "runs" &&
+              (data.recent_runs.length === 0 ? (
+                <div className="panel__body">
+                  <Empty>No runs in this period.</Empty>
+                </div>
+              ) : (
+                <>
+                  <p className="muted usage__hint">
+                    Open a run to see each agent&apos;s model and tokens.
+                  </p>
+                  <ShowMore key={resetKey} rows={data.recent_runs} noun="runs">
+                    {(rows) => (
+                      <ul className="urun-list">
+                        {rows.map((run) => (
+                          <RunRow
+                            key={run.run_id}
+                            run={run}
+                            currency={currency}
+                          />
+                        ))}
+                      </ul>
+                    )}
+                  </ShowMore>
+                </>
+              ))}
+          </div>
         </div>
       )}
     </>
@@ -431,8 +537,15 @@ export function UsageDashboard({
 }
 
 /** Models, tokens and estimated cost of everything the user ran. */
-export function UsagePage({ projects }) {
+export function UsagePage({ projects, tab: initialTab }) {
   const [days, setDays] = useState(30);
+  // The tab is kept in the URL for reloads, but replaced in place: a hash change would
+  // remount the page (and refetch) on every switch.
+  const [tab, setTab] = useState(initialTab);
+  function changeTab(next) {
+    setTab(next);
+    window.history.replaceState(null, "", paths.usageTab(next));
+  }
   const [projectId, setProjectId] = useState("");
   const [data, setData] = useState(null);
   const [pricing, setPricing] = useState(null);
@@ -511,18 +624,16 @@ export function UsagePage({ projects }) {
             pricing={pricing}
             showProjects={!projectId}
             emptyHint="Plan a project, run it, or add knowledge files — every model call is counted here."
+            tab={tab}
+            onTabChange={changeTab}
+            resetKey={`${days}-${projectId}`}
           />
 
-          <p className="unotes muted">
-            Costs are estimates from list prices in{" "}
-            <code>backend/pricing.json</code> (with each price&apos;s source and
-            date), recorded at the time of use. Token counts are what the
-            provider reported; embedding tokens are estimated (~4 characters per
-            token). Gemini&apos;s thinking tokens count as output. Deployed runs
-            called straight through AWS are counted from the runtime&apos;s logs
-            after a sync (runtimes deployed before this was added need a
-            redeploy).
-          </p>
+          <CostNotes>
+            Deployed runs called straight through AWS are counted from the
+            runtime&apos;s logs after a sync (runtimes deployed before this was
+            added need a redeploy).
+          </CostNotes>
         </>
       )}
     </div>

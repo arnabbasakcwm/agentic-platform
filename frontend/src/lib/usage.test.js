@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { formatCost, formatTokens, kindLabel, niceScale, shortDate, usageLine } from "./usage.js";
+import {
+  formatCost,
+  formatTokens,
+  kindLabel,
+  niceScale,
+  shortDate,
+  usageLine,
+  visibleRows,
+} from "./usage.js";
 
 describe("usage formatting", () => {
   it("formats estimated costs with sensible precision", () => {
@@ -43,5 +51,20 @@ describe("chart helpers", () => {
 
   it("labels days without shifting time zones", () => {
     expect(shortDate("2026-10-05")).toBe("Oct 5");
+  });
+});
+
+describe("visibleRows", () => {
+  const rows = [1, 2, 3, 4, 5, 6, 7];
+
+  it("shows the first few until opened, then all", () => {
+    expect(visibleRows(rows, false)).toEqual([1, 2, 3, 4, 5]);
+    expect(visibleRows(rows, true)).toEqual(rows);
+    expect(visibleRows(rows, false, 2)).toEqual([1, 2]);
+  });
+
+  it("leaves short lists alone", () => {
+    expect(visibleRows([1, 2], false)).toEqual([1, 2]);
+    expect(visibleRows([], false)).toEqual([]);
   });
 });

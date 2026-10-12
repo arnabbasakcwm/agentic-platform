@@ -68,21 +68,23 @@ for (const scheme of ["light", "dark"]) {
     await expect(page).toHaveURL(/#\/admin\/users\/u2$/);
     await expect(page.getByRole("heading", { level: 1 })).toHaveText("ada@example.com");
     await expect(page.getByText("2 projects")).toBeVisible();
-    for (const title of ["Estimated cost per day", "By model", "By activity", "By project", "Recent runs"]) {
-      await expect(page.locator(".panel__title", { hasText: title })).toBeVisible();
-    }
+    await expect(page.locator(".panel__title", { hasText: "Estimated cost per day" })).toBeVisible();
+    const tabs = page.getByRole("tablist", { name: "Usage breakdown" });
+    await expect(tabs.getByRole("tab")).toHaveText(["Models1", "Activity1", "Projects2", "Runs1"]);
     // Project names are labels, never links into someone else's project.
-    const byProject = page.locator(".panel", { hasText: "By project" });
+    await tabs.getByRole("tab", { name: /Projects/ }).click();
+    const byProject = page.getByRole("tabpanel");
     await expect(byProject).toContainText("Untitled project · p1p1p1");
     await expect(byProject.getByRole("link")).toHaveCount(0);
     // A run opens to its agents.
+    await tabs.getByRole("tab", { name: /Runs/ }).click();
     await page.locator(".urun__head").first().click();
     await expect(page.locator(".urun__detail")).toContainText("researcher");
     await page.screenshot({ path: `e2e/screenshots/admin-user-${scheme}.png`, fullPage: true });
     expect(await axeProblems(page, "admin user")).toEqual([]);
     // One project narrows everything and hides the per-project table.
     await page.getByLabel("Filter by project").selectOption("p2p2p2p2");
-    await expect(page.locator(".panel__title", { hasText: "By project" })).toHaveCount(0);
+    await expect(tabs.getByRole("tab", { name: /Projects/ })).toHaveCount(0);
     await expect(page.getByLabel("Totals for the period")).toContainText("~$0.688");
     await page.getByRole("link", { name: "Back to all users" }).click();
     await expect(page).toHaveURL(/#\/admin$/);

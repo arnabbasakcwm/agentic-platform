@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { parseRoute, paths } from "./router.js";
 
+describe("usage routes", () => {
+  it("opens a breakdown tab, defaulting to models", () => {
+    expect(parseRoute("#/usage")).toEqual({ page: "usage", tab: "models" });
+    expect(parseRoute("#/usage/runs")).toEqual({ page: "usage", tab: "runs" });
+    expect(parseRoute("#/usage/nope").tab).toBe("models");
+    expect(paths.usageTab("activity")).toBe("#/usage/activity");
+  });
+});
+
 describe("admin routes", () => {
   it("opens the user list or one user's usage", () => {
     expect(parseRoute("#/admin")).toEqual({ page: "admin" });

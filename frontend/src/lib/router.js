@@ -6,7 +6,7 @@
 //   #/knowledge                every knowledge-base file across projects
 //   #/data                     data sources (BigQuery) agents may query
 //   #/mcp                      MCP servers whose tools agents may call
-//   #/usage                    models, tokens and cost
+//   #/usage/<tab>              models, tokens and cost: models | activity | projects | runs
 //   #/admin                    every user's usage and cost (admins only)
 //   #/admin/users/<id>         one user's full usage dashboard (admins only)
 //   #/projects/<id>/<step>     one project, at a step of its workflow
@@ -23,6 +23,9 @@ export const PROJECT_STEPS = [
   "deploy",
 ];
 
+// The Usage page's breakdown tabs; the first is the default.
+export const USAGE_TABS = ["models", "activity", "projects", "runs"];
+
 // The Resources step's tabs: what a project's agents can use.
 export const RESOURCE_TABS = ["documents", "databases", "tools"];
 
@@ -38,7 +41,9 @@ export function parseRoute(hash) {
   if (first === "knowledge") return { page: "knowledge" };
   if (first === "data") return { page: "data" };
   if (first === "mcp") return { page: "mcp" };
-  if (first === "usage") return { page: "usage" };
+  if (first === "usage") {
+    return { page: "usage", tab: USAGE_TABS.includes(id) ? id : USAGE_TABS[0] };
+  }
   if (first === "admin") {
     return id === "users" && step
       ? { page: "adminUser", id: step }
@@ -88,6 +93,7 @@ export const paths = {
   data: "#/data",
   mcp: "#/mcp",
   usage: "#/usage",
+  usageTab: (tab) => `#/usage/${tab}`,
   admin: "#/admin",
   adminUser: (id) => `#/admin/users/${encodeURIComponent(id)}`,
   project: (id, step = "plan", tab = null) =>

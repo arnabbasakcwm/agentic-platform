@@ -245,7 +245,9 @@ function Console() {
             )}
             {route.page === "data" && <DataSourcesPage />}
             {route.page === "mcp" && <McpServersPage />}
-            {route.page === "usage" && <UsagePage projects={projects} />}
+            {route.page === "usage" && (
+              <UsagePage projects={projects} tab={route.tab} />
+            )}
             {(route.page === "admin" || route.page === "adminUser") &&
               (isAdminRole(user?.role) ? (
                 route.page === "admin" ? (

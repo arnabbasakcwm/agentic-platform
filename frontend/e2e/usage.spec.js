@@ -31,8 +31,6 @@ for (const scheme of ["light", "dark"]) {
     // BigQuery is measured in bytes billed, not tokens.
     await expect(stats.locator(".kstat", { hasText: "BigQuery billed" })).toContainText("23.1 MB");
     await expect(page.locator("tr", { hasText: "Google BigQuery" }).first()).toContainText("23.1 MB billed");
-    await expect(page.locator("tr", { hasText: "Data queries (BigQuery)" })).toContainText("23.1 MB billed");
-    await expect(page.locator("tr", { hasText: "Data queries (BigQuery)" })).toContainText("Price not set");
     await expect(stats.locator(".kstat", { hasText: "Runs" })).toContainText("2");
     await expect(page.getByText("Some models have no price yet")).toBeVisible();
     await expect(page.getByText("google_genai/gemini-embedding-001").first()).toBeVisible();
@@ -46,12 +44,35 @@ for (const scheme of ["light", "dark"]) {
     await page.getByRole("button", { name: "Show as table" }).click();
     await expect(page.getByRole("region", { name: "Cost per day table" }).locator("tbody tr")).toHaveCount(30);
 
-    // Breakdowns.
-    const models = page.locator(".panel", { hasText: "By model" });
-    await expect(models).toContainText("gemini-3.1-pro-preview");
-    await expect(models).toContainText("Price not set");
-    await expect(page.locator(".panel", { hasText: "By activity" })).toContainText("Planning");
-    await expect(page.locator(".panel", { hasText: "By project" })).toContainText("Deleted project");
+    // Breakdowns are tabs, with a count on each; Models is first.
+    const tabs = page.getByRole("tablist", { name: "Usage breakdown" });
+    const panel = page.getByRole("tabpanel");
+    await expect(tabs.getByRole("tab")).toHaveText(["Models3", "Activity8", "Projects2", "Runs3"]);
+    await expect(tabs.getByRole("tab", { name: /Models/ })).toHaveAttribute("aria-selected", "true");
+    await expect(panel).toContainText("gemini-3.1-pro-preview");
+    await expect(panel).toContainText("Price not set");
+    // Three models: no arrow.
+    await expect(panel.locator(".showmore")).toHaveCount(0);
+
+    // Activity: 8 rows, 5 shown until the arrow opens the rest.
+    await tabs.getByRole("tab", { name: /Activity/ }).click();
+    await expect(page).toHaveURL(/#\/usage\/activity$/);
+    await expect(panel.locator("tbody tr")).toHaveCount(5);
+    await expect(panel).toContainText("Planning");
+    const more = panel.getByRole("button", { name: "Show all 8 activities" });
+    await expect(more).toHaveAttribute("aria-expanded", "false");
+    await more.click();
+    await expect(panel.locator("tbody tr")).toHaveCount(8);
+    await expect(panel.locator("tr", { hasText: "Data queries (BigQuery)" })).toContainText("23.1 MB billed");
+    await expect(panel.locator("tr", { hasText: "Data queries (BigQuery)" })).toContainText("Price not set");
+    await panel.getByRole("button", { name: "Show fewer" }).click();
+    await expect(panel.locator("tbody tr")).toHaveCount(5);
+
+    // Arrow keys move between tabs.
+    await tabs.getByRole("tab", { name: /Activity/ }).focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(tabs.getByRole("tab", { name: /Projects/ })).toBeFocused();
+    await expect(panel).toContainText("Deleted project");
 
     // Direct AWS calls: sync status, Sync now, and the warning for an old runtime.
     const sync = page.locator(".usync");
@@ -61,7 +82,12 @@ for (const scheme of ["light", "dark"]) {
     await sync.getByRole("button", { name: "Sync now" }).click();
     await expect(sync).toContainText(/synced (just now|\d+ (second|seconds|minute|minutes) ago)/);
 
-    // Recent runs expand to per-agent rows; direct AWS calls are tagged as such.
+    // Recent runs expand to per-agent rows; direct AWS calls are tagged as such. The
+    // tab survives a reload.
+    await tabs.getByRole("tab", { name: /Runs/ }).click();
+    await page.reload();
+    await expect(page).toHaveURL(/#\/usage\/runs$/);
+    await expect(tabs.getByRole("tab", { name: /Runs/ })).toHaveAttribute("aria-selected", "true");
     const runs = page.locator(".urun");
     await expect(runs).toHaveCount(3);
     await expect(runs.nth(1)).toContainText("AgentCore");
@@ -79,7 +105,12 @@ for (const scheme of ["light", "dark"]) {
     await expect(page.getByRole("button", { name: "7 days" })).toHaveAttribute("aria-pressed", "true");
     await expect(page.locator(".panel", { hasText: "Estimated cost per day" })).toContainText("Last 7 days");
     await page.getByLabel("Filter by project").selectOption({ index: 1 });
-    await expect(page.locator(".panel", { hasText: "By project" })).toHaveCount(0);
+    await expect(tabs.getByRole("tab", { name: /Projects/ })).toHaveCount(0);
+
+    // The notes are tucked away until asked for.
+    await expect(page.getByText(/Costs are estimates from list prices/)).toBeHidden();
+    await page.getByText("How costs are counted").click();
+    await expect(page.getByText(/Costs are estimates from list prices/)).toBeVisible();
 
     expect(errors).toEqual([]);
   });

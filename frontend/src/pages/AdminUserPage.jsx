@@ -13,7 +13,7 @@ import { formatCount } from "../lib/usage.js";
 import { roleBadge } from "../lib/admin.js";
 import { useAction } from "../lib/useAction.js";
 import { RoleControl } from "./AdminPage.jsx";
-import { RANGES, UsageDashboard } from "./UsagePage.jsx";
+import { CostNotes, RANGES, UsageDashboard } from "./UsagePage.jsx";
 
 /**
  * One user's full usage, as their own Usage page shows it (admins only): totals, cost
@@ -23,6 +23,7 @@ import { RANGES, UsageDashboard } from "./UsagePage.jsx";
 export function AdminUserPage({ userId, me }) {
   const [days, setDays] = useState(30);
   const [projectId, setProjectId] = useState("");
+  const [tab, setTab] = useState("models");
   const [data, setData] = useState(null);
   const [pricing, setPricing] = useState(null);
   const load = useAction();
@@ -133,14 +134,16 @@ export function AdminUserPage({ userId, me }) {
         pricing={pricing}
         showProjects={!projectId}
         linkProjects={false}
+        tab={tab}
+        onTabChange={setTab}
+        resetKey={`${days}-${projectId}`}
       />
 
-      <p className="unotes muted">
-        Costs are estimates from list prices, recorded at the time of use.
+      <CostNotes>
         Deployed runs called straight through AWS appear here once they&apos;ve
         been read from the runtime&apos;s logs (a sync starts when this user
         opens their own Usage page).
-      </p>
+      </CostNotes>
     </div>
   );
 }

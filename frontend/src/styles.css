@@ -4404,6 +4404,71 @@ code {
   max-width: 900px;
 }
 
+.unotes summary {
+  width: fit-content;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.unotes p {
+  margin-top: var(--space-xs);
+}
+
+/* Usage breakdowns: a tab strip sitting on top of one panel. */
+.usage__tabs {
+  margin-bottom: 0;
+}
+
+.usage__tabs .count-chip {
+  margin-left: var(--space-field);
+}
+
+.usage__tabs .segmented__item--on .count-chip {
+  background: var(--surface);
+}
+
+.usage__panel {
+  overflow: hidden;
+}
+
+.usage__hint {
+  padding: var(--space-sm) var(--space-lg);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--text-caption);
+}
+
+/* The arrow that opens the rest of a list (and closes it again). */
+.showmore {
+  display: flex;
+  justify-content: center;
+  border-top: 1px solid var(--border);
+}
+
+.showmore__button {
+  display: inline-grid;
+  place-items: center;
+  width: 100%;
+  min-height: 36px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.showmore__button:hover {
+  background: var(--surface-sunken);
+  color: var(--text);
+}
+
+.showmore__icon {
+  display: inline-grid;
+  transition: transform 0.15s;
+}
+
+.showmore__icon--open {
+  transform: rotate(180deg);
+}
+
 .usageline {
   display: flex;
   align-items: center;

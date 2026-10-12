@@ -315,6 +315,9 @@ function usageBody(days, projectId) {
       { kind: "assistant", calls: 2, input_tokens: 3000, output_tokens: 500, cost: 0.02, unpriced_tokens: 0 },
       { kind: "embedding_query", calls: 2, input_tokens: 14, output_tokens: 0, cost: 0, unpriced_tokens: 14 },
       { kind: "bigquery_query", calls: 1, input_tokens: 0, output_tokens: 0, bytes_billed: 23068672, cost: 0, unpriced_tokens: 0, unpriced_bytes: 23068672 },
+      { kind: "embedding_index", calls: 1, input_tokens: 4000, output_tokens: 0, cost: 0, unpriced_tokens: 4000 },
+      { kind: "model_check", calls: 1, input_tokens: 300, output_tokens: 40, cost: 0.001, unpriced_tokens: 0 },
+      { kind: "mcp_call", calls: 3, input_tokens: 0, output_tokens: 0, cost: 0, unpriced_tokens: 0 },
     ],
     recent_runs: [run("run-local", 2, false), run("run-deployed", 26, true), { ...run("run-direct", 30, true), via: "direct" }],
     deployments: [

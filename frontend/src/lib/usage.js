@@ -107,3 +107,12 @@ export function shortDate(isoDate) {
     timeZone: "UTC",
   });
 }
+
+// Breakdown lists show this many rows until the user opens them.
+export const ROWS_SHOWN = 5;
+
+/** The rows to render: all when open, else the first `limit` (the API sorts them
+ * most expensive first, so these are the ones that matter). */
+export function visibleRows(rows, open, limit = ROWS_SHOWN) {
+  return open || rows.length <= limit ? rows : rows.slice(0, limit);
+}
