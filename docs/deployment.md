@@ -98,7 +98,8 @@ in again.
 - **Behind a load balancer:** to use an ALB that terminates TLS, set `DOMAIN=:80` and
   point the load balancer at port 80.
 - **Admins:** make the master admin on the server once their account is registered:
-  `docker compose -f docker-compose.prod.yml exec api uv run python scripts/set_role.py you@example.com master`.
+  `docker compose --env-file .env.production -f docker-compose.prod.yml exec -T api uv run --no-sync python - you@example.com master < backend/scripts/set_role.py`
+  (run from the checkout; the image doesn't contain `scripts/`, so the script is piped in).
   After that, the master adds and removes admins from the console's Admin page; other
   admins only see usage. Running the same command with another email moves the master
   role (the previous master becomes an admin).

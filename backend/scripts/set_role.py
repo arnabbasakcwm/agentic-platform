@@ -9,9 +9,13 @@ can't be made `admin` or `user` directly, so the platform always has one; move t
 to someone else first.
 
 It uses the configured store (MONGODB_URI / MONGODB_DB in backend/.env, else in-memory,
-which is useless here). On the production stack:
+which is useless here). On the production stack, from the checkout (the image has no
+scripts/ folder, so the script is piped in):
 
-    docker compose -f docker-compose.prod.yml exec api uv run python scripts/set_role.py <email> master
+    docker compose --env-file .env.production -f docker-compose.prod.yml exec -T api
+        uv run --no-sync python - <email> master < backend/scripts/set_role.py
+
+(one command, split here to fit).
 """
 
 import sys
