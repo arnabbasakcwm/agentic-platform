@@ -2593,7 +2593,11 @@ def usage_pricing(user: UserRecord = Depends(current_user)) -> dict[str, Any]:
     days) that have no price yet."""
     table = usage_mod.prices()
     since = datetime.now(timezone.utc) - timedelta(days=90)
-    seen = {(r.provider, r.model) for r in _usage.list(user.id, since)}
+    # MCP calls are counted but never priced, so they're never "missing" a price.
+    seen = {
+        (r.provider, r.model) for r in _usage.list(user.id, since)
+        if r.kind not in usage_mod.UNCOSTED_KINDS
+    }
     return {
         "currency": table.get("currency", "USD"),
         "file": "backend/pricing.json",

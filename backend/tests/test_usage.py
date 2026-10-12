@@ -345,6 +345,12 @@ def test_pricing_endpoint_lists_unpriced_models_seen(api, monkeypatch):
     monkeypatch.setenv("GROQ_API_KEY", "test")
     api.post(f"/projects/{pid}/compile", headers=h)
     api.post(f"/projects/{pid}/run", json={"input": {"q": "x"}}, headers=h)
+    # An MCP call is never priced by design, so it's never reported as missing a price.
+    tenant = app_module._users.get_by_email("ada@example.com").id
+    app_module._usage.add_many([UsageRecord(
+        id="mcp-1", tenant_id=tenant, project_id=pid, at=datetime.now(timezone.utc),
+        kind="mcp_call", provider="mcp", model="zohomcp", calls=1,
+    )])
     body = api.get("/usage/pricing", headers=h).json()
     assert body["unpriced"] == ["groq/some-unpriced-model"]
     assert "google_genai/gemini-pro" in body["models"]
