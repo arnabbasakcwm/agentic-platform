@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
+import { settled } from "./settled.js";
 
 // Data sources in the project flow: the project's Data step (attach, give agents access,
 // test a query, detach) and picking a data source in the new-project chat.
@@ -7,7 +8,7 @@ const API = "http://127.0.0.1:8765";
 const PROJECT = "e2e0travel0project";
 
 async function axeProblems(page, label) {
-  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
+  const results = await new AxeBuilder({ page: await settled(page) }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
   return results.violations
     .filter((v) => ["serious", "critical"].includes(v.impact))
     .map((v) => `${label}: ${v.id}: ${v.nodes.slice(0, 3).map((n) => n.target.join(" ")).join(" | ")}`);
@@ -81,10 +82,10 @@ for (const scheme of ["light", "dark"]) {
     const sourceId = await connectSource(request);
 
     await page.goto("/#/new");
-    await page.getByRole("button", { name: "Add data" }).click();
-    const tray = page.locator("#composer-data");
-    await tray.getByLabel("Bikeshare").check();
-    await expect(page.getByRole("button", { name: "1 data source" })).toBeVisible();
+    await page.getByRole("button", { name: "Add context" }).click();
+    await page.getByRole("menuitem", { name: /Add data source/ }).click();
+    await page.getByRole("checkbox", { name: /Bikeshare/ }).check();
+    await expect(page.getByRole("list", { name: "Attachments for this project" })).toContainText("Bikeshare");
     await page.screenshot({ path: `e2e/screenshots/new-project-data-${scheme}.png` });
     expect(await axeProblems(page, "new project data")).toEqual([]);
 

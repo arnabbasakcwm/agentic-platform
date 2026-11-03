@@ -1,5 +1,14 @@
 import { useEffect, useState } from "react";
+import {
+  Activity,
+  ArrowDownToLine,
+  ArrowUpFromLine,
+  Coins,
+  Database,
+  Play,
+} from "lucide-react";
 import { CostChart } from "../components/CostChart.jsx";
+import { Sparkline } from "../components/Sparkline.jsx";
 import { Icon } from "../components/icons.jsx";
 import { ShowMore } from "../components/ShowMore.jsx";
 import {
@@ -11,6 +20,7 @@ import {
   Panel,
   Pill,
   Skeleton,
+  SlidingThumb,
 } from "../components/ui.jsx";
 import { api } from "../lib/api.js";
 import { fullDate, projectName, projectTitle, timeAgo } from "../lib/format.js";
@@ -33,15 +43,36 @@ const inputCell = (row) =>
 const outputCell = (row) =>
   isData(row) ? "—" : formatCount(row.output_tokens);
 import { useAction } from "../lib/useAction.js";
+import { useCountUp } from "../lib/useCountUp.js";
 
 export const RANGES = [7, 30, 90];
 
-export function Stat({ label, value, hint }) {
+/**
+ * KpiTile (DESIGN.md §5.12): an icon in a tinted square, the label, a big value, a helper
+ * line and a sparkline, all in the tile's colour (`tone`). Given `amount` and `format`,
+ * the value counts up from 0 on first show (useCountUp); `series` (one number per day,
+ * from the API's by_day) draws the sparkline — a metric without a daily series has none.
+ */
+export function Stat({ label, value, hint, tone = "violet", icon: TileIcon, amount, format, series }) {
+  const counted = useCountUp(amount ?? 0);
+  const shown = amount != null && format ? format(counted) : value;
   return (
-    <div className="kstat">
-      <span className="kstat__value">{value}</span>
-      <span className="kstat__label">{label}</span>
+    <div className="kstat" data-tone={tone}>
+      <span className="kstat__top">
+        <span className="kstat__label">{label}</span>
+        {TileIcon && (
+          <span className="kstat__icon" aria-hidden="true">
+            <TileIcon size={16} />
+          </span>
+        )}
+      </span>
+      {/* The final value for assistive tech; the counting one is visual. */}
+      <span className="kstat__value">
+        <span aria-hidden="true">{shown}</span>
+        <span className="sr-only">{value}</span>
+      </span>
       {hint && <span className="kstat__hint">{hint}</span>}
+      <Sparkline values={series} />
     </div>
   );
 }
@@ -359,6 +390,7 @@ function UsageTabs({ tabs, current, onChange, idPrefix }) {
       aria-label="Usage breakdown"
       onKeyDown={onKeyDown}
     >
+      <SlidingThumb on={current} />
       {tabs.map(({ key, label, count }) => (
         <button
           key={key}
@@ -427,20 +459,61 @@ export function UsageDashboard({
   return (
     <>
       <div className="kstats" aria-label="Totals for the period">
+        {/* Tile colours (DESIGN.md §2): cost violet, input sky, output teal, runs amber,
+            model calls pink, BigQuery emerald. */}
         <Stat
           label="Estimated cost"
+          tone="violet"
+          icon={Coins}
           value={`~${formatCost(totals.cost, currency)}`}
+          amount={totals.cost}
+          format={(v) => `~${formatCost(v, currency)}`}
           hint={currency}
+          series={data.by_day.map((d) => d.cost)}
         />
-        <Stat label="Input tokens" value={formatTokens(totals.input_tokens)} />
-        <Stat label="Output tokens" value={formatTokens(totals.output_tokens)} />
-        <Stat label="Runs" value={formatCount(totals.runs)} />
-        <Stat label="Model calls" value={formatCount(totals.calls)} />
+        <Stat
+          label="Input tokens"
+          tone="sky"
+          icon={ArrowDownToLine}
+          value={formatTokens(totals.input_tokens)}
+          amount={totals.input_tokens}
+          format={(v) => formatTokens(Math.round(v))}
+          series={data.by_day.map((d) => d.input_tokens)}
+        />
+        <Stat
+          label="Output tokens"
+          tone="teal"
+          icon={ArrowUpFromLine}
+          value={formatTokens(totals.output_tokens)}
+          amount={totals.output_tokens}
+          format={(v) => formatTokens(Math.round(v))}
+          series={data.by_day.map((d) => d.output_tokens)}
+        />
+        <Stat
+          label="Runs"
+          tone="amber"
+          icon={Play}
+          value={formatCount(totals.runs)}
+          amount={totals.runs}
+          format={(v) => formatCount(Math.round(v))}
+        />
+        <Stat
+          label="Model calls"
+          tone="pink"
+          icon={Activity}
+          value={formatCount(totals.calls)}
+          amount={totals.calls}
+          format={(v) => formatCount(Math.round(v))}
+          series={data.by_day.map((d) => d.calls)}
+        />
         {isData(totals) && (
           <Stat
             label="BigQuery billed"
+            tone="emerald"
+            icon={Database}
             value={formatBytes(totals.bytes_billed)}
             hint="price not set"
+            series={data.by_day.map((d) => d.bytes_billed ?? 0)}
           />
         )}
       </div>
@@ -575,6 +648,7 @@ export function UsagePage({ projects, tab: initialTab }) {
 
       <div className="ufilters" role="group" aria-label="Usage filters">
         <div className="segmented" role="group" aria-label="Period">
+          <SlidingThumb on={days} />
           {RANGES.map((r) => (
             <button
               key={r}

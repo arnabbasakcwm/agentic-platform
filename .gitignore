@@ -42,6 +42,7 @@ yarn-error.log*
 pnpm-debug.log*
 # Playwright output
 frontend/e2e/screenshots/
+frontend/e2e/__screens__/
 frontend/test-results/
 frontend/playwright-report/
 frontend/blob-report/
@@ -66,3 +67,6 @@ desktop.ini
 # ----------------------------------------------------------------- logs
 *.log
 logs/
+
+# Run-graph baseline: Chrome traces are tens of MB
+design/baseline/*/run-trace.json

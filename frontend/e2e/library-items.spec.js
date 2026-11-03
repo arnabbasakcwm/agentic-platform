@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
+import { settled } from "./settled.js";
 
 // Library pages with several items: each data source / MCP server is a one-line card that
 // expands to tabs. Cards needing attention open on their own, the expanded state is
@@ -8,7 +9,7 @@ import { expect, test } from "@playwright/test";
 const API = "http://127.0.0.1:8765";
 
 async function axeProblems(page, label) {
-  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
+  const results = await new AxeBuilder({ page: await settled(page) }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
   return results.violations
     .filter((v) => ["serious", "critical"].includes(v.impact))
     .map((v) => `${label}: ${v.id}: ${v.nodes.slice(0, 3).map((n) => n.target.join(" ")).join(" | ")}`);

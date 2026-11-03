@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
+import { settled } from "./settled.js";
 
 // Checks for the Run page against e2e/mock-api.js. Screenshots go to e2e/screenshots/.
 const PROJECT = "e2e0travel0project";
@@ -81,7 +82,7 @@ async function noHorizontalScroll(page) {
 }
 
 async function axe(page) {
-  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
+  const results = await new AxeBuilder({ page: await settled(page) }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
   const bad = results.violations.filter((v) => ["serious", "critical"].includes(v.impact));
   expect(
     bad.map((v) => `${v.id} (${v.impact}): ${v.nodes.slice(0, 3).map((n) => n.target.join(" ")).join(" | ")}`),
@@ -166,10 +167,10 @@ test("the diagram is the real graph, animates during a run, and ends in the true
   await expect(page.locator(".flow-node--idle")).toHaveCount(3);
 
   await startRun(page, { ...KOLKATA, scenario: "slow" });
-  const analyzer = page.locator(".flow-node", { hasText: "Price Analyzer" });
+  const analyzer = page.locator(".flow-node", { hasText: "price_analyzer" });
   await expect(analyzer).toHaveClass(/flow-node--running/);
-  await expect(page.locator(".flow-node", { hasText: "Flight Searcher" })).toHaveClass(/flow-node--completed/);
-  await expect(page.locator(".flow-node", { hasText: "Travel Advisor" })).toHaveClass(/flow-node--queued/);
+  await expect(page.locator(".flow-node", { hasText: "flight_searcher" })).toHaveClass(/flow-node--completed/);
+  await expect(page.locator(".flow-node", { hasText: "travel_advisor" })).toHaveClass(/flow-node--queued/);
   await expect(page.locator(".flow-edge__dash")).toHaveCount(1);
   await expect(page.locator(".timeline__bar")).toHaveCount(2);
 
@@ -193,9 +194,9 @@ test("a failed run shows the true final state of every node", async ({ page }) =
   await openRunPage(page);
   await startRun(page, { ...KOLKATA, scenario: "fail" });
   await expect(page.getByText("RunTimeout")).toBeVisible();
-  await expect(page.locator(".flow-node", { hasText: "Flight Searcher" })).toHaveClass(/flow-node--completed/);
-  await expect(page.locator(".flow-node", { hasText: "Price Analyzer" })).toHaveClass(/flow-node--failed/);
-  await expect(page.locator(".flow-node", { hasText: "Travel Advisor" })).toHaveClass(/flow-node--skipped/);
+  await expect(page.locator(".flow-node", { hasText: "flight_searcher" })).toHaveClass(/flow-node--completed/);
+  await expect(page.locator(".flow-node", { hasText: "price_analyzer" })).toHaveClass(/flow-node--failed/);
+  await expect(page.locator(".flow-node", { hasText: "travel_advisor" })).toHaveClass(/flow-node--skipped/);
   await expect(page.getByRole("button", { name: "Run again" })).toBeVisible();
 });
 
@@ -203,7 +204,7 @@ test("clicking a node scrolls to its output card", async ({ page }) => {
   await openRunPage(page, { height: 760 });
   await startRun(page, KOLKATA);
   await waitCompleted(page);
-  await page.locator(".flow-node", { hasText: "Travel Advisor" }).click();
+  await page.locator(".flow-node", { hasText: "travel_advisor" }).click();
   const target = card(page, "travel_advisor");
   await expect(target).toBeFocused();
   await expect(target).toBeInViewport();
@@ -214,7 +215,7 @@ test("reduced motion turns the animations off", async ({ page }) => {
   await startRun(page, { ...KOLKATA, scenario: "slow" });
   // Price Analyzer stays running in the slow scenario; the first agent is running only
   // for a moment, and reading its glow just as it finishes was a race.
-  const running = page.locator(".flow-node--running", { hasText: "Price Analyzer" });
+  const running = page.locator(".flow-node--running", { hasText: "price_analyzer" });
   await expect(running).toHaveCount(1);
   await expect(page.locator(".flow-edge__dash")).toHaveCount(1);
   const glow = await running.evaluate((el) => getComputedStyle(el, "::after").animationName);
@@ -258,8 +259,8 @@ test("single agent, compile, deploy and API status still work", async ({ page })
   await page.locator(".run-col select").selectOption("price_analyzer");
   await page.getByRole("button", { name: "Run agent" }).click();
   await expect(card(page, "price_analyzer").locator(".md table")).toBeVisible();
-  await expect(page.locator(".flow-node", { hasText: "Price Analyzer" })).toHaveClass(/flow-node--completed/);
-  await expect(page.locator(".flow-node", { hasText: "Flight Searcher" })).toHaveClass(/flow-node--idle/);
+  await expect(page.locator(".flow-node", { hasText: "price_analyzer" })).toHaveClass(/flow-node--completed/);
+  await expect(page.locator(".flow-node", { hasText: "flight_searcher" })).toHaveClass(/flow-node--idle/);
 
   await page.locator(".actionbar").getByRole("link", { name: "Compile" }).click();
   await expect(page.getByText("Execution flow")).toBeVisible();
@@ -281,7 +282,7 @@ for (const scheme of ["light", "dark"]) {
 
       await startRun(page, { ...KOLKATA, scenario: "slow" });
       // Mid-run: the first agent done, the second working, the third queued.
-      await expect(page.locator(".flow-node", { hasText: "Price Analyzer" })).toHaveClass(/flow-node--running/);
+      await expect(page.locator(".flow-node", { hasText: "price_analyzer" })).toHaveClass(/flow-node--running/);
       await settle(page);
       await shot("running");
       await axe(page);
@@ -311,8 +312,8 @@ for (const scheme of ["light", "dark"]) {
 // ---------------------------------------------------------------- theme toggle
 test("the theme toggle switches light and dark, overrides the system, and is remembered", async ({ page }) => {
   const background = () => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
-  const LIGHT = "rgb(245, 246, 248)";
-  const DARK = "rgb(24, 25, 27)";
+  const LIGHT = "rgb(247, 248, 252)"; // --bg-canvas #f7f8fc
+  const DARK = "rgb(11, 16, 32)"; // dark --bg-canvas #0b1020
 
   // System light: the console starts light and offers dark.
   await openRunPage(page, { scheme: "light" });

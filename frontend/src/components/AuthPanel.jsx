@@ -1,6 +1,6 @@
 import { useId, useState } from "react";
 import { Icon } from "./icons.jsx";
-import { Button, Callout, ErrorCallout } from "./ui.jsx";
+import { Button, Callout, ErrorCallout, SlidingThumb } from "./ui.jsx";
 
 const MIN_PASSWORD = 8; // mirrors the API's rule, so most mistakes never cost a request
 
@@ -101,6 +101,7 @@ export function AuthPanel({ onLogin, onRegister, busy, error, notice, disabled }
       <p className="auth__sub">{labels.sub}</p>
 
       <div className="auth__modes" role="tablist" aria-label="Sign in or create an account">
+        <SlidingThumb on={mode} active=".auth__mode--on" />
         {Object.entries(MODES).map(([key, m]) => (
           <button
             key={key}

@@ -1,0 +1,140 @@
+/* Agentic Platform — motion utilities (DESIGN.md §7), from design/tokens/motion.css with
+   its colours turned into tokens. Every decorative animation here stops under
+   prefers-reduced-motion (bottom of file); state changes still show, instantly. */
+
+/* ---------- Keyframes ---------- */
+@keyframes ap-rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes ap-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes ap-shimmer { 0% { transform: translateX(-120%) skewX(-20deg); } 60%, 100% { transform: translateX(260%) skewX(-20deg); } }
+/* The pulse ring is its own layer that scales and fades (transform + opacity only), so a
+   live dot left on screen never repaints the page every frame. The pack's version
+   animated box-shadow; measured against the Run-graph baseline it cost frames. */
+@keyframes ap-pulse-ring { 0% { transform: scale(1); opacity: .45; } 70%, 100% { transform: scale(2.5); opacity: 0; } }
+@keyframes ap-flow { to { stroke-dashoffset: -20; } }
+@keyframes ap-fill { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes ap-glow { 0%, 100% { box-shadow: 0 0 0 0 var(--glow-running-0); } 50% { box-shadow: 0 0 0 5px var(--glow-running); } }
+@keyframes ap-skeleton { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+@keyframes ap-pop { 0% { transform: scale(.96); } 60% { transform: scale(1.04); } 100% { transform: scale(1); } }
+@keyframes ap-shake { 0%, 100% { transform: translateX(0); } 20%, 60% { transform: translateX(-4px); } 40%, 80% { transform: translateX(4px); } }
+@keyframes ap-draw { from { stroke-dashoffset: var(--ap-len, 400); } to { stroke-dashoffset: 0; } }
+@keyframes ap-grow-y { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+@keyframes ap-breathe { 0%, 100% { opacity: .85; transform: scale(1); } 50% { opacity: 1; transform: scale(1.04); } }
+@keyframes ap-mesh { 0% { background-position: 0% 0%; } 50% { background-position: 100% 60%; } 100% { background-position: 0% 0%; } }
+@keyframes ap-slide-down { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
+@keyframes ap-slide-left { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes ap-scale-in { from { opacity: 0; transform: scale(.98); } to { opacity: 1; transform: none; } }
+
+/* ---------- Page & card entrance ---------- */
+.ap-page  { animation: ap-rise var(--dur) var(--ease-out) both; }
+.ap-enter { animation: ap-rise var(--dur) var(--ease-out) both; animation-delay: calc(var(--i, 0) * 40ms); }
+.ap-fade  { animation: ap-fade var(--dur) var(--ease-out) both; }
+
+/* ---------- Buttons & hover ---------- */
+.ap-btn-primary {
+  position: relative; overflow: hidden; isolation: isolate;
+  background: var(--gradient-primary); color: var(--on-primary); border: 0;
+  border-radius: var(--radius-control); font-weight: 600;
+  box-shadow: var(--shadow-primary);
+  transition: transform var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out), filter var(--dur-fast);
+}
+.ap-btn-primary::after {
+  content: ''; position: absolute; top: 0; bottom: 0; left: 0; width: 40%; z-index: -1; pointer-events: none;
+  background: var(--gradient-shimmer);
+  animation: ap-shimmer 3.2s ease-in-out infinite;
+}
+.ap-btn-primary:hover { transform: translateY(-1px); box-shadow: var(--shadow-primary-hover); }
+.ap-btn-primary:active { transform: none; filter: brightness(.96); }
+.ap-btn-primary:disabled, .ap-btn-primary[aria-busy='true'] { filter: grayscale(.35) opacity(.7); box-shadow: none; cursor: not-allowed; }
+.ap-btn-primary:disabled::after { animation-duration: 1.4s; } /* faster sweep = "working" */
+
+.ap-lift { transition: transform var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out); }
+.ap-lift:hover { transform: translateY(-2px); box-shadow: var(--shadow-raised); }
+
+/* Gradient focus ring for the composer / important inputs */
+.ap-focus-ring { border: 1px solid var(--border); transition: box-shadow var(--dur-fast), border-color var(--dur-fast); }
+.ap-focus-ring:focus-within {
+  border-color: transparent;
+  box-shadow: var(--focus-ring-gradient);
+}
+
+/* ---------- Indicators ---------- */
+/* Sliding pill/underline for sidebar active item, tabs and segmented controls.
+   Position it with transform / width from JS (or Framer Motion layoutId). */
+.ap-nav-indicator { transition: transform var(--dur) var(--ease-out), width var(--dur) var(--ease-out), height var(--dur) var(--ease-out); }
+
+.ap-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; display: inline-block; }
+.ap-dot--live { position: relative; }
+.ap-dot--live::after {
+  content: ''; position: absolute; inset: 0; border-radius: 50%; background: currentColor;
+  pointer-events: none; animation: ap-pulse-ring 1.6s ease-out infinite;
+}
+
+/* ---------- Loading ---------- */
+.ap-skeleton {
+  background: linear-gradient(90deg, var(--bg-subtle) 0%, var(--skeleton-highlight) 50%, var(--bg-subtle) 100%);
+  background-size: 200% 100%; border-radius: 6px;
+  animation: ap-skeleton 1.4s linear infinite;
+}
+
+/* ---------- Feedback ---------- */
+.ap-pop   { animation: ap-pop var(--dur-fast) var(--ease-out); }
+.ap-shake { animation: ap-shake 300ms ease-in-out; }
+.ap-toast { animation: ap-slide-down var(--dur) var(--ease-out) both; }
+.ap-modal { animation: ap-scale-in var(--dur) var(--ease-out) both; }
+.ap-popover { transform-origin: top left; animation: ap-scale-in var(--dur-fast) var(--ease-out) both; }
+.ap-drawer { animation: ap-slide-left var(--dur) var(--ease-out) both; }
+
+/* SVG check that draws itself (set stroke-dasharray to the path length via --ap-len) */
+.ap-check-draw path { stroke-dasharray: var(--ap-len, 24); stroke-dashoffset: var(--ap-len, 24); animation: ap-draw 400ms var(--ease-out) 120ms forwards; }
+
+/* Compile succeeded while the page was open: a brief emerald glow on the status card. */
+@keyframes ap-success-glow { 0% { box-shadow: 0 0 0 0 var(--glow-success); } 40% { box-shadow: 0 0 0 8px var(--glow-success); } 100% { box-shadow: 0 0 0 0 var(--glow-success-0); } }
+
+/* ---------- Phase stepper ---------- */
+.ap-connector-fill { transform-origin: left center; animation: ap-fill var(--dur-slow) var(--ease-out) both; }
+
+/* ---------- Run graph (React Flow) ---------- */
+.ap-node { transition: border-color var(--dur-slow) var(--ease-out), box-shadow var(--dur-slow) var(--ease-out); }
+.ap-node--running { animation: ap-glow 1.6s ease-in-out infinite; }
+/* Add className="ap-edge-flow" to edges that lead into running/queued nodes */
+.react-flow__edge.ap-edge-flow .react-flow__edge-path { stroke-dasharray: 6 4; animation: ap-flow .8s linear infinite; }
+
+/* ---------- Charts & metrics ---------- */
+.ap-draw-line { stroke-dasharray: var(--ap-len, 400); stroke-dashoffset: var(--ap-len, 400); animation: ap-draw 700ms var(--ease-out) forwards; }
+.ap-bar-grow { transform-origin: bottom; transform-box: fill-box; animation: ap-grow-y 500ms var(--ease-out) both; animation-delay: calc(var(--i, 0) * 15ms); }
+
+/* ---------- Hero / auth ---------- */
+.ap-glow-breathe { animation: ap-breathe 8s ease-in-out infinite; }
+.ap-mesh { background-size: 160% 160%; animation: ap-mesh 20s ease-in-out infinite; }
+/* Sign-in pipeline chips: each lights up in turn (6s loop, offsets set per chip). */
+@keyframes ap-chip-light {
+  0%, 34%, 100% { background-color: var(--glass); border-color: var(--glass-border); }
+  8%, 26% { background-color: var(--night-fill); border-color: var(--on-night-muted); }
+}
+
+/* ---------- Wiring into the app ---------- */
+/* Route change: the page's cards fade in and rise, staggered; the sidebar, top bar, a
+   project's header and stepper (.page--head, .stepper-bar) and its footer stay still.
+   Every route remounts its page, so this runs once per navigation. */
+.content .page:not(.page--head) > :not(.split),
+.content .page:not(.page--head) > .split > * > * {
+  animation: ap-rise var(--dur) var(--ease-out) both;
+  animation-delay: calc(var(--i, 0) * 40ms);
+}
+/* Table rows fade in when their table first shows (Usage, Admin and the libraries). */
+.content .table tbody tr { animation: ap-fade var(--dur) var(--ease-out) both; }
+/* Cards enter staggered, 40ms apart (DESIGN.md §7 .ap-enter), without per-card markup. */
+.content .page > :nth-child(2), .content .page .split > * > :nth-child(2) { --i: 1; }
+.content .page > :nth-child(3), .content .page .split > * > :nth-child(3) { --i: 2; }
+.content .page > :nth-child(4), .content .page .split > * > :nth-child(4) { --i: 3; }
+.content .page > :nth-child(5), .content .page .split > * > :nth-child(5) { --i: 4; }
+.content .page > :nth-child(n + 6), .content .page .split > * > :nth-child(n + 6) { --i: 5; }
+
+/* ---------- Reduced motion ---------- */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 1ms !important; animation-iteration-count: 1 !important; transition-duration: 1ms !important; }
+  .ap-btn-primary::after, .ap-dot--live::after, .ap-node--running, .ap-skeleton, .ap-glow-breathe, .ap-mesh,
+  .authintro__chip, .step--busy .step__dot::after,
+  .react-flow__edge.ap-edge-flow .react-flow__edge-path { animation: none !important; }
+  .ap-lift:hover, .ap-btn-primary:hover { transform: none; }
+}

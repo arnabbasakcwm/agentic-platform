@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
+import { settled } from "./settled.js";
 
 // Signing in lands on New project; the new-project chat can attach knowledge files; the
 // Brief page edits each agent's model and tools. Accessible in light and dark.
@@ -7,7 +8,7 @@ const API = "http://127.0.0.1:8765";
 const PROJECT = "e2e0travel0project";
 
 async function axeProblems(page, label) {
-  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
+  const results = await new AxeBuilder({ page: await settled(page) }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
   return results.violations
     .filter((v) => ["serious", "critical"].includes(v.impact))
     .map((v) => `${label}: ${v.id}: ${v.nodes.slice(0, 3).map((n) => n.target.join(" ")).join(" | ")}`);
@@ -46,21 +47,25 @@ for (const scheme of ["light", "dark"]) {
     });
 
     await page.goto("/#/new");
-    await page.getByRole("button", { name: "Add files" }).click();
-    const tray = page.locator("#composer-files");
-    await expect(tray).toBeVisible();
-    await tray.getByLabel("policy.pdf").check();
-    await tray.getByLabel("Upload knowledge files").setInputFiles([
+    await page.getByRole("button", { name: "Add context" }).click();
+    await page.getByRole("menuitem", { name: /Choose from library/ }).click();
+    await page.getByRole("checkbox", { name: /policy\.pdf/ }).check();
+    await page.keyboard.press("Escape");
+    await page.getByLabel("Upload knowledge files").setInputFiles([
       { name: "fares.csv", mimeType: "text/csv", buffer: Buffer.from("city,fare\nGoa,7004\n") },
       { name: "slides.pptx", mimeType: "application/octet-stream", buffer: Buffer.from("x") },
     ]);
-    await expect(tray).toContainText(/slides\.pptx: not a supported type/);
-    const chips = page.getByRole("list", { name: "Knowledge files for this project" });
+    const chips = page.getByRole("list", { name: "Attachments for this project" });
+    const refused = chips.getByRole("listitem").filter({ hasText: "slides.pptx" });
+    await expect(refused).toHaveAttribute("title", /slides\.pptx: not a supported type/);
     await expect(chips.getByText("policy.pdf")).toBeVisible();
-    await expect(chips.getByText("fares.csv")).toBeVisible();
-    await expect(page.getByRole("button", { name: "2 files" })).toBeVisible();
+    await expect(chips.getByRole("button", { name: "Remove fares.csv" })).toBeEnabled();
+    await refused.getByRole("button", { name: "Remove slides.pptx" }).click();
+    await page.getByRole("button", { name: /^Tools/ }).click();
+    await expect(page.getByText("auto · 2 files")).toBeVisible();
+    await page.keyboard.press("Escape");
     await page.screenshot({ path: `e2e/screenshots/new-project-files-${scheme}.png` });
-    expect(await axeProblems(page, "files tray")).toEqual([]);
+    expect(await axeProblems(page, "attachments")).toEqual([]);
 
     // Removing a chip, then planning: the request carries the remaining file.
     await chips.getByRole("button", { name: "Remove policy.pdf" }).click();
@@ -70,7 +75,7 @@ for (const scheme of ["light", "dark"]) {
     await page.getByRole("region", { name: "Task brief" }).getByRole("button", { name: "Create plan" }).click();
     await expect(page.getByRole("link", { name: "Review plan" })).toBeVisible();
     await expect(page.getByRole("list", { name: "Knowledge files" })).toContainText("fares.csv");
-    await expect(page.getByRole("list", { name: "Knowledge files for this project" })).toHaveCount(0);
+    await expect(page.getByRole("list", { name: "Attachments for this project" })).toHaveCount(0);
 
     const sent = await (await request.get(`${API}/__last_create`)).json();
     expect(sent.brief).toBe("Answer questions about fares");

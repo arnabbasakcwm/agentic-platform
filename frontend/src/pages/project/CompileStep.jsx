@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Icon } from "../../components/icons.jsx";
 import {
   ActionBar,
@@ -5,46 +6,67 @@ import {
   Callout,
   ErrorCallout,
   LinkButton,
-  MetaList,
   Panel,
   Pill,
 } from "../../components/ui.jsx";
 import { api } from "../../lib/api.js";
-import { parallelStages, sequentialOrder } from "../../lib/flow.js";
+import { agentStyle, parallelStages, sequentialOrder } from "../../lib/flow.js";
 import { paths } from "../../lib/router.js";
 import { useAction } from "../../lib/useAction.js";
 
-function Stage({ label, nodes, router }) {
+// One stage box: a coloured top bar (its first agent's colour), "Stage 01", and each
+// agent in it with its real role, model and number of tools. Boxes enter left to right.
+function Stage({ label, nodes, order, byId, router }) {
+  const lead = order.indexOf(nodes[0]);
   return (
-    <div className="flow__stage">
+    <div className="flow__stage" style={{ ...agentStyle(lead), "--i": lead }}>
       <span className="flow__label">{label}</span>
       <div className="flow__nodes">
-        {nodes.map((id) => (
-          <span key={id} className={`flow__node ${router ? "flow__node--router" : ""}`}>
-            {id}
-          </span>
-        ))}
+        {nodes.map((id) => {
+          const agent = byId[id];
+          const tools = agent.tools.length;
+          return (
+            <div
+              key={id}
+              className={`flow__node ${router ? "flow__node--router" : ""}`}
+              style={agentStyle(order.indexOf(id))}
+            >
+              <span className="flow__id">{id}</span>
+              <span className="flow__role">{agent.role}</span>
+              <span className="flow__facts">
+                <span className="mono">{agent.llm.model}</span>
+                <span>
+                  {router ? "routes the team" : `${tools} tool${tools === 1 ? "" : "s"}`}
+                </span>
+              </span>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
 }
 
-function Arrow({ loop }) {
+// The link between stages: a line that draws in after the stage before it.
+function Arrow({ loop, index }) {
   return (
-    <div className="flow__arrow">
-      <Icon name={loop ? "loop" : "arrowRight"} size={18} />
+    <div className="flow__arrow" style={{ "--i": index }} aria-hidden="true">
+      <span className="flow__line ap-connector-fill" />
+      <Icon name={loop ? "loop" : "arrowRight"} size={16} />
     </div>
   );
 }
 
 function Flow({ plan }) {
+  const order = plan.agents.map((a) => a.id);
+  const byId = Object.fromEntries(plan.agents.map((a) => [a.id, a]));
   if (plan.orchestration_pattern === "supervisor") {
     const workers = plan.agents.filter((a) => a.id !== plan.supervisor_id).map((a) => a.id);
     return (
       <div className="flow" tabIndex={0} role="region" aria-label="Execution flow">
-        <Stage label="Router" nodes={[plan.supervisor_id]} router />
-        <Arrow loop />
-        <Stage label={`Workers (${workers.length})`} nodes={workers} />
+        <Stage label="Router" nodes={[plan.supervisor_id]} order={order} byId={byId} router />
+        <Arrow loop index={1} />
+        <Stage label={`Workers (${workers.length})`} nodes={workers} order={order} byId={byId} />
       </div>
     );
   }
@@ -58,13 +80,33 @@ function Flow({ plan }) {
     <div className="flow" tabIndex={0} role="region" aria-label="Execution flow">
       {stages.map((nodes, i) => (
         <div key={i} className="contents">
-          {i > 0 && <Arrow />}
-          <Stage label={`Stage ${i + 1}`} nodes={nodes} />
+          {i > 0 && <Arrow index={i} />}
+          <Stage
+            label={`Stage ${String(i + 1).padStart(2, "0")}`}
+            nodes={nodes}
+            order={order}
+            byId={byId}
+          />
         </div>
       ))}
     </div>
   );
 }
+
+/** A check that draws itself (.ap-check-draw). */
+function DrawnCheck() {
+  return (
+    <svg className="ap-check-draw" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+      <path d="M5 12.5l4.5 4.5L19 7.5" />
+    </svg>
+  );
+}
+
+const PATTERN_TITLE = {
+  sequential: "Sequential execution",
+  parallel: "Parallel execution",
+  supervisor: "Routed execution",
+};
 
 function describe(plan) {
   const { bounds } = plan;
@@ -86,10 +128,15 @@ function describe(plan) {
 export function CompileStep({ project, onCompiled }) {
   const { plan } = project;
   const compile = useAction();
+  // Compiled while this page was open: the status card glows briefly (visual only).
+  const [justCompiled, setJustCompiled] = useState(false);
 
   async function run() {
     const ok = await compile.run(() => api.compile(project.project_id));
-    if (ok) onCompiled();
+    if (ok) {
+      setJustCompiled(true);
+      onCompiled();
+    }
   }
 
   return (
@@ -99,20 +146,36 @@ export function CompileStep({ project, onCompiled }) {
           <Panel
             title="Execution flow"
             subtitle="How the compiled graph will run."
-            actions={<Pill tone="accent">{plan.orchestration_pattern}</Pill>}
+            actions={<Pill tone="violet">{plan.orchestration_pattern}</Pill>}
           >
             <Flow plan={plan} />
-            <p className="muted mt-sm">
-              {describe(plan)}
-            </p>
+            <div className="flow__note">
+              <Icon name="flag" size={16} />
+              <p>
+                <strong className="flow__note-title">
+                  {PATTERN_TITLE[plan.orchestration_pattern] ?? "Execution"}
+                </strong>
+                {describe(plan)}
+              </p>
+            </div>
           </Panel>
 
           <aside className="split__aside">
             <Panel title="Status">
               {project.compiled ? (
-                <Callout tone="success" title="Compiled">
-                  The graph is built from the current plan and ready to run.
-                </Callout>
+                <div
+                  key={justCompiled ? "fresh" : "loaded"}
+                  className={`compiled${justCompiled ? " compiled--fresh" : ""}`}
+                  role="status"
+                >
+                  <span className="compiled__icon">
+                    <DrawnCheck />
+                  </span>
+                  <span>
+                    <strong className="compiled__title">Compiled</strong>
+                    The graph is built from the current plan and ready to run.
+                  </span>
+                </div>
               ) : (
                 <Callout tone="warn" title="Not compiled">
                   The current plan hasn't been built into a runnable graph yet.
@@ -137,13 +200,20 @@ export function CompileStep({ project, onCompiled }) {
             </Panel>
 
             <Panel title="Run limits" subtitle="Enforced on every run.">
-              <MetaList
-                rows={[
-                  ["Tool steps per agent", <span key="Tool steps per agent" className="mono">{plan.bounds.max_steps}</span>],
-                  ["Attempts per agent", <span key="Attempts per agent" className="mono">{plan.bounds.max_retries}</span>],
-                  ["Time per run", <span key="Time per run" className="mono">{plan.bounds.timeout_s}s</span>],
-                ]}
-              />
+              <dl className="limits">
+                <div className="limits__row">
+                  <dt>Tool steps per agent</dt>
+                  <dd className="mono">{plan.bounds.max_steps}</dd>
+                </div>
+                <div className="limits__row">
+                  <dt>Attempts per agent</dt>
+                  <dd className="mono">{plan.bounds.max_retries}</dd>
+                </div>
+                <div className="limits__row">
+                  <dt>Time per run</dt>
+                  <dd className="mono">{plan.bounds.timeout_s}s</dd>
+                </div>
+              </dl>
             </Panel>
           </aside>
         </div>
@@ -152,7 +222,7 @@ export function CompileStep({ project, onCompiled }) {
       <ActionBar note="Compiling checks every agent's tools and wires the graph. It makes no model calls.">
         <LinkButton href={paths.project(project.project_id, "plan")}>
           <Icon name="arrowLeft" />
-          Plan
+          Back to Plan
         </LinkButton>
         {project.compiled ? (
           <LinkButton variant="primary" href={paths.project(project.project_id, "run")}>

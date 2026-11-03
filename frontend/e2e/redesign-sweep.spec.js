@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
+import { settled } from "./settled.js";
 import { mkdirSync, writeFileSync } from "node:fs";
 
 // Visual sweep of every page at mobile, tablet and desktop widths (and desktop in dark):
@@ -65,7 +66,7 @@ for (const [name, url, opts = {}] of PAGES) {
       await page.waitForLoadState("networkidle");
       await page.waitForTimeout(300);
       await page.screenshot({ path: `${OUT}/${name}-${view}.png`, fullPage: true, animations: "disabled" });
-      const axe = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
+      const axe = await new AxeBuilder({ page: await settled(page) }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
       const serious = axe.violations
         .filter((v) => ["serious", "critical"].includes(v.impact))
         .map((v) => `${v.id}: ${v.nodes.slice(0, 3).map((n) => n.target.join(" ")).join(" | ")}`);
@@ -143,7 +144,7 @@ for (const [name, url, open] of OVERLAYS) {
       await open(page);
       await page.waitForTimeout(300);
       await page.screenshot({ path: `${OUT}/${name}-${view}.png`, animations: "disabled" });
-      const axe = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
+      const axe = await new AxeBuilder({ page: await settled(page) }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
       const serious = axe.violations
         .filter((v) => ["serious", "critical"].includes(v.impact))
         .map((v) => `${v.id}: ${v.nodes.slice(0, 3).map((n) => n.target.join(" ")).join(" | ")}`);

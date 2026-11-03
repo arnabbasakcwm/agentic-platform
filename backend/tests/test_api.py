@@ -353,6 +353,81 @@ def test_revise_rejects_an_empty_message(monkeypatch):
     assert c.post(f"/projects/{pid}/revise", json={"message": ""}).status_code == 422
 
 
+# The Assistant's chips: model, team size and tools limit one revision.
+def _spy_revise(monkeypatch, revision=None):
+    seen = {}
+
+    def spy(**kw):
+        seen.update(kw)
+        return revision or _revision()
+
+    monkeypatch.setattr(app_module, "revise_plan", spy)
+    return seen
+
+
+def test_revise_without_chips_works_as_before(monkeypatch):
+    c = _client(monkeypatch)
+    pid = c.post("/projects", json={"brief": "x"}).json()["project_id"]
+    seen = _spy_revise(monkeypatch)
+    c.post(f"/projects/{pid}/revise", json={"message": "change it"})
+    assert seen["requested_agent_count"] is None
+    assert len(seen["available_llms"]) > 1  # every platform model, as before
+    assert "web_search" not in seen["available_tools"]
+
+
+def test_revise_model_chip_limits_the_revision_to_that_model(monkeypatch):
+    from agentic_platform.config import DEFAULT_MODELS
+
+    c = _client(monkeypatch)
+    pid = c.post("/projects", json={"brief": "x"}).json()["project_id"]
+    seen = _spy_revise(monkeypatch)
+    model = {"provider": "openai", "model": DEFAULT_MODELS["openai"]}
+    r = c.post(f"/projects/{pid}/revise", json={"message": "use gpt", "model": model})
+    assert r.status_code == 200
+    assert [(m["provider"], m["model"]) for m in seen["available_llms"]] == [("openai", model["model"])]
+
+
+def test_revise_rejects_a_model_or_tool_the_platform_does_not_offer(monkeypatch):
+    c = _client(monkeypatch)
+    pid = c.post("/projects", json={"brief": "x"}).json()["project_id"]
+    seen = _spy_revise(monkeypatch)
+    bad_model = c.post(f"/projects/{pid}/revise", json={"message": "x", "model": {"provider": "openai", "model": "gpt-9"}})
+    assert bad_model.status_code == 422
+    assert "not an available model" in bad_model.json()["message"]
+    bad_tool = c.post(f"/projects/{pid}/revise", json={"message": "x", "tools": ["lookup", "shell"]})
+    assert bad_tool.status_code == 422
+    assert "shell" in bad_tool.json()["message"]
+    assert seen == {}  # the planner was never called
+    assert c.post(f"/projects/{pid}/revise", json={"message": "x", "agent_count": 11}).status_code == 422
+
+
+def test_revise_team_chip_caps_the_team(monkeypatch):
+    c = _client(monkeypatch)
+    pid = c.post("/projects", json={"brief": "x"}).json()["project_id"]
+    seen = _spy_revise(monkeypatch)
+    c.post(f"/projects/{pid}/revise", json={"message": "fewer agents", "agent_count": 2})
+    assert seen["requested_agent_count"] == 2
+
+
+def test_revise_tools_chip_is_an_opt_in_and_keeps_tools_the_plan_still_uses(monkeypatch):
+    c = _client(monkeypatch)
+    pid = c.post(
+        "/projects", json={"brief": "x", "available_tools": ["lookup", "wikipedia"]}
+    ).json()["project_id"]
+    plan = _plan()
+    uses_wikipedia = plan.model_copy(update={"agents": [plan.agents[0].model_copy(update={"tools": ["wikipedia"]})]})
+    seen = _spy_revise(monkeypatch, _revision(plan=uses_wikipedia))
+    r = c.post(f"/projects/{pid}/revise", json={"message": "search the web", "tools": ["lookup", "web_search"]})
+    assert r.status_code == 200
+    assert sorted(seen["available_tools"]) == ["lookup", "web_search"]
+    # web_search was switched on in the chip; wikipedia stays because the plan uses it.
+    assert r.json()["project"]["side_effect_tools_enabled"] == ["web_search", "wikipedia"]
+    # The message alone still isn't an opt-in.
+    seen = _spy_revise(monkeypatch)
+    c.post(f"/projects/{pid}/revise", json={"message": "add pubmed"})
+    assert "pubmed" not in seen["available_tools"]
+
+
 def test_run_timeout_is_a_typed_504_not_a_bare_500(monkeypatch):
     c = _client(monkeypatch)
     pid = c.post("/projects", json={"brief": "x"}).json()["project_id"]

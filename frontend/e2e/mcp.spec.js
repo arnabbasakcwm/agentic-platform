@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
+import { settled } from "./settled.js";
 
 // MCP servers: connect one (a refused key first), approve tools (a write tool asks first),
 // attach it on the project's Data step, give an agent the tool in the Brief editor, see a
@@ -9,7 +10,7 @@ const PROJECT = "e2e0travel0project";
 const KEY = "k3yInTheUrl0123456789abcdef";
 
 async function axeProblems(page, label) {
-  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
+  const results = await new AxeBuilder({ page: await settled(page) }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
   return results.violations
     .filter((v) => ["serious", "critical"].includes(v.impact))
     .map((v) => `${label}: ${v.id}: ${v.nodes.slice(0, 3).map((n) => n.target.join(" ")).join(" | ")}`);
@@ -128,9 +129,10 @@ test("a new project can start with an MCP server's tools", async ({ page }) => {
   await approved(panel, 1);
 
   await page.goto("/#/new");
-  await page.getByRole("button", { name: "Add MCP" }).click();
+  await page.getByRole("button", { name: "Add context" }).click();
+  await page.getByRole("menuitem", { name: /Attach MCP server/ }).click();
   await page.getByRole("checkbox", { name: /CRM/ }).check();
-  await expect(page.getByRole("button", { name: "1 MCP server" })).toBeVisible();
+  await expect(page.getByRole("list", { name: "Attachments for this project" })).toContainText("CRM");
 });
 
 test("replacing an expired credential checks it first", async ({ page }) => {

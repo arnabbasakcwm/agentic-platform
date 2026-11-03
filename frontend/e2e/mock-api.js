@@ -345,6 +345,8 @@ const admin = { users: adminSeed() };
 const me = () => admin.users.find((u) => u.id === "u1");
 // The last intake conversation sent, for tests to inspect.
 const briefChats = { last: null };
+// The last change request the assistant sent (its chips' fields included).
+const revises = { last: null };
 
 // Deploys: off ("AWS not set up") unless a test turns them on with POST /__deploy_available.
 const deploys = { available: false, current: null, count: 0 };
@@ -635,6 +637,7 @@ function reset() {
   created.last = null;
   admin.users = adminSeed();
   briefChats.last = null;
+  revises.last = null;
 }
 
 // ---- knowledge library: files belong to the user and are attached to any number of
@@ -733,6 +736,11 @@ function readRaw(req) {
 async function upload(req, res, projectId = null) {
   const raw = await readRaw(req);
   const names = [...raw.matchAll(/filename="([^"]+)"/g)].map((m) => m[1]);
+  await sleep(400);
+  // A file named "boom…" makes the whole upload fail, for the composer's error chip.
+  if (names.some((n) => n.startsWith("boom"))) {
+    return send(res, 500, { error_type: "UploadFailed", message: "the upload failed on the server", details: null });
+  }
   knowledge.embedding ??= { provider: "google_genai", model: "gemini-embedding-001" };
   const added = names.map((filename, i) => ({
     id: `doc${Date.now()}${i}`,
@@ -791,6 +799,34 @@ const server = http.createServer(async (req, res) => {
   const p = `/projects/${PROJECT_ID}`;
 
   if (path === "/health") return send(res, 200, { status: "ok" });
+  // New-project composer checks: a ready library file, a data source with tables and an
+  // MCP server with approved tools, all with fixed ids so recorded requests compare.
+  if (path === "/__seed_composer" && req.method === "POST") {
+    const now = new Date().toISOString();
+    knowledge.embedding ??= { provider: "google_genai", model: "gemini-embedding-001" };
+    knowledge.documents.push({
+      id: "docseed1", project_ids: [], filename: "dpdp act 2023.pdf", kind: ".pdf", size_bytes: 48213,
+      status: "ready", error: null, chunk_count: 12, embedding: knowledge.embedding,
+      created_at: now, updated_at: now, added: 0,
+    });
+    dataSources.list.unshift({
+      id: "dsseed1", kind: "bigquery", name: "Trips warehouse", billing_project: BQ.project, service_account: BQ.sa,
+      tables: [{ id: "mydata.trips", dataset: "mydata", table: "trips" }, { id: "mydata.stations", dataset: "mydata", table: "stations" }],
+      project_ids: [], created_at: now, updated_at: now,
+    });
+    mcpServers.list.unshift({
+      id: "mcpseed1", name: "ZohoMcp", slug: "zohomcp", host: "mcp.zoho.example", display_url: "https://mcp.zoho.example/••••",
+      transport: "http", preset: null, auth: "none", header_names: [], server_name: "zoho", server_version: "1.0.0",
+      status: "ok", status_message: null,
+      tools: ["search_records", "get_record"].map((name) => ({
+        ...mcpTool(name, `${name} in Zoho CRM.`, true, { type: "object", properties: {} }),
+        exposed_name: `mcp__zohomcp__${name}`, approved: true, usable: true,
+      })),
+      project_ids: [], created_at: now, updated_at: now, checked_at: now,
+    });
+    return send(res, 200, { seeded: true });
+  }
+  if (path === "/__last_brief_chat") return send(res, 200, briefChats.last ?? {});
   if (path === "/__reset" && req.method === "POST") {
     reset();
     return send(res, 200, { reset: true });
@@ -1119,8 +1155,10 @@ const server = http.createServer(async (req, res) => {
   }
   if (path === `${p}/revise` && req.method === "POST") {
     const body = await readBody(req);
+    revises.last = body;
     return revise(res, body.message ?? "");
   }
+  if (path === "/__last_revise") return send(res, 200, revises.last ?? {});
   if (path === "/__deploy_available" && req.method === "POST") {
     deploys.available = true;
     return send(res, 200, { ok: true });

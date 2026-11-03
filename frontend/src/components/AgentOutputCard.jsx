@@ -76,10 +76,11 @@ export const AgentOutputCard = forwardRef(function AgentOutputCard(
       {open && (
         <div className="outcard__body" id={bodyId}>
           {output ? (
-            <>
+            // Fades in as the agent's answer arrives.
+            <div className="ap-fade">
               <Markdown>{output.content}</Markdown>
               <DataView data={output.data} />
-            </>
+            </div>
           ) : node.status === "running" || node.status === "queued" ? (
             <>
               {node.retryError && (

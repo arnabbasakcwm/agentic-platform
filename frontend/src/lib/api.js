@@ -316,8 +316,17 @@ export const api = {
       method: "POST",
       body: { query, k },
     }),
-  reviseProject: (id, message) =>
-    request(`/projects/${id}/revise`, { method: "POST", body: { message } }),
+  // The Assistant's chips limit one change; untouched chips send only the message.
+  reviseProject: (id, message, { model, agentCount, tools } = {}) =>
+    request(`/projects/${id}/revise`, {
+      method: "POST",
+      body: {
+        message,
+        ...(model ? { model } : {}),
+        ...(agentCount ? { agent_count: agentCount } : {}),
+        ...(tools ? { tools } : {}),
+      },
+    }),
   compile: (id) => request(`/projects/${id}/compile`, { method: "POST" }),
   run: (id, input) =>
     request(`/projects/${id}/run`, { method: "POST", body: { input } }),

@@ -1,0 +1,168 @@
+/* ---------------------------------------------------------------- phones (≤600px)
+   design.md: single-column stacks, full-width CTAs. */
+@media (max-width: 600px) {
+  /* The rail and the stepper navigate; the breadcrumb names the current page only. */
+  .crumbs__item:not(:last-child),
+  .crumbs__item:last-child .crumbs__sep {
+    display: none;
+  }
+
+  .pagehead {
+    flex-wrap: wrap;
+  }
+
+  .pagehead__text {
+    flex-basis: 100%;
+  }
+
+  .pagehead__title,
+  .projhead .pagehead__title {
+    font-size: var(--text-h3);
+    line-height: var(--lh-h3);
+    letter-spacing: var(--track-h3);
+  }
+
+  .projhead {
+    padding: var(--space-md);
+  }
+
+  .projhead__assistant {
+    flex: 1 1 100%;
+  }
+
+  .pagehead__sub {
+    font-size: var(--text-body-sm);
+  }
+
+  .actionbar {
+    flex-wrap: wrap;
+  }
+
+  .actionbar__note {
+    flex-basis: 100%;
+  }
+
+  .actionbar__actions {
+    flex: 1 1 100%;
+  }
+
+  .actionbar .btn {
+    flex: 1;
+  }
+
+  .panel__header,
+  .panel__body,
+  .panel__footer {
+    padding-left: var(--space-md);
+    padding-right: var(--space-md);
+  }
+
+  /* The composer's chips wrap; Send stays at the end of the row. */
+  .composer__bar {
+    flex-wrap: wrap;
+  }
+
+  .composer__send {
+    margin-left: auto;
+  }
+}
+
+.nowrap {
+  white-space: nowrap;
+}
+
+/* The unit after a count, shown only where the column header isn't (stacked rows). */
+.table__unit {
+  display: none;
+}
+
+/* A data table that reflows into stacked rows on phones (design.md: tables reflow into
+   stacked cards). The header row stays available to screen readers. */
+@media (max-width: 600px) {
+  .table--stack thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .table--stack,
+  .table--stack tbody {
+    display: block;
+  }
+
+  .table--stack tr {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-xs) var(--space-sm);
+    padding: var(--space-md);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .table--stack tr:last-child {
+    border-bottom: 0;
+  }
+
+  .table--stack td {
+    display: block;
+    padding: 0;
+    border: 0;
+  }
+
+  .table--stack td:first-child {
+    flex-basis: 100%;
+  }
+
+  .table--stack .table__unit {
+    display: inline;
+  }
+
+  .table--stack .table__actions {
+    margin-left: auto;
+  }
+}
+
+/* ================================================================ admin */
+.admin__email {
+  font-weight: 600;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.admin__title {
+  overflow-wrap: anywhere;
+}
+
+.admin__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-xs) var(--space-md);
+}
+
+.admin__actions {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.admin__confirm {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-xs);
+  white-space: normal;
+}
+
+.admin__confirm-text {
+  font-size: var(--text-xs);
+  max-width: 260px;
+}
+
+.admin__note {
+  font-size: var(--text-xs);
+}
+

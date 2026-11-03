@@ -198,6 +198,7 @@ def _build_revision_message(
     correction: str | None,
     data_tables: list[str] | None = None,
     tool_notes: dict[str, str] | None = None,
+    requested_agent_count: int | None = None,
 ) -> str:
     parts = [
         f"CURRENT BRIEF:\n{brief}",
@@ -207,6 +208,9 @@ def _build_revision_message(
         parts.append("\nRECENT CONVERSATION (oldest first):")
         parts.extend(f"  {role.upper()}: {content}" for role, content in history)
     parts.append(f"\nUSER REQUEST:\n{request}")
+    if requested_agent_count is not None:
+        # Set with the Assistant's Team chip: a hard limit, checked in _semantic_check.
+        parts.append(f"\nMAXIMUM AGENT COUNT: {requested_agent_count}")
     parts.extend(_data_block(data_tables))
     parts.extend(_options_block(available_tools, available_llms, tool_notes))
     parts.extend(_correction_block(correction, "PlanRevision"))
@@ -355,12 +359,14 @@ def revise_plan(
     usage: UsageCollector | None = None,
     data_tables: list[str] | None = None,
     tool_notes: dict[str, str] | None = None,
+    requested_agent_count: int | None = None,
 ) -> PlanRevision:
     """Apply a natural-language change request to an existing brief and plan.
 
     `history` is recent (role, content) conversation for follow-ups like "undo that";
     only the last REVISION_HISTORY_LIMIT entries are sent. The revised plan is held to
-    exactly the same checks as a new one.
+    exactly the same checks as a new one. `requested_agent_count`, when given, caps the
+    revised team's size the same way it caps a new one.
     """
     tools, llms = _resolve_options(available_tools, available_llms)
     recent = (history or [])[-REVISION_HISTORY_LIMIT:]
@@ -368,9 +374,10 @@ def revise_plan(
         PlanRevision,
         _REVISION_PROMPT,
         lambda correction: _build_revision_message(
-            brief, plan, request, recent, tools, llms, correction, data_tables, tool_notes
+            brief, plan, request, recent, tools, llms, correction, data_tables, tool_notes,
+            requested_agent_count,
         ),
-        lambda revision: _semantic_check(revision.plan, None, tools, llms),
+        lambda revision: _semantic_check(revision.plan, requested_agent_count, tools, llms),
         planner_llm,
         usage,
         "assistant",

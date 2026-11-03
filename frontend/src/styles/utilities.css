@@ -1,0 +1,42 @@
+/* ---------------------------------------------------------------- spacing utilities
+   Small, token-based nudges for one-off gaps in markup (no inline style values). */
+.mt-field {
+  margin-top: var(--space-field);
+}
+
+.mt-xs {
+  margin-top: var(--space-xs);
+}
+
+.mt-sm {
+  margin-top: var(--space-sm);
+}
+
+.mb-xs {
+  margin-bottom: var(--space-xs);
+}
+
+.mb-md {
+  margin-bottom: var(--space-md);
+}
+
+.my-sm-xs {
+  margin: var(--space-sm) 0 var(--space-xs);
+}
+
+.gap-field {
+  gap: var(--space-field);
+}
+
+.gap-xs {
+  gap: var(--space-xs);
+}
+
+.minh-editor {
+  min-height: 120px;
+}
+
+.minh-plan-json {
+  min-height: 460px;
+}
+

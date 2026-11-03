@@ -1,0 +1,284 @@
+/* ---------------------------------------------------------------- assistant: resize, fullscreen */
+.assistant__resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(-1 * var(--space-xxs));
+  width: 8px;
+  z-index: 2;
+  cursor: col-resize;
+  touch-action: none;
+  outline: none;
+}
+
+.assistant__resize::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--space-xxs);
+  width: 2px;
+  background: transparent;
+  transition: background 0.12s;
+}
+
+.assistant__resize:hover::after,
+.assistant__resize:focus-visible::after,
+.assistant--resizing .assistant__resize::after {
+  background: var(--accent);
+}
+
+/* While dragging: no text selection anywhere, and the resize cursor everywhere. */
+body.is-resizing {
+  user-select: none;
+  cursor: col-resize;
+}
+
+.assistant__fullbtn {
+  gap: var(--space-field);
+  white-space: nowrap;
+}
+
+@container (max-width: 320px) {
+  .assistant__fulllabel {
+    display: none;
+  }
+}
+
+/* Fullscreen: the assistant fills the work area; the sidebar and top bar stay. */
+.assistant--full {
+  position: absolute;
+  inset: 0;
+  width: auto;
+  min-width: 0;
+  max-width: none;
+  z-index: 8; /* above the sticky stepper bar */
+  border-left: 0;
+  box-shadow: none;
+}
+
+/* Long lines stay readable: the conversation and composer keep a centred column. */
+.assistant--full .assistant__thread,
+.assistant--full .assistant__bottom {
+  padding-inline: max(var(--space-md), calc((100% - var(--chat-max)) / 2));
+}
+
+.assistant--full .assistant__bottom {
+  border-top: 0;
+  padding-bottom: var(--space-lg);
+}
+
+/* ---------------------------------------------------------------- assistant: New project look
+   Opening the assistant feels like coming back to New project: the same hero, composer
+   (chips + popovers) and template cards. */
+.assistant__hero {
+  padding: var(--space-md) 0;
+}
+
+.assistant__hero .chat__glow {
+  inset: calc(-1 * var(--space-md)) 0;
+}
+
+.assistant__hero h2 {
+  margin: 0 0 var(--space-xs);
+  color: var(--text-strong);
+  font-size: var(--text-h3);
+  font-weight: 700;
+  letter-spacing: var(--track-display-2);
+}
+
+.assistant__hero > p {
+  margin: 0 auto;
+  max-width: 520px;
+  font-size: var(--text-body-sm);
+}
+
+/* Empty: hero, composer and cards sit together in the middle. */
+.assistant--empty .assistant__thread {
+  justify-content: flex-end;
+}
+
+.assistant--empty .assistant__bottom {
+  border-top: 0;
+}
+
+.assistant--full.assistant--empty .assistant__bottom {
+  flex: 1;
+}
+
+.assistant--full .assistant__hero h2 {
+  font-size: var(--text-display-2);
+  line-height: var(--lh-display-2);
+}
+
+.assistant--full .assistant__hero > p {
+  font-size: var(--text-body);
+}
+
+/* The panel composer: the same box and chips as New project, without the page's sticky
+   bar around it. */
+.composer--panel {
+  position: static;
+  padding: 0;
+  background: none;
+}
+
+.composer--panel .composer__inner {
+  max-width: none;
+}
+
+.composer--panel .composer__bar {
+  flex-wrap: wrap;
+}
+
+.composer--panel .cchip__v {
+  max-width: 120px;
+}
+
+.assistant--full .composer--panel .composer__inner {
+  max-width: 860px;
+}
+
+.assistant--full .composer--panel .cchip__v {
+  max-width: 180px;
+}
+
+.assistant--full.assistant--empty .composer--panel .composer__box textarea {
+  min-height: 96px;
+}
+
+.composer__hint {
+  margin: var(--space-field) 0 0;
+  text-align: center;
+  font-size: var(--text-caption);
+  color: var(--text-muted);
+}
+
+.assistant__suggestions {
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: var(--space-xs);
+  max-width: none;
+  margin: 0;
+  padding: 0;
+}
+
+.assistant__suggestions .suggestion {
+  padding: var(--space-sm);
+}
+
+.assistant__suggestions .suggestion__icon {
+  width: 32px;
+  height: 32px;
+}
+
+.assistant__suggestions .suggestion__title {
+  font-size: var(--text-caption);
+}
+
+.assistant--full .assistant__suggestions {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  max-width: 860px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+/* ================================================================ new-project intake */
+.msg__stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  min-width: 0;
+  max-width: 85%;
+}
+
+.msg__stack > .msg__bubble {
+  max-width: 100%;
+}
+
+.intake__questions {
+  margin: 0;
+  padding-left: var(--space-lg);
+  display: grid;
+  gap: var(--space-sm);
+}
+
+.intake__question {
+  display: block;
+  font-weight: 500;
+}
+
+.intake__options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-field);
+  margin-top: var(--space-field);
+}
+
+.briefcard {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  padding: var(--space-sm) var(--space-btn);
+  display: grid;
+  gap: var(--space-sm);
+}
+
+.briefcard--ready {
+  border-color: var(--success-border, var(--success));
+  box-shadow: 0 0 0 3px var(--success-soft, transparent);
+}
+
+.briefcard__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-xs);
+  flex-wrap: wrap;
+}
+
+.briefcard__title {
+  font-weight: 600;
+  font-size: var(--text-caption);
+}
+
+.briefcard__text {
+  font-size: var(--text-caption);
+  line-height: 1.55;
+  min-height: 72px;
+}
+
+.briefcard__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+}
+
+.briefcard__meta {
+  font-size: var(--text-caption);
+}
+
+.intake__divider {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  color: var(--text-subtle);
+  font-size: var(--text-eyebrow);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.intake__divider::before,
+.intake__divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+@media (max-width: 640px) {
+  .msg__stack {
+    max-width: 100%;
+  }
+}

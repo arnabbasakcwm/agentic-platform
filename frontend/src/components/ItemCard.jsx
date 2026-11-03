@@ -1,4 +1,5 @@
 import { Icon } from "./icons.jsx";
+import { SlidingThumb } from "./ui.jsx";
 
 /**
  * One item on a library page (a data source, an MCP server): a one-line header that
@@ -54,6 +55,7 @@ export function ItemCard({
             role="tablist"
             aria-label={`${title}: sections`}
           >
+            <SlidingThumb on={tab} />
             {tabs.map((t) => (
               <button
                 key={t.key}

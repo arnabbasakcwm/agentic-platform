@@ -171,7 +171,16 @@ anything, and say plainly when part of a request isn't possible. It sees the las
 work.
 
 `POST /projects/{id}/revise` offers it every built-in tool but only the external tools
-the project already opted into — a chat message is never an opt-in. When the revision
+the project already opted into — a chat message is never an opt-in. The request may also
+carry the Assistant's chips, each optional and limiting only that change: `model`
+(`{provider, model}`, every agent of the revised plan uses it; checked against the
+platform's models), `agent_count` (a hard limit, 1–`MAX_AGENTS`, passed to
+`revise_plan(requested_agent_count=…)` and `_semantic_check`) and `tools` (the registry
+tools the planner may use; knowledge, data and MCP tools still follow the project's
+attachments). Switching an external tool on in that chip **is** an opt-in, an explicit
+user action like `PUT /projects/{id}/agents`: the project's `side_effect_tools_enabled`
+becomes the chip's external tools plus any the saved plan still uses, written in the same
+conditional write. Unknown tools or models are a 422 before the planner is called. When the revision
 changes anything, the store writes the new brief/plan, bumps `plan_version` (so the
 project must be compiled again) and appends the user message and reply to the project's
 `conversation` (last 100 kept), all in one conditional write against the version the
@@ -500,7 +509,7 @@ rebuilt on demand after a restart. A database failure surfaces as a typed
 | `GET /projects` | the signed-in user's projects as summaries (brief, pattern, agent count, `compiled`, timestamps), most recently updated first |
 | `GET /projects/{id}` | fetch brief + plan + `compiled` flag + `side_effect_tools_enabled` + timestamps |
 | `PATCH /projects/{id}/plan` | replace plan (validators re-run); invalidates stale compiled graph; returns the full project |
-| `POST /projects/{id}/revise` | `{message}` → `revise_plan` → `{changed, reply, project}`; a change bumps `plan_version` and needs a new compile; stale base → 409 `PlanConflict` |
+| `POST /projects/{id}/revise` | `{message, model?, agent_count?, tools?}` → `revise_plan` → `{changed, reply, project}`; a change bumps `plan_version` and needs a new compile; stale base → 409 `PlanConflict` |
 | `POST /projects/{id}/compile` | `compile_graph(plan)` → cache in `_COMPILED`, record `compiled_version` in the store |
 | `POST /projects/{id}/run` | `run_graph(...)` → `{outputs, errors, halted}` |
 | `POST /projects/{id}/agents/{agent_id}/invoke` | `run_single_agent(...)`; unknown agent → 404 |
@@ -553,7 +562,7 @@ business logic, and every rule it appears to enforce is really enforced server-s
 | Project list: every project the signed-in user owns | `frontend/src/pages/ProjectsPage.jsx` (`GET /projects`); the sidebar also lists the five most recent |
 | New project as a conversation: each message is a brief and gets a planned team (or the error) as the reply; team size, model and tools sit in an optional settings tray, defaulting to "planner chooses", the default model and the default tools | `frontend/src/pages/NewProjectPage.jsx` |
 | One project, one workflow step per page | `frontend/src/pages/ProjectWorkspace.jsx` + `pages/project/` — `BriefStep` (read-only brief and settings), `PlanStep` (agent cards, raw JSON editing), `CompileStep` (execution-flow view, compile), `RunStep` (full-graph and single-agent runs, results) |
-| Plan assistant: a chat beside the brief, plan and compile pages | `frontend/src/components/AssistantPanel.jsx` — sends `POST /projects/{id}/revise`, shows the stored conversation, marks replies that produced a new plan version |
+| Plan assistant: a chat beside the brief, plan and compile pages | `frontend/src/components/AssistantPanel.jsx` — the New project composer (`components/composer/`): `+` attaches files, data sources and MCP servers to the project at once; Model, Team and Tools chips limit each change. Sends `POST /projects/{id}/revise` (only the message while the chips are untouched), shows the stored conversation, marks replies that produced a new plan version |
 
 The four steps are separate pages behind a stepper so that reviewing a plan, compiling it
 and running it never compete for the same screen. The stepper links every step — it

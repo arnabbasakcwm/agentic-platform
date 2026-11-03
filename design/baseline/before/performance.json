@@ -1,0 +1,8 @@
+{
+  "frames": 529,
+  "dropped_frames": 66,
+  "worst_frame_ms": 117,
+  "p95_frame_ms": 33,
+  "long_tasks": 8,
+  "long_task_ms": 487
+}

@@ -5,13 +5,29 @@
 export const START = "__start__";
 export const END = "__end__";
 
-// One colour per agent, in plan order, used for its diagram node, output card, timeline
-// bar and legend entry: mid-saturation hues (no orange, pink or purple) that mark
-// identity (stripes, dots, bars), never carrying text. Defined as CSS tokens.
+// One colour per agent, in plan order (DESIGN.md §2: violet, teal, amber, rose, sky,
+// emerald), used for its card top bar, diagram node border, output card, timeline bar
+// and legend dot. Defined as CSS tokens; the colour marks identity and never carries
+// text on its own (--agent-N-ink is the readable text shade, --agent-N-soft the tint).
 export const AGENT_PALETTE = Array.from({ length: 6 }, (_, i) => `var(--agent-${i + 1})`);
 
 export function agentColor(index) {
   return AGENT_PALETTE[index % AGENT_PALETTE.length];
+}
+
+/** The CSS custom properties that give an element agent `index`'s colours. */
+export function agentStyle(index) {
+  const n = (index % AGENT_PALETTE.length) + 1;
+  return {
+    "--agent-c": `var(--agent-${n})`,
+    "--agent-soft": `var(--agent-${n}-soft)`,
+    "--agent-ink": `var(--agent-${n}-ink)`,
+  };
+}
+
+/** "01", "02"… : an agent's position in the plan, as the cards and nodes show it. */
+export function agentIndex(index) {
+  return String(index + 1).padStart(2, "0");
 }
 
 /** "travel_advisor" → "Travel Advisor". */
@@ -70,14 +86,17 @@ export function parallelStages(agents) {
 
 /**
  * The plan as a graph: { agents, edges }.
- * agents: [{ id, title, role, color, isRouter }] in plan order.
+ * agents: [{ id, index, title, role, model, tools, color, isRouter }] in plan order.
  * edges:  [{ id, source, target }] including the Start and End terminals.
  */
 export function buildGraph(plan) {
   const agents = plan.agents.map((agent, i) => ({
     id: agent.id,
+    index: i,
     title: agentTitle(agent.id),
     role: agent.role,
+    model: agent.llm?.model ?? null,
+    tools: agent.tools ?? [],
     color: agentColor(i),
     isRouter: agent.id === plan.supervisor_id,
   }));

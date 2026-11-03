@@ -20,6 +20,7 @@ import {
 } from "../../components/ui.jsx";
 import { api } from "../../lib/api.js";
 import { fullDate } from "../../lib/format.js";
+import { agentIndex, agentStyle } from "../../lib/flow.js";
 import { paths } from "../../lib/router.js";
 import { providerLabel } from "../../lib/usage.js";
 import { useAction } from "../../lib/useAction.js";
@@ -62,6 +63,8 @@ function AgentSettings({ project, tools, providers, onSaved, savedVersion }) {
   const { plan } = project;
   const original = useMemo(() => draftFrom(plan), [plan]);
   const [draft, setDraft] = useState(original);
+  // The chip just switched, for its one-off pop; visual only.
+  const [popped, setPopped] = useState(null);
   const save = useAction();
   const toolCheck = useToolCheck();
   const options = useMemo(
@@ -130,6 +133,7 @@ function AgentSettings({ project, tools, providers, onSaved, savedVersion }) {
   }
 
   function toggleTool(id, name) {
+    setPopped(`${id}:${name}`);
     const current = new Set(draft[id].tools);
     current.has(name) ? current.delete(name) : current.add(name);
     // Registry order, so the result doesn't depend on click order.
@@ -182,15 +186,18 @@ function AgentSettings({ project, tools, providers, onSaved, savedVersion }) {
       flush
     >
       <ul className="agentset">
-        {plan.agents.map((agent) => {
+        {plan.agents.map((agent, index) => {
           const d = draft[agent.id];
           const isRouter = agent.id === plan.supervisor_id;
           const current = optionFor(d.model);
           const noTools = cannotCallTools(current);
           const job = { tools: d.tools, isRouter };
           return (
-            <li key={agent.id} className="agentset__item">
+            <li key={agent.id} className="agentset__item" style={agentStyle(index)}>
               <div className="agentset__who">
+                <span className="agentset__idx" aria-hidden="true">
+                  {agentIndex(index)}
+                </span>
                 <span className="mono agentset__id">{agent.id}</span>
                 <span className="muted agentset__role">{agent.role}</span>
                 {isRouter && <Pill tone="accent">router</Pill>}
@@ -243,11 +250,13 @@ function AgentSettings({ project, tools, providers, onSaved, savedVersion }) {
                     const on = d.tools.includes(tool.name);
                     return (
                       <button
-                        key={tool.name}
+                        // Re-mounted when switched, so the chip pops once (DESIGN.md §7).
+                        key={`${tool.name}-${on}`}
                         type="button"
                         className={[
                           "togglechip",
                           on && "togglechip--on",
+                          popped === `${agent.id}:${tool.name}` && "ap-pop",
                           tool.side_effect && "togglechip--external",
                         ]
                           .filter(Boolean)

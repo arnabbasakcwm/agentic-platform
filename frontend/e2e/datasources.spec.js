@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
+import { settled } from "./settled.js";
 
 // Data sources: connect BigQuery, choose tables (browsed and by full name), attach to a
 // project, run a test query (and see a write refused), and the Brief editor offering the
@@ -9,7 +10,7 @@ const TRAVEL = "Travel agent for finding cheap flights";
 const PROJECT = "e2e0travel0project";
 
 async function axeProblems(page, label) {
-  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
+  const results = await new AxeBuilder({ page: await settled(page) }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
   return results.violations
     .filter((v) => ["serious", "critical"].includes(v.impact))
     .map((v) => `${label}: ${v.id}: ${v.nodes.slice(0, 3).map((n) => n.target.join(" ")).join(" | ")}`);

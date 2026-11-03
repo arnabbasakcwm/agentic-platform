@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Agentic Platform: shared phase chrome (reference)</title>
+<link rel="stylesheet" href="../tokens/tokens.css">
+<link rel="stylesheet" href="../tokens/motion.css">
+<style>
+  /* Reference implementation of the components that must be IDENTICAL on
+     Brief, Resources, Plan, Compile, Run and Deploy. Port to React 1:1. */
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg-canvas); font-family: var(--font-sans); color: var(--text); }
+  .wrap { max-width: 1248px; margin: 0 auto; padding: 24px 32px; display: grid; gap: 16px; }
+  .label { font: 600 11px/16px var(--font-sans); letter-spacing: .06em; text-transform: uppercase; color: var(--text-muted); margin: 16px 0 -6px; }
+  .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-card); box-shadow: var(--shadow-card); }
+
+  /* ---------- ProjectHeader ---------- */
+  .ph { display: flex; align-items: center; justify-content: space-between; padding: 20px 24px; }
+  .ph-title { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .ph h1 { margin: 0; font: 700 30px/36px var(--font-sans); letter-spacing: -.01em; color: var(--text-strong); }
+  .ph .edit { color: var(--text-muted); width: 16px; height: 16px; }
+  .ph-id { margin-top: 6px; display: flex; align-items: center; gap: 6px; font: 400 12px/16px var(--font-mono); color: var(--text-muted); }
+  .pill { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; border-radius: var(--radius-pill); font: 500 12px/1 var(--font-sans); }
+  .pill--violet { background: var(--violet-soft); color: var(--violet); }
+  .pill--emerald { background: var(--emerald-soft); color: #047857; }
+  .pill .ap-dot { width: 6px; height: 6px; }
+  .btn { display: inline-flex; align-items: center; gap: 8px; height: 38px; padding: 0 16px; border-radius: var(--radius-control); font: 600 14px/1 var(--font-sans); cursor: pointer; }
+  .btn--outline { background: #fff; border: 1px solid var(--border); color: var(--text-strong); }
+  .btn--outline:hover { border-color: #CBD2E1; }
+  .ap-btn-primary { height: 38px; padding: 0 18px; display: inline-flex; align-items: center; gap: 8px; font-size: 14px; cursor: pointer; }
+  .sparkle { width: 16px; height: 16px; }
+
+  /* ---------- PhaseStepper ---------- */
+  .stepper { padding: 20px; }
+  .steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(6, 1fr); }
+  .step { position: relative; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px 8px; border-radius: 10px; text-decoration: none; color: inherit; }
+  .step.is-current { background: var(--c-soft); }
+  /* connector: from this circle's right edge to the next circle's left edge */
+  .steps > li { position: relative; }
+  .steps > li:not(:last-child) > .step::after {
+    content: ''; position: absolute; top: calc(12px + 13px); left: calc(50% + 18px); width: calc(100% - 36px); height: 2px;
+    background: var(--border); border-radius: 2px; z-index: 1;
+  }
+  .steps > li:not(:last-child) > .step.link-done::after { background: var(--c); }
+  .dot { position: relative; z-index: 1; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center;
+         font: 600 12px/1 var(--font-sans); background: #fff; border: 1.5px solid var(--border); color: var(--text-muted);
+         transition: background var(--dur-slow) var(--ease-out), border-color var(--dur-slow), box-shadow var(--dur-slow); }
+  .step.is-done .dot { background: var(--c); border-color: var(--c); color: #fff; }
+  .step.is-current .dot { box-shadow: 0 0 0 4px var(--c-ring); border-color: var(--c); }
+  .step.is-current:not(.is-done) .dot { color: var(--c); }
+  .step .t1 { font: 600 13px/18px var(--font-sans); color: var(--text-strong); }
+  .step .t2 { font: 400 12px/16px var(--font-sans); color: var(--text-muted); margin-top: -6px; }
+  .step.is-current .t1, .step.is-current .t2 { color: var(--c); }
+  .step:not(.is-done):not(.is-current) .t1 { color: var(--text-muted); font-weight: 500; }
+  .step[data-phase=brief]     { --c: var(--phase-brief);     --c-soft: var(--violet-soft);  --c-ring: rgba(124,58,237,.18); }
+  .step[data-phase=resources] { --c: var(--phase-resources); --c-soft: var(--teal-soft);    --c-ring: rgba(13,148,136,.18); }
+  .step[data-phase=plan]      { --c: var(--phase-plan);      --c-soft: var(--amber-soft);   --c-ring: rgba(245,158,11,.20); }
+  .step[data-phase=compile]   { --c: var(--phase-compile);   --c-soft: var(--emerald-soft); --c-ring: rgba(16,185,129,.18); }
+  .step[data-phase=run]       { --c: var(--phase-run);       --c-soft: var(--pink-soft);    --c-ring: rgba(219,39,119,.16); }
+  .step[data-phase=deploy]    { --c: var(--phase-deploy);    --c-soft: var(--orange-soft);  --c-ring: rgba(249,115,22,.18); }
+  .check { width: 14px; height: 14px; }
+
+  /* ---------- StickyFooter ---------- */
+  .footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 24px;
+            background: #fff; border-top: 1px solid var(--border); box-shadow: 0 -4px 16px rgba(15,23,42,.04); }
+  .footer p { margin: 0; font: 400 13px/20px var(--font-sans); color: var(--text-muted); }
+  .footer .actions { display: flex; gap: 10px; }
+
+  /* ---------- Run graph: AgentNode ---------- */
+  .graph { padding: 24px; display: flex; align-items: center; gap: 24px; overflow-x: auto;
+           background-image: radial-gradient(#E4E7F0 1px, transparent 1px); background-size: 16px 16px; }
+  .node { --c: var(--agent-1); position: relative; width: 220px; flex: none; background: #fff; border: 1px solid var(--border);
+          border-top: 3px solid var(--c); border-radius: 12px; padding: 12px 14px; box-shadow: var(--shadow-card); }
+  .node .idx { font: 500 11px/16px var(--font-mono); color: var(--text-muted); }
+  .node .name { font: 600 14px/20px var(--font-mono); color: var(--text-strong); white-space: nowrap; }
+  .node .meta { margin-top: 8px; font: 400 12px/18px var(--font-sans); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .node .badge { margin-top: 6px; }
+  .node.is-running { border-color: #BAE6FD; border-top-color: var(--c); }
+  .edge { width: 32px; height: 2px; flex: none; background: var(--border); }
+  .pill--sky { background: var(--sky-soft); color: #0369A1; }
+  .pill--amber { background: var(--amber-soft); color: #B45309; }
+  .pill--slate { background: var(--slate-soft); color: var(--slate); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="label">ProjectHeader (identical on every phase page)</div>
+  <header class="card ph">
+    <div>
+      <div class="ph-title">
+        <h1>RBI Compliance Tracker</h1>
+        <svg class="edit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+        <span class="pill pill--violet">sequential</span>
+        <span class="pill pill--emerald"><span class="ap-dot ap-dot--live" style="color:var(--emerald)"></span>Ready to run</span>
+      </div>
+      <div class="ph-id">90f84684834447de9bcc2ff26ca20763
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+      </div>
+    </div>
+    <button class="btn btn--outline">
+      <svg class="sparkle" viewBox="0 0 24 24"><defs><linearGradient id="g" x1="0" x2="1"><stop offset="0" stop-color="#7C3AED"/><stop offset=".55" stop-color="#DB2777"/><stop offset="1" stop-color="#F97316"/></linearGradient></defs><path fill="url(#g)" d="M12 2l1.8 5.2L19 9l-5.2 1.8L12 16l-1.8-5.2L5 9l5.2-1.8zM19 14l.9 2.1L22 17l-2.1.9L19 20l-.9-2.1L16 17l2.1-.9z"/></svg>
+      Assistant
+    </button>
+  </header>
+
+  <!-- Stepper states are the SAME on every page (they reflect the project). Only .is-current moves. -->
+  <template id="stepper">
+    <nav class="card stepper" aria-label="Project phases">
+      <ol class="steps">
+        <li><a class="step is-done" data-phase="brief" href="#brief"><span class="dot">✓</span><span class="t1">1. Brief</span><span class="t2">Defined</span></a></li>
+        <li><a class="step" data-phase="resources" href="#resources"><span class="dot">2</span><span class="t1">2. Resources</span><span class="t2">Optional</span></a></li>
+        <li><a class="step is-done link-done" data-phase="plan" href="#plan"><span class="dot">✓</span><span class="t1">3. Plan</span><span class="t2">v2 · 4 agents</span></a></li>
+        <li><a class="step is-done" data-phase="compile" href="#compile"><span class="dot">✓</span><span class="t1">4. Compile</span><span class="t2">Compiled</span></a></li>
+        <li><a class="step" data-phase="run" href="#run"><span class="dot">5</span><span class="t1">5. Run</span><span class="t2">Ready</span></a></li>
+        <li><a class="step" data-phase="deploy" href="#deploy"><span class="dot">6</span><span class="t1">6. Deploy</span><span class="t2">Not deployed</span></a></li>
+      </ol>
+    </nav>
+  </template>
+  <!-- link-done = connector to the NEXT step is coloured (this step AND the next are completed).
+       Here: Brief→Resources stays grey because Resources is not completed; Plan→Compile is amber. -->
+
+  <div class="label">PhaseStepper: current = Brief</div><div data-current="brief"></div>
+  <div class="label">PhaseStepper: current = Plan</div><div data-current="plan"></div>
+  <div class="label">PhaseStepper: current = Compile</div><div data-current="compile"></div>
+  <div class="label">PhaseStepper: current = Run</div><div data-current="run"></div>
+
+  <div class="label">StickyFooter (Plan example; fixed to the bottom of the content area in the app)</div>
+  <footer class="card footer">
+    <p>This plan is compiled and ready to run.</p>
+    <div class="actions">
+      <button class="btn btn--outline">← Back to Brief</button>
+      <button class="ap-btn-primary">Compile →</button>
+    </div>
+  </footer>
+
+  <div class="label">Run graph: AgentNode (full name on one line, status on its own line)</div>
+  <div class="card graph">
+    <div class="node" style="--c:var(--agent-1)"><div class="idx">01</div><div class="name">rbi_researcher</div><div class="badge"><span class="pill pill--emerald">✓ Completed</span></div><div class="meta">gemini-3.1-pro-preview · web_search</div></div>
+    <div class="edge" style="background:var(--emerald)"></div>
+    <div class="node is-running ap-node ap-node--running" style="--c:var(--agent-2)"><div class="idx">02</div><div class="name">compliance_analyst</div><div class="badge"><span class="pill pill--sky"><span class="ap-dot ap-dot--live" style="color:var(--sky)"></span>Running</span></div><div class="meta">gemini-3.1-pro-preview · web_search</div></div>
+    <div class="edge"></div>
+    <div class="node" style="--c:var(--agent-3)"><div class="idx">03</div><div class="name">action_planner</div><div class="badge"><span class="pill pill--amber">Queued</span></div><div class="meta">gemini-3.1-pro-preview · web_search</div></div>
+    <div class="edge"></div>
+    <div class="node" style="--c:var(--agent-4)"><div class="idx">04</div><div class="name">report_formatter</div><div class="badge"><span class="pill pill--slate">Idle</span></div><div class="meta">gemini-3.1-pro-preview · web_search</div></div>
+  </div>
+</div>
+<script>
+  const tpl = document.getElementById('stepper');
+  document.querySelectorAll('[data-current]').forEach(slot => {
+    const node = tpl.content.cloneNode(true);
+    node.querySelector(`[data-phase="${slot.dataset.current}"]`).classList.add('is-current');
+    node.querySelector(`[data-phase="${slot.dataset.current}"]`).setAttribute('aria-current', 'page');
+    slot.replaceWith(node);
+  });
+</script>
+</body>
+</html>

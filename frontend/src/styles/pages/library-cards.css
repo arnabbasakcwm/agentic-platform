@@ -1,0 +1,284 @@
+
+/* ================================================================ library item cards
+   Data sources and MCP servers: one collapsible card per item, its parts as tabs. */
+.itemlist {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-xs);
+}
+
+.itemcard {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+}
+
+.itemcard--open {
+  border-color: var(--border-strong);
+}
+
+.itemcard__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-field) var(--space-sm) var(--space-field) var(--space-field);
+  min-height: 56px;
+}
+
+.itemcard__toggle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: var(--space-xs);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.itemcard__toggle:hover {
+  background: var(--surface-sunken);
+}
+
+.itemcard__toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
+}
+
+.itemcard__chev {
+  flex: none;
+  display: grid;
+  place-items: center;
+  color: var(--text-muted);
+  transition: transform 0.15s;
+}
+
+.itemcard--open .itemcard__chev {
+  transform: rotate(90deg);
+}
+
+.itemcard__text {
+  min-width: 0;
+  max-width: 100%;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-sm);
+}
+
+.itemcard__title {
+  flex: none;
+  max-width: 50%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-caption);
+  font-weight: 600;
+}
+
+.itemcard__summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-caption);
+  color: var(--text-muted);
+}
+
+.itemcard__status,
+.itemcard__actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.itemcard__body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-md);
+  padding: var(--space-md);
+  border-top: 1px solid var(--border);
+}
+
+.itemcard__tabs {
+  margin-bottom: 0;
+  justify-self: start;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+/* Tabs keep their width; on a narrow card the strip scrolls sideways. */
+.itemcard__tabs .segmented__item {
+  flex: none;
+  white-space: nowrap;
+}
+
+.itemcard__tabs .count-chip {
+  margin-left: var(--space-field);
+}
+
+.itemstoolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.itemstoolbar__count {
+  font-size: var(--text-caption);
+}
+
+.itemstoolbar__spacer {
+  flex: 1;
+}
+
+.itemstoolbar__filter {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 0 1 260px;
+  min-width: 160px;
+  color: var(--text-muted);
+}
+
+.itemstoolbar__filter .icon {
+  position: absolute;
+  left: var(--space-sm);
+  pointer-events: none;
+}
+
+.itemstoolbar__filter input {
+  padding-left: var(--space-xxl);
+}
+
+.mcptools__filter {
+  flex-basis: auto;
+  max-width: 320px;
+}
+
+.mcpcreds {
+  display: grid;
+  gap: var(--space-xs);
+  margin: 0;
+  font-size: var(--text-caption);
+}
+
+.mcpcreds > div {
+  display: grid;
+  grid-template-columns: 140px minmax(0, 1fr);
+  gap: var(--space-sm);
+}
+
+.mcpcreds dt {
+  color: var(--text-muted);
+}
+
+.mcpcreds dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Compact tool rows: name, tags and Details on one line; the description is one line
+   until the row's details are open. */
+.mcptools__item {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+/* Details: a small down arrow that flips up while the row is open. */
+.mcptools__more {
+  grid-column: auto;
+  justify-self: end;
+  width: 28px;
+  height: 28px;
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.mcptools__more .icon {
+  transition: transform 0.15s;
+}
+
+.mcptools__item--open .mcptools__more .icon {
+  transform: rotate(180deg);
+}
+
+/* The description stays in the name column, so it ends before the tags and the arrow,
+   and never runs longer than a comfortable line. */
+.mcptools__desc {
+  grid-column: 1 / 2;
+  max-width: 80ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mcptools__item--open .mcptools__desc {
+  white-space: normal;
+}
+
+.mcptools__none {
+  padding: var(--space-xs) 0;
+  font-size: var(--text-caption);
+}
+
+@media (max-width: 640px) {
+  .itemcard__head {
+    flex-wrap: wrap;
+    row-gap: 0;
+  }
+
+  .itemcard__toggle {
+    flex-basis: 100%;
+  }
+
+  .itemcard__text {
+    flex: 1;
+    flex-direction: column;
+    gap: var(--space-2xs);
+  }
+
+  .itemcard__summary {
+    max-width: 100%;
+  }
+
+  .itemcard__title {
+    max-width: 100%;
+  }
+
+  .itemcard__status {
+    margin-left: var(--space-xxl);
+  }
+
+  .itemcard__actions {
+    margin-left: auto;
+  }
+
+  .mcptools__item {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  /* Name and Details on the first line, the tags under them. */
+  .mcptools__tags {
+    order: 1;
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+    margin-left: var(--space-lg);
+  }
+
+  .mcptools__desc,
+  .mcptools__schema {
+    order: 2;
+  }
+
+  .mcpcreds > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+}
+

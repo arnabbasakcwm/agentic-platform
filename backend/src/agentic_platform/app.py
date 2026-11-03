@@ -238,8 +238,23 @@ class LoginRequest(BaseModel):
     password: str = Field(max_length=128)
 
 
+class ModelChoice(BaseModel):
+    provider: str = Field(min_length=1, max_length=40)
+    model: str = Field(min_length=1, max_length=120)
+
+
 class ReviseRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
+    # The Assistant's chips. Each is optional and limits only this change: omitted, the
+    # revision works as before.
+    # Every agent of the revised plan uses this model.
+    model: ModelChoice | None = None
+    # At most this many agents.
+    agent_count: int | None = Field(default=None, gt=0, le=MAX_AGENTS)
+    # The registry tools the planner may use. Switching an external tool on here is the
+    # project's opt-in to it (an explicit user action, like PUT /agents); the message
+    # text never is. Knowledge, data and MCP tools follow the project's attachments.
+    tools: list[str] | None = Field(default=None, max_length=50)
 
 
 class DeployedInvokeRequest(BaseModel):
@@ -529,10 +544,15 @@ def _has_ready_knowledge(project: ProjectRecord) -> bool:
     return any(d.status == "ready" for d in _knowledge.list_documents(project.tenant_id, project.id))
 
 
-def _offered_tools(project: ProjectRecord) -> list[str]:
+def _offered_tools(project: ProjectRecord, chosen: list[str] | None = None) -> list[str]:
     """Tools the planner may give this project's agents: the built-ins, the external
-    tools this project opted into, and knowledge_search once a ready file is attached."""
-    tools = set(default_tool_names()) | set(project.side_effect_tools_enabled)
+    tools this project opted into, and knowledge_search once a ready file is attached.
+    `chosen` (the Assistant's Tools chip) replaces the built-in and external part; the
+    tools that follow attachments are added either way."""
+    if chosen is None:
+        tools = set(default_tool_names()) | set(project.side_effect_tools_enabled)
+    else:
+        tools = {t for t in chosen if t not in KNOWLEDGE_TOOLS | DATA_TOOLS and not is_mcp_tool(t)}
     if _has_ready_knowledge(project):
         tools |= KNOWLEDGE_TOOLS
     if _attached_sources(project):
@@ -2179,15 +2199,29 @@ def revise_project(
     makes a new plan version, which has to be compiled again before it can run.
     """
     project = _get_project(project_id, user)
+    current_models = {(a.llm.provider, a.llm.model) for a in project.plan.agents}
+    if req.tools is not None:
+        unknown = [t for t in req.tools if t not in TOOL_REGISTRY]
+        if unknown:
+            raise KnowledgeError(f"unknown tool(s): {', '.join(unknown)}", status=422)
+    if req.model is not None:
+        choice = (req.model.provider, req.model.model)
+        if choice not in current_models and not _model_allowed(*choice):
+            raise KnowledgeError(f"not an available model: {'/'.join(choice)}", status=422)
     # A revision may use any built-in tool, but external tools only if this project
-    # already opted into them — a chat message is not an opt-in.
-    allowed_tools = _offered_tools(project)
-    allowed_llms = [{"provider": p, "model": m} for p, m in DEFAULT_MODELS.items()]
-    allowed_llms += [{"provider": "bedrock", "model": m["model"]} for m in recommended_bedrock_models()]
-    for agent in project.plan.agents:
-        current = {"provider": agent.llm.provider, "model": agent.llm.model}
-        if current not in allowed_llms:
-            allowed_llms.append(current)
+    # already opted into them — a chat message is not an opt-in. The Tools chip
+    # (req.tools) is: switching a tool on there is an explicit user action.
+    allowed_tools = _offered_tools(project, req.tools)
+    if req.model is not None:
+        # The Model chip: every agent of the revised plan uses this model.
+        allowed_llms = [{"provider": req.model.provider, "model": req.model.model}]
+    else:
+        allowed_llms = [{"provider": p, "model": m} for p, m in DEFAULT_MODELS.items()]
+        allowed_llms += [{"provider": "bedrock", "model": m["model"]} for m in recommended_bedrock_models()]
+        for provider, model in current_models:
+            current = {"provider": provider, "model": model}
+            if current not in allowed_llms:
+                allowed_llms.append(current)
 
     collector = UsageCollector()
     try:
@@ -2201,10 +2235,18 @@ def revise_project(
             usage=collector,
             tool_notes=_mcp_tool_notes(_attached_mcp(project)),
             data_tables=[t.id for s in _attached_sources(project) for t in s.tables],
+            requested_agent_count=req.agent_count,
         )
     finally:
         _record_usage(user.id, project_id, collector.entries(), run_id=uuid.uuid4().hex)
     changed = revision.brief != project.brief or revision.plan != project.plan
+    # The Tools chip's external tools become the project's opt-ins, plus any the saved plan
+    # still uses (so a plan never uses a tool the project hasn't opted into).
+    enabled = None
+    if req.tools is not None:
+        saved_plan = revision.plan if changed else project.plan
+        used = {t for a in saved_plan.agents for t in a.tools}
+        enabled = sorted((set(req.tools) | used) & SIDE_EFFECT_TOOLS)
     reply = ChatMessage(
         role="assistant",
         content=revision.reply,
@@ -2216,6 +2258,7 @@ def revise_project(
         [ChatMessage(role="user", content=req.message), reply],
         brief=revision.brief if changed else None,
         plan=revision.plan if changed else None,
+        side_effect_tools_enabled=enabled,
     )
     if updated is None:
         raise PlanConflictError(project_id)

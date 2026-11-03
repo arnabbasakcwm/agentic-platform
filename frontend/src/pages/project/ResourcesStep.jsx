@@ -1,5 +1,5 @@
 import { Icon } from "../../components/icons.jsx";
-import { ActionBar, LinkButton } from "../../components/ui.jsx";
+import { ActionBar, LinkButton, SlidingThumb } from "../../components/ui.jsx";
 import { resourceCounts } from "../../lib/resources.js";
 import { RESOURCE_TABS, navigate, paths } from "../../lib/router.js";
 import { DataStep } from "./DataStep.jsx";
@@ -51,6 +51,7 @@ export function ResourcesStep({
             role="tablist"
             aria-label="Resources"
           >
+            <SlidingThumb on={current} />
             {RESOURCE_TABS.map((key) => (
               <button
                 key={key}
@@ -105,7 +106,7 @@ export function ResourcesStep({
       <ActionBar note={`Optional. ${TABS[current].note}`}>
         <LinkButton href={paths.project(id, "brief")}>
           <Icon name="arrowLeft" />
-          Brief
+          Back to Brief
         </LinkButton>
         <LinkButton variant="primary" href={paths.project(id, "plan")}>
           Review plan

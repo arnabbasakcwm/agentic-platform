@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
+import { settled } from "./settled.js";
 
 // Models that can't call tools: shown as such, disabled for agents that have tools (or
 // route), allowed for tool-less agents; an unchecked model is checked when chosen; the
@@ -8,7 +9,7 @@ const API = "http://127.0.0.1:8765";
 const PROJECT = "e2e0travel0project";
 
 async function axeProblems(page, label) {
-  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
+  const results = await new AxeBuilder({ page: await settled(page) }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
   return results.violations
     .filter((v) => ["serious", "critical"].includes(v.impact))
     .map((v) => `${label}: ${v.id}: ${v.nodes.slice(0, 3).map((n) => n.target.join(" ")).join(" | ")}`);
@@ -84,12 +85,14 @@ test("a new project on a model without tool calling asks for no tools", async ({
   await page.addInitScript(() => sessionStorage.setItem("agentic-platform.token", "e2e-token"));
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto("/#/new");
-  await page.getByRole("button", { name: /Auto team size/ }).click();
   await page.getByRole("button", { name: /^Model/ }).click();
   await page.getByRole("option", { name: /Gemma 3 12B/ }).click();
-  const tray = page.locator("#composer-settings");
-  await expect(tray.getByRole("status")).toContainText("Gemma 3 12B IT can't call tools");
-  await expect(tray.getByRole("button", { name: "lookup" })).toBeDisabled();
+  await page.getByRole("button", { name: /^Tools/ }).click();
+  const tools = page.getByRole("dialog", { name: "Tools" });
+  await expect(tools.getByRole("status")).toContainText("Gemma 3 12B IT can't call tools");
+  await expect(tools.getByRole("switch", { name: "lookup" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: /^Tools/ })).toContainText("0");
+  await page.keyboard.press("Escape");
   await page.getByLabel("Task description").fill("Explain bike rebalancing");
   // Sending talks it through first; planning is the explicit Create plan step.
   await page.getByRole("button", { name: "Send", exact: true }).click();

@@ -1,0 +1,443 @@
+/* ---------------------------------------------------------------- orchestration */
+.run-flow__counts {
+  font-size: var(--text-caption);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The canvas: a 16px dot grid (reference), tall enough for the 112px nodes. */
+.diagram {
+  height: clamp(280px, 38vh, 440px);
+  border-bottom: 1px solid var(--border);
+  background-color: var(--surface);
+  background-image: radial-gradient(var(--border-strong) 1px, transparent 1px);
+  background-size: 16px 16px;
+}
+
+.diagram .react-flow {
+  --xy-background-color: transparent;
+  --xy-controls-button-background-color: var(--surface);
+  --xy-controls-button-background-color-hover: var(--surface-sunken);
+  --xy-controls-button-color: var(--text);
+  --xy-controls-button-color-hover: var(--text);
+  --xy-controls-button-border-color: var(--border);
+  --xy-attribution-background-color: transparent;
+}
+
+.diagram .react-flow__attribution a {
+  color: var(--text-muted);
+}
+
+.diagram .react-flow__handle {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.diagram .react-flow__node {
+  cursor: default;
+}
+
+.run-flow__foot {
+  display: grid;
+  gap: var(--space-md);
+  padding: var(--space-md);
+}
+
+/* Agent nodes — AgentNode (DESIGN.md §5.9), ported from design/reference/phase-chrome.html:
+   the index, the full agent key on one line, the status pill on its own line, then one
+   muted meta line (model · tools); a 3px top border in the agent's colour. Every state
+   from design/baseline/run-graph-animations.md keeps a cue that isn't colour alone:
+   the pill's label and icon, a 2px border while running, a dashed border when skipped. */
+.flow-node {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: var(--node-w);
+  padding: var(--space-sm) var(--space-btn);
+  border: 1px solid var(--border);
+  border-top: 3px solid var(--agent-c, var(--border-strong));
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  box-shadow: var(--shadow-card);
+  transition: border-color var(--dur-slow) var(--ease-out), background-color var(--dur-slow) var(--ease-out),
+    box-shadow var(--dur-slow) var(--ease-out);
+}
+
+.flow-node:hover {
+  box-shadow: var(--shadow-raised);
+}
+
+.flow-node:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 3px;
+}
+
+.flow-node__idx {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  font-family: var(--mono);
+  font-size: var(--text-overline);
+  font-weight: 500;
+  line-height: var(--lh-eyebrow);
+  color: var(--text-muted);
+}
+
+.flow-node__tag {
+  padding: 0 var(--space-field);
+  border-radius: var(--radius-xs);
+  background: var(--violet-soft);
+  color: var(--violet-ink);
+  font-family: var(--font);
+  font-size: var(--text-overline);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: var(--track-overline);
+}
+
+/* The full agent key, never wrapped or cut: the node widens to fit (RunDiagram). */
+.flow-node__name {
+  font-family: var(--mono);
+  font-size: var(--text-body-sm);
+  font-weight: 600;
+  line-height: var(--lh-body-sm);
+  color: var(--text-strong);
+  white-space: nowrap;
+}
+
+.flow-node__state {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  margin-top: var(--space-field);
+}
+
+.flow-node__pill {
+  height: 22px;
+  padding: 0 var(--space-xs);
+}
+
+.flow-node__icon {
+  display: inline-grid;
+}
+
+/* Live elapsed time while running, the duration once done. */
+.flow-node__time {
+  font-size: var(--text-eyebrow);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.flow-node__meta {
+  max-width: 100%;
+  margin-top: var(--space-xs);
+  font-size: var(--text-eyebrow);
+  line-height: var(--lh-eyebrow);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Idle: a plain card with an "Idle" pill. */
+.flow-node--idle {
+  border-style: solid;
+}
+
+/* Queued: a sunken surface (never faded: faded text would fail contrast) and an amber
+   "Queued" pill with a clock. */
+.flow-node--queued {
+  background: var(--surface-sunken);
+}
+
+/* Running: a 2px sky border (thicker, so it isn't told by colour alone), the spinner in
+   its pill, the live time, and a sky glow that pulses. The glow is its own layer whose
+   opacity animates — compositor-only, so a run with many nodes stays smooth. */
+.flow-node--running {
+  border: 2px solid var(--running-border);
+  border-top: 3px solid var(--agent-c, var(--sky));
+  padding: calc(var(--space-sm) - var(--space-px)) calc(var(--space-btn) - var(--space-px));
+}
+
+.flow-node--running::after {
+  content: "";
+  position: absolute;
+  inset: calc(-1 * var(--space-field));
+  border-radius: calc(var(--radius-card) + var(--space-field));
+  box-shadow: 0 0 0 4px var(--sky-ring), 0 0 18px var(--glow-running);
+  pointer-events: none;
+  animation: node-glow 1.6s ease-in-out infinite;
+}
+
+@keyframes node-glow {
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+/* Completed: the border turns emerald (400ms) and the check pops in the pill. */
+.flow-node--completed {
+  border-color: var(--success-border);
+  border-top-color: var(--agent-c, var(--emerald));
+}
+
+/* Failed: a rose border and tint, a × in the pill, the error as a tooltip, and one short
+   shake when it fails. */
+.flow-node--failed {
+  border-color: var(--danger-border);
+  border-top-color: var(--agent-c, var(--rose));
+  background: var(--danger-soft);
+  animation: ap-shake 300ms ease-in-out 1;
+}
+
+/* Skipped: dashed border, the canvas showing through, no shadow, muted key. */
+.flow-node--skipped {
+  border-style: dashed;
+  border-color: var(--field-border);
+  border-top-style: solid;
+  border-top-color: var(--agent-c, var(--field-border));
+  background: var(--canvas);
+  box-shadow: none;
+}
+
+.flow-node--skipped .flow-node__name {
+  color: var(--text-muted);
+}
+
+/* Start / End terminals */
+.flow-terminal {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-field);
+  width: 76px;
+  height: 36px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: var(--text-overline);
+  font-weight: 600;
+  letter-spacing: var(--track-overline);
+  text-transform: uppercase;
+  box-shadow: var(--shadow-card);
+  transition: border-color var(--dur-slow) var(--ease-out), color var(--dur-slow) var(--ease-out);
+}
+
+.flow-terminal--completed {
+  border-color: var(--success-border);
+  color: var(--success);
+}
+
+.flow-terminal--failed {
+  border-color: var(--danger-border);
+  color: var(--danger);
+}
+
+/* Edges */
+.flow-edge .react-flow__edge-path {
+  stroke: var(--border-strong);
+  stroke-width: 1.5;
+  transition: stroke var(--dur-slow) var(--ease-out);
+}
+
+.flow-edge--done .react-flow__edge-path {
+  stroke: var(--edge-color);
+  stroke-width: 2;
+}
+
+.flow-edge--failed .react-flow__edge-path {
+  stroke: var(--rose);
+}
+
+.flow-edge--active .react-flow__edge-path {
+  stroke: color-mix(in srgb, var(--edge-color) 35%, transparent);
+  stroke-width: 2;
+}
+
+/* Data in flight: dashes in the agent's colour travelling along the edge. */
+.flow-edge__dash {
+  stroke: var(--edge-color);
+  stroke-width: 2.5;
+  stroke-dasharray: 6 10;
+  stroke-linecap: round;
+  animation: edge-flow 0.9s linear infinite;
+}
+
+@keyframes edge-flow {
+  to {
+    stroke-dashoffset: -32;
+  }
+}
+
+/* The next hand-off (a queued agent behind a running one): grey dashes flowing
+   (.ap-edge-flow), quieter than data in flight. */
+.flow-edge--pending .react-flow__edge-path {
+  stroke-width: 1.5;
+}
+
+/* Legend: one dot per agent, then one swatch per state, each mirroring the node. */
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--space-sm) var(--space-lg);
+  font-size: var(--text-caption);
+  color: var(--text-muted);
+}
+
+.legend ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-field) var(--space-btn);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-field);
+}
+
+.legend__states::before {
+  content: "Status";
+  align-self: center;
+  margin-right: var(--space-xxs);
+  font-size: var(--text-overline);
+  font-weight: 600;
+  letter-spacing: var(--track-overline);
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.legend__dot {
+  width: 9px;
+  height: 9px;
+  border-radius: var(--radius-full);
+  flex-shrink: 0;
+}
+
+.legend__swatch {
+  width: 14px;
+  height: 10px;
+  border-radius: var(--radius-xs);
+  border: 1.5px solid var(--border-strong);
+  background: var(--surface);
+}
+
+.legend__swatch--queued {
+  border-color: var(--amber);
+  background: var(--surface-sunken);
+}
+
+.legend__swatch--running {
+  border-width: 2px;
+  border-color: var(--sky);
+  background: var(--sky-soft);
+}
+
+.legend__swatch--completed {
+  border-color: var(--emerald);
+}
+
+.legend__swatch--failed {
+  border-color: var(--rose);
+  background: var(--rose-soft);
+}
+
+.legend__swatch--skipped {
+  border-style: dashed;
+}
+
+/* Timeline */
+.timeline {
+  display: grid;
+  gap: var(--space-field);
+}
+
+.timeline__row {
+  display: grid;
+  grid-template-columns: minmax(110px, 180px) minmax(0, 1fr) 72px;
+  align-items: center;
+  gap: var(--space-sm);
+  font-size: var(--text-caption);
+}
+
+.timeline__label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-field);
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text);
+  font-weight: 500;
+}
+
+.timeline__track {
+  position: relative;
+  height: 10px;
+  border-radius: var(--radius-full);
+  background: var(--surface-sunken);
+  overflow: hidden;
+}
+
+.timeline__bar {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-full);
+  background: var(--agent-color);
+  transform-origin: left center;
+  /* No transition: the bars are redrawn on every clock tick, and a transition would
+     always show them one tick behind the real timings. */
+}
+
+.timeline__bar--running {
+  opacity: 0.85;
+  animation: bar-breathe 1.2s ease-in-out infinite;
+}
+
+.timeline__bar--failed {
+  background: var(--danger);
+}
+
+.timeline__bar--skipped {
+  opacity: 0.35;
+}
+
+@keyframes bar-breathe {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+.timeline__time {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-caption);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.timeline__axis {
+  display: flex;
+  justify-content: space-between;
+  margin-left: calc(min(var(--timeline-label-w), 25%) + var(--space-sm));
+  margin-right: calc(var(--timeline-value-w) + var(--space-sm));
+  font-size: var(--text-eyebrow);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+

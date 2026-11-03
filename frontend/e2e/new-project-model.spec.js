@@ -16,16 +16,15 @@ test("the chosen model survives navigation and is what the agents get", async ({
   await page.setViewportSize({ width: 1280, height: 900 });
 
   await page.goto("/#/new");
-  await page.getByRole("button", { name: /Auto team size/ }).click();
   await page.getByRole("button", { name: /^Model/ }).click();
   await page.getByRole("option", { name: /Claude Haiku 4\.5/ }).click();
-  await expect(page.getByRole("button", { name: /Auto team size/ })).toContainText("Claude Haiku 4.5");
+  await expect(page.getByRole("button", { name: /^Model/ })).toContainText("Claude Haiku 4.5");
 
   // Away to Data sources and back: the choice is still there.
   await page.getByRole("link", { name: "Data sources" }).click();
   await expect(page.getByRole("heading", { name: "Data sources", level: 1 })).toBeVisible();
   await page.getByRole("link", { name: "New project" }).click();
-  await expect(page.getByRole("button", { name: /Auto team size/ })).toContainText("Claude Haiku 4.5");
+  await expect(page.getByRole("button", { name: /^Model/ })).toContainText("Claude Haiku 4.5");
 
   await page.getByLabel("Task description").fill("Find the busiest bike stations");
   // Sending talks it through first; planning is the explicit Create plan step.

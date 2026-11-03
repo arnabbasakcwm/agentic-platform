@@ -1,3 +1,4 @@
+import { Activity, Coins, UserCheck, Users } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Button,
@@ -153,21 +154,40 @@ export function AdminPage({ me }) {
       ) : (
         <div className="stack">
           <div className="kstats" aria-label="Platform totals for the period">
-            <Stat label="Users" value={formatCount(data.totals.users)} />
+            <Stat
+              label="Users"
+              tone="violet"
+              icon={Users}
+              value={formatCount(data.totals.users)}
+              amount={data.totals.users}
+              format={(v) => formatCount(Math.round(v))}
+            />
             <Stat
               label="Active users"
+              tone="teal"
+              icon={UserCheck}
               value={formatCount(data.totals.active_users)}
+              amount={data.totals.active_users}
+              format={(v) => formatCount(Math.round(v))}
               hint={`in ${data.days} days`}
             />
             <Stat
               label="Tokens"
+              tone="sky"
+              icon={Activity}
               value={formatTokens(
                 data.totals.input_tokens + data.totals.output_tokens,
               )}
+              amount={data.totals.input_tokens + data.totals.output_tokens}
+              format={(v) => formatTokens(Math.round(v))}
             />
             <Stat
               label="Estimated cost"
+              tone="pink"
+              icon={Coins}
               value={`~${formatCost(data.totals.cost, currency)}`}
+              amount={data.totals.cost}
+              format={(v) => `~${formatCost(v, currency)}`}
               hint={
                 data.totals.unpriced_tokens > 0
                   ? `${currency} · some models unpriced`

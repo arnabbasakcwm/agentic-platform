@@ -1,0 +1,924 @@
+/* ---------------------------------------------------------------- stepper */
+/* PhaseStepper (DESIGN.md §5.4), ported 1:1 from design/reference/phase-chrome.html:
+   a white card, six equal columns, a 28px circle over a two-line label, 2px connectors
+   from one circle's edge to the next. */
+.stepper {
+  padding: var(--space-card);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+  margin-bottom: var(--space-lg);
+}
+
+.steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.steps__item {
+  position: relative;
+  min-width: 0;
+}
+
+.step {
+  --c: var(--slate);
+  --c-ink: var(--slate-ink);
+  --c-soft: var(--slate-soft);
+  --c-ring: var(--sky-ring);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: var(--space-sm) var(--space-xs);
+  border-radius: var(--radius-control);
+  text-decoration: none;
+  color: inherit;
+  text-align: center;
+  transition: background var(--dur) var(--ease-out);
+}
+
+.step[data-phase="brief"],
+.step__line[data-phase="brief"] {
+  --c: var(--phase-brief);
+  --c-ink: var(--violet-ink);
+  --c-soft: var(--violet-soft);
+  --c-ring: var(--violet-ring);
+}
+
+.step[data-phase="resources"],
+.step__line[data-phase="resources"] {
+  --c: var(--phase-resources);
+  --c-ink: var(--teal-ink);
+  --c-soft: var(--teal-soft);
+  --c-ring: var(--teal-ring);
+}
+
+.step[data-phase="plan"],
+.step__line[data-phase="plan"] {
+  --c: var(--phase-plan);
+  --c-ink: var(--amber-ink);
+  --c-soft: var(--amber-soft);
+  --c-ring: var(--amber-ring);
+}
+
+.step[data-phase="compile"],
+.step__line[data-phase="compile"] {
+  --c: var(--phase-compile);
+  --c-ink: var(--emerald-ink);
+  --c-soft: var(--emerald-soft);
+  --c-ring: var(--emerald-ring);
+}
+
+.step[data-phase="run"],
+.step__line[data-phase="run"] {
+  --c: var(--phase-run);
+  --c-ink: var(--pink-ink);
+  --c-soft: var(--pink-soft);
+  --c-ring: var(--pink-ring);
+}
+
+.step[data-phase="deploy"],
+.step__line[data-phase="deploy"] {
+  --c: var(--phase-deploy);
+  --c-ink: var(--orange-ink);
+  --c-soft: var(--orange-soft);
+  --c-ring: var(--orange-ring);
+}
+
+.step:hover {
+  background: var(--surface-hover);
+}
+
+.step--current,
+.step--current:hover {
+  background: var(--c-soft);
+}
+
+/* The connector: from this circle's right edge to the next circle's left edge, at the
+   circles' centre line (12px padding + 14px radius − 1px half line). */
+.step__line {
+  position: absolute;
+  top: var(--step-line-top);
+  left: calc(50% + var(--step-line-inset));
+  width: calc(100% - 2 * var(--step-line-inset));
+  height: 2px;
+  border-radius: var(--radius-pill);
+  background: var(--border);
+  z-index: 1;
+  pointer-events: none;
+}
+
+.step__line--done {
+  background: var(--c);
+}
+
+.step__dot {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  color: var(--text-muted);
+  font-size: var(--text-eyebrow);
+  font-weight: 600;
+  line-height: var(--lh-tight);
+  transition: background var(--dur-slow) var(--ease-out), border-color var(--dur-slow) var(--ease-out),
+    box-shadow var(--dur-slow) var(--ease-out), color var(--dur-slow) var(--ease-out);
+}
+
+.step--done .step__dot {
+  background: var(--c);
+  border-color: var(--c);
+  color: var(--on-primary);
+}
+
+.step--current .step__dot {
+  border-color: var(--c);
+  box-shadow: 0 0 0 4px var(--c-ring);
+}
+
+.step--current:not(.step--done) .step__dot {
+  color: var(--c-ink);
+}
+
+/* A run in progress: the step's circle pulses in its phase colour. */
+.step--busy .step__dot {
+  color: var(--c-ink);
+  border-color: var(--c);
+}
+
+.step--busy .step__dot::after {
+  content: "";
+  position: absolute;
+  inset: calc(-1 * var(--space-2xs));
+  border-radius: var(--radius-full);
+  border: 2px solid var(--c);
+  pointer-events: none;
+  animation: ap-pulse-ring 1.6s ease-out infinite;
+}
+
+.step__label {
+  display: block;
+  max-width: 100%;
+  font-size: var(--text-caption);
+  font-weight: 600;
+  line-height: var(--lh-caption);
+  color: var(--text-strong);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.step__hint {
+  display: block;
+  max-width: 100%;
+  margin-top: calc(-1 * var(--space-field));
+  font-size: var(--text-eyebrow);
+  line-height: var(--lh-eyebrow);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.step--current .step__label,
+.step--current .step__hint {
+  color: var(--c-ink);
+}
+
+.step:not(.step--done):not(.step--current) .step__label {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+/* Under 900px the labels collapse to circles only; the link's title is the tooltip. */
+@media (max-width: 900px) {
+  .stepper {
+    padding: var(--space-sm);
+  }
+
+  .step__label,
+  .step__hint {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .step {
+    padding: var(--space-xs) var(--space-xxs);
+  }
+
+  .step__line {
+    top: var(--step-line-top-compact);
+  }
+}
+
+/* ---------------------------------------------------------------- panels */
+/* Card (DESIGN.md §5.6): white, 12px radius, hairline border, soft shadow; title and a
+   muted subtitle inline, an optional action on the right. */
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+  min-width: 0;
+}
+
+.panel + .panel {
+  margin-top: var(--space-card-gap);
+}
+
+.panel__header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-xs) var(--space-sm);
+  padding: var(--space-md) var(--space-lg);
+  border-bottom: 1px solid var(--border);
+}
+
+.panel__title {
+  font-size: var(--text-section);
+  font-weight: 600;
+  line-height: var(--lh-h3);
+  letter-spacing: var(--track-heading);
+  color: var(--text-strong);
+}
+
+.panel__sub {
+  font-size: var(--text-caption);
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.panel__spacer {
+  flex: 1;
+}
+
+.panel__body {
+  padding: var(--space-lg);
+}
+
+.panel__footer {
+  padding: var(--space-md) var(--space-lg);
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+/* Run · Stop side by side under the run input. */
+.run-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: var(--space-card-gap);
+  align-items: start;
+}
+
+.split--even {
+  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+}
+
+.split__aside {
+  position: sticky;
+  top: 0;
+}
+
+.stack > * + * {
+  margin-top: var(--space-card-gap);
+}
+
+/* ---------------------------------------------------------------- action bar */
+/* StickyFooter (DESIGN.md §5.5), ported from the reference: a full-width white bar fixed
+   to the bottom of the content area, a hairline top border and a soft upward shadow;
+   helper text left (13px muted), "← Back to X" and the primary "Next →" right. */
+.actionbar {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: var(--space-btn) var(--space-lg);
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  box-shadow: var(--shadow-footer);
+}
+
+.actionbar__note {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-caption);
+  line-height: var(--lh-caption);
+}
+
+.actionbar__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-btn-y);
+  flex-shrink: 0;
+}
+
+/* ---------------------------------------------------------------- forms */
+.field {
+  display: block;
+  margin-bottom: var(--space-md);
+}
+
+.field:last-child {
+  margin-bottom: 0;
+}
+
+.field__label {
+  display: block;
+  font-size: var(--text-caption);
+  font-weight: 500;
+  line-height: var(--lh-caption);
+  color: var(--text-strong);
+  margin-bottom: var(--space-field);
+}
+
+.field__hint {
+  display: block;
+  font-size: var(--text-caption);
+  line-height: var(--lh-caption);
+  color: var(--text-muted);
+  margin-top: var(--space-field);
+}
+
+input[type="text"],
+input[type="number"],
+input[type="email"],
+input[type="url"],
+input[type="search"],
+input[type="password"],
+select,
+textarea {
+  width: 100%;
+  padding: var(--space-xs) var(--space-sm);
+  font-family: inherit;
+  font-size: var(--text-body-sm);
+  line-height: var(--lh-body-sm);
+  color: var(--text-strong);
+  background: var(--surface);
+  border: 1px solid var(--field-border);
+  border-radius: var(--radius-control);
+  outline: none;
+  transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-faint);
+}
+
+textarea {
+  resize: vertical;
+  min-height: 96px;
+  line-height: var(--lh-body);
+}
+
+textarea.mono {
+  font-family: var(--mono);
+  font-size: var(--text-code);
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--ring);
+}
+
+input:disabled,
+select:disabled,
+textarea:disabled {
+  background: var(--surface-sunken);
+  color: var(--text-subtle);
+  cursor: not-allowed;
+}
+
+a:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.counter {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--field-border);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.counter button {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.counter button:hover:not(:disabled) {
+  background: var(--surface-sunken);
+  color: var(--text-strong);
+}
+
+.counter button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.counter__value {
+  min-width: 40px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-body-sm);
+  font-weight: 500;
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  line-height: 32px;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-field);
+  margin-top: var(--space-xs);
+}
+
+.chip {
+  padding: var(--space-xxs) var(--space-sm);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--text-eyebrow);
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.chip:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  color: var(--text-strong);
+}
+
+.switch {
+  position: relative;
+  width: 32px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--border-strong);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.switch::after {
+  content: "";
+  position: absolute;
+  top: var(--space-2xs);
+  left: var(--space-2xs);
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-full);
+  background: var(--on-primary);
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.switch[aria-checked="true"] {
+  background: var(--primary);
+}
+
+.switch[aria-checked="true"]::after {
+  transform: translateX(14px);
+}
+
+.switch:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.toollist {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-field);
+}
+
+.toolrow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-xs) var(--space-sm);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+
+.toolrow:hover {
+  border-color: var(--border-strong);
+}
+
+.toolrow--on {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
+.toolrow__text {
+  flex: 1;
+  min-width: 0;
+}
+
+.toolrow__name {
+  font-family: var(--mono);
+  font-size: var(--text-code);
+  font-weight: 500;
+}
+
+.toolrow__desc {
+  display: block;
+  font-size: var(--text-caption);
+  color: var(--text-muted);
+}
+
+.grouplabel {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  margin: var(--space-md) 0 var(--space-xs);
+  font-size: var(--text-overline);
+  font-weight: 600;
+  letter-spacing: var(--track-overline);
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.grouplabel:first-child {
+  margin-top: 0;
+}
+
+/* ---------------------------------------------------------------- buttons */
+/* Secondary (DESIGN.md §5.8): white with a hairline border, 10px radius, 38px tall;
+   hover lifts 1px with a raised shadow. Primary adds .ap-btn-primary (motion.css): the
+   gradient fill, its glow and the slow shimmer. Ghost is text only. */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-xs);
+  min-height: 38px;
+  padding: 0 var(--space-md);
+  font-family: inherit;
+  font-size: var(--text-button);
+  font-weight: 600;
+  line-height: var(--lh-tight);
+  color: var(--text-strong);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
+}
+
+.btn:hover:not(:disabled) {
+  border-color: var(--field-border);
+  box-shadow: var(--shadow-card);
+  transform: translateY(-1px);
+}
+
+.btn:active:not(:disabled) {
+  transform: none;
+  box-shadow: none;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn--outline {
+  background: var(--surface);
+}
+
+.btn--ghost {
+  background: transparent;
+  border-color: transparent;
+}
+
+.btn--ghost:hover:not(:disabled) {
+  background: var(--surface-hover);
+  border-color: transparent;
+  box-shadow: none;
+  transform: none;
+}
+
+/* Primary: the gradient action (.ap-btn-primary draws the fill, glow and shimmer). */
+.btn--primary {
+  padding-inline: var(--space-lg);
+  color: var(--on-primary);
+  border: 0;
+}
+
+.btn--primary:hover:not(:disabled) {
+  border-color: transparent;
+  box-shadow: var(--shadow-primary-hover);
+}
+
+.btn--primary:disabled {
+  opacity: 1;
+}
+
+.btn--block {
+  width: 100%;
+}
+
+.btn--sm {
+  min-height: 30px;
+  padding: 0 var(--space-sm);
+  font-size: var(--text-caption);
+  border-radius: var(--radius-md);
+}
+
+/* Touch targets on phones (44px minimum). */
+@media (max-width: 600px) {
+  .btn,
+  .btn--sm,
+  .navitem,
+  .iconbtn {
+    min-height: var(--touch-target);
+  }
+
+  .iconbtn {
+    min-width: var(--touch-target);
+  }
+}
+
+/* ---------------------------------------------------------------- pills */
+/* StatusPill (DESIGN.md §5.7): a tinted background, coloured text, an optional dot. */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-field);
+  height: 24px;
+  padding: 0 var(--space-btn-y);
+  font-size: var(--text-eyebrow);
+  font-weight: 500;
+  line-height: var(--lh-tight);
+  color: var(--slate-ink);
+  background: var(--slate-soft);
+  border: 0;
+  border-radius: var(--radius-pill);
+  white-space: nowrap;
+}
+
+.pill--accent,
+.pill--violet {
+  color: var(--violet-ink);
+  background: var(--violet-soft);
+}
+
+.pill--teal {
+  color: var(--teal-ink);
+  background: var(--teal-soft);
+}
+
+.pill--amber {
+  color: var(--amber-ink);
+  background: var(--amber-soft);
+}
+
+.pill--sky,
+.pill--running {
+  color: var(--sky-ink);
+  background: var(--sky-soft);
+}
+
+.pill--rose {
+  color: var(--rose-ink);
+  background: var(--rose-soft);
+}
+
+.pill--slate {
+  color: var(--slate-ink);
+  background: var(--slate-soft);
+}
+
+.pill--success {
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.pill--warn {
+  color: var(--warn);
+  background: var(--warn-soft);
+}
+
+.pill--danger {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.pill--success .dot {
+  color: var(--emerald);
+}
+
+.pill--danger .dot {
+  color: var(--rose);
+}
+
+.pill--warn .dot {
+  color: var(--amber);
+}
+
+/* ---------------------------------------------------------------- callouts */
+.callout {
+  display: flex;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--canvas);
+  font-size: var(--text-caption);
+  line-height: var(--lh-caption);
+  color: var(--text-secondary);
+}
+
+.callout--danger {
+  background: var(--danger-soft);
+  border-color: var(--danger-border);
+  color: var(--danger);
+}
+
+.callout--warn {
+  background: var(--warn-soft);
+  border-color: var(--warn-border);
+  color: var(--warn);
+}
+
+.callout--success {
+  background: var(--success-soft);
+  border-color: var(--success-border);
+  color: var(--success);
+}
+
+.callout__title {
+  font-weight: 600;
+}
+
+.callout__body {
+  min-width: 0;
+  flex: 1;
+}
+
+.callout__detail {
+  margin: var(--space-xs) 0 0;
+  padding: var(--space-xs);
+  font-family: var(--mono);
+  font-size: var(--text-code);
+  background: var(--surface);
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ---------------------------------------------------------------- data table */
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table th {
+  padding: var(--space-btn-y) var(--space-lg);
+  text-align: left;
+  font-size: var(--text-overline);
+  font-weight: 600;
+  line-height: var(--lh-eyebrow);
+  letter-spacing: var(--track-overline);
+  text-transform: uppercase;
+  color: var(--text-muted);
+  background: var(--surface-sunken);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.table td {
+  padding: var(--space-md) var(--space-lg);
+  font-size: var(--text-body-sm);
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.table tr:last-child td {
+  border-bottom: 0;
+}
+
+.table tbody tr {
+  cursor: pointer;
+}
+
+.table tbody tr:hover {
+  background: var(--surface-hover);
+}
+
+.table__title {
+  display: block;
+  font-weight: 600;
+  color: var(--text-strong);
+  text-decoration: none;
+}
+
+.table__title:hover {
+  color: var(--accent);
+}
+
+.table__sub {
+  display: block;
+  color: var(--text-subtle);
+  font-family: var(--mono);
+  font-size: var(--text-code);
+}
+
+.table__num {
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-body-sm);
+  white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------- key/value list */
+.metalist {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--space-sm) var(--space-lg);
+  align-items: center;
+}
+
+.metalist__key {
+  color: var(--text-muted);
+  font-size: var(--text-caption);
+  white-space: nowrap;
+}
+
+.metalist__val {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-field);
+  min-width: 0;
+}
+
+/* Long unbroken values (ids, model names) wrap rather than spill out of the panel. */
+.metalist__val > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.prose {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+

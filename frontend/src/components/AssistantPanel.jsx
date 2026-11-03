@@ -1,17 +1,16 @@
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-} from "react";
+import { GitFork, Minimize2, PenLine, UserPlus } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../lib/api.js";
+import { toggleableTools, toolsChanged } from "../lib/composer.js";
 import { ASSISTANT_WIDTH, clampWidth } from "../lib/layout.js";
+import { cannotCallTools, modelKey, withVerdicts } from "../lib/models.js";
 import { paths } from "../lib/router.js";
+import { useAction } from "../lib/useAction.js";
+import { useToolCheck } from "../lib/useToolCheck.js";
+import { Composer } from "./composer/Composer.jsx";
 import { Icon } from "./icons.jsx";
-import { Pill } from "./ui.jsx";
+import { ErrorCallout, Pill } from "./ui.jsx";
 
-const MAX_INPUT_HEIGHT = 160;
 // The width the user dragged the panel to: a per-browser convenience, so localStorage.
 const WIDTH_KEY = "agentic-platform.assistant-width";
 const KEY_STEP = 24;
@@ -131,11 +130,12 @@ function useResizableWidth(panelRef) {
 }
 
 // Clicking one only fills the message box, so it can be adjusted before sending.
+// Template cards for an empty conversation, like New project's (DESIGN.md §6).
 const SUGGESTIONS = [
-  "Run the independent agents in parallel",
-  "Add an agent that reviews the final answer",
-  "Use fewer agents",
-  "Change the task to: ",
+  { text: "Run the independent agents in parallel", icon: GitFork, tone: "violet" },
+  { text: "Add an agent that reviews the final answer", icon: UserPlus, tone: "teal" },
+  { text: "Use fewer agents", icon: Minimize2, tone: "amber" },
+  { text: "Change the task to: ", icon: PenLine, tone: "violet" },
 ];
 
 function UserMessage({ content }) {
@@ -152,7 +152,7 @@ function AssistantMessage({ children, error }) {
   return (
     <div className="msg msg--assistant">
       <span className="msg__avatar" aria-hidden="true">
-        <Icon name="brand" size={12} />
+        <Icon name="brand" size={14} />
       </span>
       <div className={`msg__bubble ${error ? "msg__bubble--error" : ""}`}>
         {children}
@@ -184,12 +184,57 @@ function Reply({ message, project }) {
   );
 }
 
-// A chat beside the project's brief, plan and compile pages: each message asks the
-// planner to change the project, and the reply says what it changed.
-export function AssistantPanel({ project, onRevised, onClose }) {
+const CHIPS_DEFAULT = { model: "", agentCount: null, tools: null };
+// The Model chip's "" row: each agent keeps the model it has.
+const KEEP_MODELS = { chip: "Current", label: "Keep each agent's model", sub: "no change" };
+
+/** The tools the planner may use now: the built-ins plus this project's external opt-ins. */
+function currentTools(tools, project) {
+  const on = new Set([...(tools.default ?? []), ...(project.side_effect_tools_enabled ?? [])]);
+  return toggleableTools(tools)
+    .map((t) => t.name)
+    .filter((n) => on.has(n));
+}
+
+/**
+ * What a change request sends: the message, plus each chip that differs from its default
+ * (untouched chips send exactly `{message}`, as before).
+ */
+export function reviseExtras(chips, baselineTools, chosenModel) {
+  const extras = {};
+  if (chips.model && chosenModel) {
+    extras.model = { provider: chosenModel.provider, model: chosenModel.model };
+  }
+  if (chips.agentCount) extras.agentCount = chips.agentCount;
+  if (cannotCallTools(chosenModel)) {
+    // A model that can't call tools gets none (the server enforces this too).
+    extras.tools = [];
+  } else if (chips.tools && toolsChanged(chips.tools, baselineTools)) {
+    extras.tools = chips.tools;
+  }
+  return extras;
+}
+
+// A chat beside the project's pages, in the same composer as New project: each message
+// asks the planner to change the project, the chips limit what it may use for that change,
+// and the reply says what it changed.
+export function AssistantPanel({
+  project,
+  tools,
+  providers,
+  onRevised,
+  onResourcesChanged,
+  onClose,
+}) {
+  const id = project.project_id;
   const [draft, setDraft] = useState("");
   const [pending, setPending] = useState(null);
   const [failed, setFailed] = useState(null);
+  const [chips, setChips] = useState(CHIPS_DEFAULT);
+  const [attached, setAttached] = useState({ files: [], sources: [], servers: [] });
+  const attach = useAction();
+  const toolCheck = useToolCheck();
+  const modelList = withVerdicts(providers, toolCheck.verdicts);
   const inputRef = useRef(null);
   const endRef = useRef(null);
   const messages = project.conversation ?? [];
@@ -199,34 +244,65 @@ export function AssistantPanel({ project, onRevised, onClose }) {
   // Fullscreen fills the work area (the sidebar and top bar stay); not remembered, so the
   // page never opens covered.
   const [full, setFull] = useState(false);
+  const baselineTools = currentTools(tools, project);
+  const effective = { ...chips, tools: chips.tools ?? baselineTools };
+  const chosenModel = modelList.find((p) => modelKey(p) === chips.model);
 
-  // Leaving fullscreen with Esc, from anywhere in the panel.
+  // What's attached to this project (the + menu's chips). A list that fails to load
+  // keeps what it showed.
+  const loadAttached = useCallback(
+    () =>
+      Promise.all([
+        api.getKnowledge(id).catch(() => null),
+        api.projectDataSources(id).catch(() => null),
+        api.projectMcpServers(id).catch(() => null),
+      ]).then(([knowledge, data, mcp]) =>
+        setAttached((prev) => ({
+          files: knowledge ? knowledge.documents : prev.files,
+          sources: data ? data.attached : prev.sources,
+          servers: mcp ? mcp.servers.filter((s) => s.attached) : prev.servers,
+        })),
+      ),
+    [id],
+  );
+
+  useEffect(() => {
+    let current = true;
+    Promise.resolve().then(() => current && loadAttached());
+    return () => {
+      current = false;
+    };
+  }, [loadAttached]);
+
+  // Leaving fullscreen with Esc, from anywhere in the panel; an open chip popover (which
+  // bubbles here through its portal) closes first.
   function onPanelKeyDown(event) {
-    if (full && event.key === "Escape") {
+    if (full && event.key === "Escape" && !document.querySelector(".cpop")) {
       event.stopPropagation();
       setFull(false);
     }
   }
 
-  useLayoutEffect(() => {
-    const el = inputRef.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, MAX_INPUT_HEIGHT)}px`;
-  }, [draft]);
-
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: "end" });
   }, [messages.length, pending, failed]);
 
+  function updateChips(patch) {
+    setChips((c) => ({ ...c, ...patch }));
+    if (patch.model) {
+      toolCheck.check(modelList.find((p) => modelKey(p) === patch.model));
+    }
+  }
+
   async function send(text) {
     const message = (text ?? draft).trim();
     if (!message || pending) return;
+    const extras = reviseExtras(effective, baselineTools, chosenModel);
     setPending(message);
     setFailed(null);
     setDraft("");
     try {
-      const res = await api.reviseProject(project.project_id, message);
+      const res = await api.reviseProject(id, message, extras);
       onRevised(res.project, res.changed);
     } catch (error) {
       setFailed({ message, error });
@@ -261,12 +337,30 @@ export function AssistantPanel({ project, onRevised, onClose }) {
     );
   }
 
+  // + menu: attaching here attaches to the project at once, like the Resources step. The
+  // chip shows straight away; the lists are reloaded from the server afterwards, which
+  // also undoes the chip if the request failed.
+  async function change(call, kind, item, on) {
+    if (kind) {
+      setAttached((all) => ({
+        ...all,
+        [kind]: on
+          ? [...all[kind].filter((x) => x.id !== item.id), item]
+          : all[kind].filter((x) => x.id !== item.id),
+      }));
+    }
+    const done = await attach.run(call);
+    await loadAttached();
+    if (done !== null) onResourcesChanged?.();
+  }
+
   return (
     <aside
       ref={panelRef}
       className={[
         "assistant",
         full && "assistant--full",
+        empty && "assistant--empty",
         resizing && "assistant--resizing",
       ]
         .filter(Boolean)
@@ -310,24 +404,13 @@ export function AssistantPanel({ project, onRevised, onClose }) {
 
       <div className="assistant__thread">
         {empty && (
-          <div className="assistant__intro">
+          <div className="chat__welcome assistant__hero">
+            <span className="chat__glow ap-glow-breathe" aria-hidden="true" />
+            <h2>What should change?</h2>
             <p className="muted">
-              Describe a change in your own words. I'll update the plan, and the
-              brief too if you change the task. You can review every change
+              Describe a change in your own words. You review every change
               before compiling.
             </p>
-            <div className="assistant__suggestions">
-              {SUGGESTIONS.map((text) => (
-                <button
-                  key={text}
-                  type="button"
-                  className="chip"
-                  onClick={() => suggest(text)}
-                >
-                  {text.endsWith(": ") ? `${text}…` : text}
-                </button>
-              ))}
-            </div>
           </div>
         )}
 
@@ -378,37 +461,83 @@ export function AssistantPanel({ project, onRevised, onClose }) {
         <div ref={endRef} />
       </div>
 
-      <form className="assistant__composer" onSubmit={onSubmit}>
-        <div className="composer__box">
-          <textarea
-            ref={inputRef}
-            rows={1}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={onKeyDown}
-            placeholder="e.g. Add an agent that checks the facts"
-            aria-label="Change request"
-          />
-          <div className="composer__bar">
-            <span className="assistant__hint">
-              Changes need compiling again
-            </span>
-            <button
-              type="submit"
-              className="composer__send"
-              disabled={Boolean(pending) || !draft.trim()}
-              aria-label="Send change request"
-              title="Send (Enter)"
-            >
-              {pending ? (
-                <span className="spin" />
-              ) : (
-                <Icon name="arrowUp" size={15} />
-              )}
-            </button>
+      <div className="assistant__bottom">
+        <ErrorCallout error={attach.error} />
+        <Composer
+          variant="panel"
+          draft={draft}
+          onDraft={setDraft}
+          onKeyDown={onKeyDown}
+          textareaRef={inputRef}
+          placeholder="e.g. Add an agent that checks the facts"
+          label="Change request"
+          sendLabel="Send change request"
+          busy={Boolean(pending)}
+          // Popovers open below only while an empty fullscreen centres the composer.
+          docked={!(full && empty)}
+          onSubmit={onSubmit}
+          settings={effective}
+          onSettings={updateChips}
+          tools={tools}
+          toolsBaseline={baselineTools}
+          providers={modelList}
+          modelBaseline={KEEP_MODELS}
+          files={attached.files}
+          sources={attached.sources}
+          mcpServers={attached.servers}
+          attachmentsBusy={attach.busy}
+          onToggleFile={(doc, on) =>
+            change(
+              () => (on ? api.attachDocument(id, doc.id) : api.detachDocument(id, doc.id)),
+              "files",
+              doc,
+              on,
+            )
+          }
+          onToggleSource={(s, on) =>
+            change(
+              () => (on ? api.attachDataSource(id, s.id) : api.detachDataSource(id, s.id)),
+              "sources",
+              s,
+              on,
+            )
+          }
+          onToggleMcp={(s, on) =>
+            change(
+              () => (on ? api.attachMcpServer(id, s.id) : api.detachMcpServer(id, s.id)),
+              "servers",
+              s,
+              on,
+            )
+          }
+          uploadBatch={(batch) => api.uploadDocuments(id, batch)}
+          onUploaded={() => change(async () => true)}
+          footer={<p className="composer__hint">Changes need compiling again</p>}
+        />
+        {empty && (
+          <div className="suggestions assistant__suggestions">
+            {SUGGESTIONS.map((s) => {
+              const SuggestionIcon = s.icon;
+              return (
+                <button
+                  key={s.text}
+                  type="button"
+                  className="suggestion ap-lift"
+                  data-tone={s.tone}
+                  onClick={() => suggest(s.text)}
+                >
+                  <span className="suggestion__icon" aria-hidden="true">
+                    <SuggestionIcon size={16} />
+                  </span>
+                  <span className="suggestion__title">
+                    {s.text.endsWith(": ") ? `${s.text}…` : s.text}
+                  </span>
+                </button>
+              );
+            })}
           </div>
-        </div>
-      </form>
+        )}
+      </div>
     </aside>
   );
 }

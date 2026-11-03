@@ -195,6 +195,21 @@ def test_revision_cannot_exceed_the_platform_maximum(monkeypatch):
         mp.revise_plan("x", _plan_with(1), "more agents", available_tools=[], available_llms=_LLMS)
 
 
+def test_revision_respects_a_requested_team_size_and_says_so(monkeypatch):
+    three = PlanRevision(reply="ok", brief="x", plan=_plan_with(3))
+    two = PlanRevision(reply="ok", brief="x", plan=_plan_with(2))
+    recorder = _Recorder([three, two])
+    monkeypatch.setattr(mp, "get_llm", lambda cfg: _FakeLLM(recorder))
+    monkeypatch.setattr(mp.time, "sleep", lambda s: None)
+    revision = mp.revise_plan(
+        "x", _plan_with(1), "add agents", available_tools=[], available_llms=_LLMS,
+        requested_agent_count=2,
+    )
+    assert len(revision.plan.agents) == 2
+    assert "MAXIMUM AGENT COUNT: 2" in recorder.messages[0][1].content
+    assert "at most 2 are allowed" in recorder.messages[1][1].content
+
+
 def test_planner_cannot_set_run_limits(monkeypatch):
     from agentic_platform.agent_schema import RunBounds
 

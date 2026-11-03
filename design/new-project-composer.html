@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Agentic Platform: New project composer (reference)</title>
+<style>
+/* Token values (already merged into src/styles in the app; inlined here so this file is self-contained) */
+:root {
+  /* Neutrals */
+  --bg-canvas: #F7F8FC;
+  --bg-card: #FFFFFF;
+  --bg-subtle: #F1F3F9;
+  --border: #E4E7F0;
+  --text-strong: #0F172A;
+  --text: #334155;
+  --text-muted: #64748B;
+  --code-bg: #0F172A;
+
+  /* Accents + soft tints */
+  --violet: #7C3AED;  --violet-soft: #F3EEFF;
+  --pink: #DB2777;    --pink-soft: #FDEEF6;
+  --orange: #F97316;  --orange-soft: #FFF2E8;
+  --teal: #0D9488;    --teal-soft: #E7F7F5;
+  --emerald: #10B981; --emerald-soft: #E8F8F1;
+  --amber: #F59E0B;   --amber-soft: #FEF5E4;
+  --sky: #0EA5E9;     --sky-soft: #E8F6FD;
+  --rose: #E11D48;    --rose-soft: #FDECEF;
+  --slate: #64748B;   --slate-soft: #F1F5F9;
+
+  /* Gradients */
+  --gradient-primary: linear-gradient(90deg, #7C3AED 0%, #DB2777 55%, #F97316 100%);
+  --gradient-bars: linear-gradient(180deg, #7C3AED 0%, #DB2777 100%);
+  --gradient-hero-glow: radial-gradient(60% 60% at 30% 40%, rgba(124,58,237,.14), transparent 70%),
+                        radial-gradient(50% 50% at 70% 40%, rgba(219,39,119,.12), transparent 70%),
+                        radial-gradient(40% 40% at 50% 70%, rgba(249,115,22,.10), transparent 70%);
+  --gradient-auth: radial-gradient(60% 50% at 80% 20%, rgba(219,39,119,.28), transparent 60%),
+                   radial-gradient(50% 40% at 20% 90%, rgba(249,115,22,.16), transparent 60%),
+                   linear-gradient(160deg, #1E1B4B 0%, #4C1D95 100%);
+
+  /* Semantic mappings */
+  --phase-brief: var(--violet);
+  --phase-resources: var(--teal);
+  --phase-plan: var(--amber);
+  --phase-compile: var(--emerald);
+  --phase-run: var(--pink);
+  --phase-deploy: var(--orange);
+
+  --agent-1: var(--violet);
+  --agent-2: var(--teal);
+  --agent-3: var(--amber);
+  --agent-4: var(--rose);
+  --agent-5: var(--sky);
+  --agent-6: var(--emerald);
+
+  --status-success: var(--emerald);
+  --status-warning: var(--amber);
+  --status-failed: var(--rose);
+  --status-running: var(--sky);
+  --status-idle: var(--slate);
+
+  /* Type */
+  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Shape & elevation */
+  --radius-card: 12px;
+  --radius-control: 10px;
+  --radius-pill: 999px;
+  --shadow-card: 0 1px 2px rgba(15,23,42,.04), 0 4px 16px rgba(15,23,42,.04);
+  --shadow-raised: 0 8px 24px rgba(15,23,42,.08);
+  --shadow-primary: 0 6px 20px rgba(219,39,119,.25);
+
+  /* Layout */
+  --sidebar-w: 248px;
+  --sidebar-w-collapsed: 64px;
+  --topbar-h: 56px;
+  --content-max: 1280px;
+
+  /* Motion */
+  --ease-out: cubic-bezier(.2,.7,.2,1);
+  --dur-fast: 160ms;
+  --dur: 240ms;
+  --dur-slow: 400ms;
+}
+
+/* Optional dark theme (same accents, darker neutrals) */
+[data-theme='dark'] {
+  --bg-canvas: #0B1020;
+  --bg-card: #121933;
+  --bg-subtle: #1A2242;
+  --border: #253056;
+  --text-strong: #F8FAFC;
+  --text: #CBD5E1;
+  --text-muted: #94A3B8;
+  --shadow-card: 0 1px 2px rgba(0,0,0,.3), 0 4px 16px rgba(0,0,0,.25);
+}
+
+/* Agentic Platform — motion utilities. Import after tokens.css.
+   Every animation here is disabled under prefers-reduced-motion (bottom of file). */
+
+/* ---------- Keyframes ---------- */
+@keyframes ap-rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes ap-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes ap-shimmer { 0% { transform: translateX(-120%) skewX(-20deg); } 60%, 100% { transform: translateX(260%) skewX(-20deg); } }
+@keyframes ap-pulse-ring { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 45%, transparent); } 70%, 100% { box-shadow: 0 0 0 6px transparent; } }
+@keyframes ap-flow { to { stroke-dashoffset: -20; } }
+@keyframes ap-fill { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes ap-glow { 0%, 100% { box-shadow: 0 0 0 0 rgba(14,165,233,0); } 50% { box-shadow: 0 0 0 5px rgba(14,165,233,.18); } }
+@keyframes ap-skeleton { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+@keyframes ap-pop { 0% { transform: scale(.96); } 60% { transform: scale(1.04); } 100% { transform: scale(1); } }
+@keyframes ap-shake { 0%, 100% { transform: translateX(0); } 20%, 60% { transform: translateX(-4px); } 40%, 80% { transform: translateX(4px); } }
+@keyframes ap-draw { from { stroke-dashoffset: var(--ap-len, 400); } to { stroke-dashoffset: 0; } }
+@keyframes ap-grow-y { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+@keyframes ap-breathe { 0%, 100% { opacity: .85; transform: scale(1); } 50% { opacity: 1; transform: scale(1.04); } }
+@keyframes ap-mesh { 0% { background-position: 0% 0%; } 50% { background-position: 100% 60%; } 100% { background-position: 0% 0%; } }
+@keyframes ap-slide-down { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
+@keyframes ap-slide-left { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes ap-scale-in { from { opacity: 0; transform: scale(.98); } to { opacity: 1; transform: none; } }
+
+/* ---------- Page & card entrance ---------- */
+.ap-page  { animation: ap-rise var(--dur) var(--ease-out) both; }
+.ap-enter { animation: ap-rise var(--dur) var(--ease-out) both; animation-delay: calc(var(--i, 0) * 40ms); }
+.ap-fade  { animation: ap-fade var(--dur) var(--ease-out) both; }
+
+/* ---------- Buttons & hover ---------- */
+.ap-btn-primary {
+  position: relative; overflow: hidden; isolation: isolate;
+  background: var(--gradient-primary); color: #fff; border: 0;
+  border-radius: var(--radius-control); font-weight: 600;
+  box-shadow: var(--shadow-primary);
+  transition: transform var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out), filter var(--dur-fast);
+}
+.ap-btn-primary::after {
+  content: ''; position: absolute; top: 0; bottom: 0; left: 0; width: 40%; z-index: -1; pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.35), transparent);
+  animation: ap-shimmer 3.2s ease-in-out infinite;
+}
+.ap-btn-primary:hover { transform: translateY(-1px); box-shadow: 0 10px 28px rgba(219,39,119,.32); }
+.ap-btn-primary:active { transform: none; filter: brightness(.96); }
+.ap-btn-primary:disabled, .ap-btn-primary[aria-busy='true'] { filter: grayscale(.35) opacity(.7); box-shadow: none; cursor: not-allowed; }
+.ap-btn-primary:disabled::after { animation-duration: 1.4s; } /* faster sweep = "working" */
+
+.ap-lift { transition: transform var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out); }
+.ap-lift:hover { transform: translateY(-2px); box-shadow: var(--shadow-raised); }
+
+/* Gradient focus ring for the composer / important inputs */
+.ap-focus-ring { border: 1px solid var(--border); transition: box-shadow var(--dur-fast), border-color var(--dur-fast); }
+.ap-focus-ring:focus-within {
+  border-color: transparent;
+  box-shadow: 0 0 0 1.5px #7C3AED, 0 0 0 5px rgba(219,39,119,.12);
+}
+
+/* ---------- Indicators ---------- */
+/* Sliding pill/underline for sidebar active item, tabs and segmented controls.
+   Position it with transform / width from JS (or Framer Motion layoutId). */
+.ap-nav-indicator { transition: transform var(--dur) var(--ease-out), width var(--dur) var(--ease-out), height var(--dur) var(--ease-out); }
+
+.ap-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; display: inline-block; }
+.ap-dot--live { animation: ap-pulse-ring 1.6s ease-out infinite; }
+
+/* ---------- Loading ---------- */
+.ap-skeleton {
+  background: linear-gradient(90deg, var(--bg-subtle) 0%, #FFFFFF 50%, var(--bg-subtle) 100%);
+  background-size: 200% 100%; border-radius: 6px;
+  animation: ap-skeleton 1.4s linear infinite;
+}
+[data-theme='dark'] .ap-skeleton { background-image: linear-gradient(90deg, var(--bg-subtle) 0%, #253056 50%, var(--bg-subtle) 100%); }
+
+/* ---------- Feedback ---------- */
+.ap-pop   { animation: ap-pop var(--dur-fast) var(--ease-out); }
+.ap-shake { animation: ap-shake 300ms ease-in-out; }
+.ap-toast { animation: ap-slide-down var(--dur) var(--ease-out) both; }
+.ap-modal { animation: ap-scale-in var(--dur) var(--ease-out) both; }
+.ap-popover { transform-origin: top left; animation: ap-scale-in var(--dur-fast) var(--ease-out) both; }
+.ap-drawer { animation: ap-slide-left var(--dur) var(--ease-out) both; }
+
+/* SVG check that draws itself (set stroke-dasharray to the path length via --ap-len) */
+.ap-check-draw path { stroke-dasharray: var(--ap-len, 24); stroke-dashoffset: var(--ap-len, 24); animation: ap-draw 400ms var(--ease-out) 120ms forwards; }
+
+/* ---------- Phase stepper ---------- */
+.ap-connector-fill { transform-origin: left center; animation: ap-fill var(--dur-slow) var(--ease-out) both; }
+
+/* ---------- Run graph (React Flow) ---------- */
+.ap-node { transition: border-color var(--dur-slow) var(--ease-out), box-shadow var(--dur-slow) var(--ease-out); }
+.ap-node--running { animation: ap-glow 1.6s ease-in-out infinite; }
+/* Add className="ap-edge-flow" to edges that lead into running/queued nodes */
+.react-flow__edge.ap-edge-flow .react-flow__edge-path { stroke-dasharray: 6 4; animation: ap-flow .8s linear infinite; }
+
+/* ---------- Charts & metrics ---------- */
+.ap-draw-line { stroke-dasharray: var(--ap-len, 400); stroke-dashoffset: var(--ap-len, 400); animation: ap-draw 700ms var(--ease-out) forwards; }
+.ap-bar-grow { transform-origin: bottom; transform-box: fill-box; animation: ap-grow-y 500ms var(--ease-out) both; animation-delay: calc(var(--i, 0) * 15ms); }
+
+/* ---------- Hero / auth ---------- */
+.ap-glow-breathe { animation: ap-breathe 8s ease-in-out infinite; }
+.ap-mesh { background-size: 160% 160%; animation: ap-mesh 20s ease-in-out infinite; }
+
+/* ---------- Reduced motion ---------- */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 1ms !important; animation-iteration-count: 1 !important; transition-duration: 1ms !important; }
+  .ap-btn-primary::after, .ap-dot--live, .ap-node--running, .ap-skeleton, .ap-glow-breathe, .ap-mesh,
+  .react-flow__edge.ap-edge-flow .react-flow__edge-path { animation: none !important; }
+  .ap-lift:hover, .ap-btn-primary:hover { transform: none; }
+}
+
+</style>
+<style>
+  /* Reference for the New project page: one composer, settings as chips, each chip opens a popover.
+     The top composer is interactive (click chips; Esc or outside click closes). The gallery below
+     shows each popover open, for screenshots. Port to React 1:1 (plain CSS + lucide-react icons). */
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg-canvas); font-family: var(--font-sans); color: var(--text); }
+  .page { max-width: 980px; margin: 0 auto; padding: 48px 32px 64px; }
+  .hero { text-align: center; position: relative; margin-bottom: 28px; }
+  .hero::before { content: ''; position: absolute; inset: -40px 15% -10px; background: var(--gradient-hero-glow); z-index: -1; filter: blur(8px); }
+  .hero h1 { margin: 0 0 8px; font: 700 40px/48px var(--font-sans); letter-spacing: -.02em; color: var(--text-strong); }
+  .hero p { margin: 0; font-size: 16px; color: var(--text-muted); }
+  .label { font: 600 11px/16px var(--font-sans); letter-spacing: .06em; text-transform: uppercase; color: var(--text-muted); margin: 40px 0 10px; }
+
+  /* Composer */
+  .composer { position: relative; max-width: 860px; margin: 0 auto; background: var(--bg-card); border: 1px solid var(--border);
+              border-radius: 16px; box-shadow: var(--shadow-card); transition: box-shadow var(--dur-fast), border-color var(--dur-fast); }
+  .composer:focus-within { border-color: transparent; box-shadow: 0 0 0 1.5px var(--violet), 0 0 0 6px rgba(219,39,119,.10), var(--shadow-card); }
+  .composer textarea { width: 100%; min-height: 96px; resize: vertical; border: 0; outline: 0; background: transparent;
+                       padding: 18px 20px 6px; font: 400 16px/24px var(--font-sans); color: var(--text-strong); }
+  .composer textarea::placeholder { color: #9AA3B5; }
+  .attachments { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 16px 10px; }
+  .attachments:empty { display: none; }
+  .att { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 6px 0 10px; border-radius: 8px;
+         background: var(--bg-subtle); border: 1px solid var(--border); font-size: 13px; color: var(--text-strong); }
+  .att svg { width: 14px; height: 14px; color: var(--text-muted); }
+  .att button { border: 0; background: none; padding: 2px; border-radius: 4px; color: var(--text-muted); cursor: pointer; display: grid; place-items: center; }
+  .att button:hover { background: #E4E7F0; color: var(--text-strong); }
+  .toolbar { display: flex; align-items: center; gap: 6px; padding: 10px 12px; border-top: 1px solid var(--border); }
+  .spacer { flex: 1; }
+  .chip { position: relative; display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; border-radius: 8px;
+          border: 1px solid var(--border); background: #fff; font: 500 13px/1 var(--font-sans); color: var(--text-strong); cursor: pointer;
+          transition: background var(--dur-fast), border-color var(--dur-fast); }
+  .chip:hover { background: var(--bg-subtle); }
+  .chip[aria-expanded=true] { border-color: var(--violet); background: var(--violet-soft); }
+  .chip .k { color: var(--text-muted); font-weight: 400; }
+  .chip.changed { border-color: #D8CCFB; }
+  .chip svg { width: 15px; height: 15px; }
+  .chip.icon { width: 32px; padding: 0; justify-content: center; }
+  .send { width: 38px; height: 38px; border-radius: 50%; padding: 0; justify-content: center; }
+  .send svg { width: 18px; height: 18px; }
+
+  /* Popover */
+  .pop { position: absolute; top: calc(100% + 8px); left: 0; z-index: 20; width: 360px; max-height: 420px; overflow: auto;
+         background: #fff; border: 1px solid var(--border); border-radius: 12px; padding: 8px;
+         box-shadow: 0 12px 32px rgba(15,23,42,.12), 0 2px 6px rgba(15,23,42,.06); animation: ap-scale-in var(--dur-fast) var(--ease-out) both;
+         transform-origin: top left; text-align: left; cursor: default; font-weight: 400; }
+  .pop[hidden] { display: none; }
+  .pop.wide { width: 400px; }
+  .search { display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 10px; border: 1px solid var(--border); border-radius: 8px; margin: 2px 2px 6px; color: var(--text-muted); }
+  .search input { border: 0; outline: 0; flex: 1; font: 400 13px var(--font-sans); background: transparent; }
+  .grp { display: flex; align-items: center; gap: 6px; padding: 10px 8px 4px; font: 600 11px/16px var(--font-sans); letter-spacing: .04em; text-transform: uppercase; color: var(--text-muted); }
+  .grp svg { width: 13px; height: 13px; }
+  .grp small { text-transform: none; letter-spacing: 0; font-weight: 400; }
+  .opt { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px; border-radius: 8px; font-size: 13px; color: var(--text-strong); cursor: pointer; }
+  .opt:hover, .opt:focus-visible { background: var(--bg-subtle); outline: 0; }
+  .opt[aria-selected=true] { background: var(--violet-soft); }
+  .opt .sub { color: var(--text-muted); }
+  .opt .right { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+  .opt .check { width: 16px; height: 16px; color: var(--violet); }
+  .tag { font: 500 11px/1 var(--font-sans); padding: 4px 7px; border-radius: 6px; background: var(--slate-soft); color: var(--slate); }
+  .tag.default { background: var(--violet-soft); color: var(--violet); }
+  .tag.ok { background: var(--emerald-soft); color: #047857; }
+  .muted-row { color: var(--text-muted); border-top: 1px solid var(--border); margin-top: 6px; border-radius: 0 0 8px 8px; }
+  .muted-row svg { width: 14px; height: 14px; vertical-align: -2px; margin-right: 6px; }
+  .link { color: var(--violet); font-weight: 500; font-size: 13px; text-decoration: none; }
+  .mono { font-family: var(--font-mono); font-size: 12.5px; }
+  .switch { width: 32px; height: 18px; border-radius: 9px; background: #D5DAE5; position: relative; flex: none; border: 0; cursor: pointer; transition: background var(--dur-fast); }
+  .switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.2); transition: left var(--dur-fast) var(--ease-out); }
+  .switch[aria-checked=true] { background: var(--violet); }
+  .switch[aria-checked=true]::after { left: 16px; }
+  .topswitch { border-bottom: 1px solid var(--border); border-radius: 8px 8px 0 0; padding: 10px 8px; margin-bottom: 2px; }
+  .topswitch .sub { display: block; font-size: 12px; margin-top: 2px; }
+  .menu .opt { align-items: flex-start; justify-content: flex-start; gap: 12px; padding: 10px; }
+  .menu .ico { width: 32px; height: 32px; border-radius: 8px; display: grid; place-items: center; flex: none; }
+  .menu .ico svg { width: 16px; height: 16px; }
+  .menu .t { font-weight: 600; }
+  .menu .d { display: block; font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+  .seg { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; padding: 4px; background: var(--bg-subtle); border-radius: 10px; margin: 6px 4px; }
+  .seg button { height: 32px; border: 0; border-radius: 7px; background: transparent; font: 500 13px var(--font-sans); color: var(--text); cursor: pointer; }
+  .seg button[aria-pressed=true] { background: #fff; color: var(--text-strong); box-shadow: 0 1px 2px rgba(15,23,42,.08); }
+  .hint { font-size: 12px; color: var(--text-muted); padding: 4px 8px 6px; }
+
+  .templates { max-width: 860px; margin: 28px auto 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .tpl { background: #fff; border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+  .tpl .ico { width: 32px; height: 32px; border-radius: 8px; display: grid; place-items: center; margin-bottom: 10px; }
+  .tpl .ico svg { width: 16px; height: 16px; }
+  .tpl b { display: block; font-size: 14px; color: var(--text-strong); margin-bottom: 4px; }
+  .tpl span { font-size: 13px; color: var(--text-muted); line-height: 18px; }
+
+  .gallery .composer { margin-bottom: 0; }
+  .gallery .stage { min-height: 500px; }
+  .gallery .pop { max-height: none; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-cpu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="5" width="14" height="14" rx="2"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3"/></symbol>
+  <symbol id="i-users" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0M17 4a4 4 0 0 1 0 8M22 21a6 6 0 0 0-4-5.6"/></symbol>
+  <symbol id="i-tool" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.2L3 17.8V21h3.2l6.3-6.3a4 4 0 0 0 5.2-5.4l-2.6 2.6-2.4-.6-.6-2.4z"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></symbol>
+  <symbol id="i-up" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 19V5M5 12l7-7 7 7"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></symbol>
+  <symbol id="i-db" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></symbol>
+  <symbol id="i-plug" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4"/></symbol>
+  <symbol id="i-upload" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 15V3M7 8l5-5 5 5M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></symbol>
+  <symbol id="i-book" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/></symbol>
+  <symbol id="i-scale" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v18M5 7h14M5 7l-3 7a4 4 0 0 0 6 0zM19 7l-3 7a4 4 0 0 0 6 0z"/></symbol>
+  <symbol id="i-help" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3M12 17h.01"/></symbol>
+</svg>
+
+<!-- ===== Popover templates (cloned into the live composer and the gallery) ===== -->
+<template id="tpl-model">
+  <div class="pop" role="listbox" aria-label="Model">
+    <label class="search"><svg width="15" height="15"><use href="#i-search"/></svg><input placeholder="Search models" aria-label="Search models"></label>
+    <div class="grp">Recommended</div>
+    <div class="opt" role="option" aria-selected="true" tabindex="0"><span>Gemini 3.1 Pro <span class="sub">· Google</span></span><span class="right"><span class="tag default">Default</span><svg class="check"><use href="#i-check"/></svg></span></div>
+    <div class="opt" role="option" tabindex="0"><span>Claude Sonnet 4.6 <span class="sub">· Amazon Bedrock</span></span><span class="right"><span class="tag">Balanced</span></span></div>
+    <div class="grp">More models</div>
+    <div class="opt" role="option" tabindex="0"><span>Kimi K3 <span class="sub">· Moonshot</span></span><span class="right"><span class="tag">Fast</span></span></div>
+    <div class="opt" role="option" tabindex="0"><span>gpt-oss-120b <span class="sub">· Groq</span></span><span class="right"><span class="tag">Fast</span></span></div>
+    <div class="opt" role="option" tabindex="0"><span>Llama 3.1 <span class="sub">· Ollama</span></span><span class="right"><span class="tag">Local</span></span></div>
+    <div class="opt muted-row" tabindex="0"><span><svg><use href="#i-lock"/></svg>2 models need an API key</span><a class="link" href="#admin">Set up</a></div>
+  </div>
+</template>
+
+<template id="tpl-team">
+  <div class="pop" style="width:300px" aria-label="Team size">
+    <div class="seg" role="group" aria-label="Team size">
+      <button aria-pressed="true">Auto</button><button>2–3</button><button>4–5</button><button>Custom</button>
+    </div>
+    <div class="hint">Auto lets the planner choose the number of agents. You review the plan before anything runs.</div>
+  </div>
+</template>
+
+<template id="tpl-tools">
+  <div class="pop wide" aria-label="Tools">
+    <div class="opt topswitch"><span>Let the planner pick tools<span class="sub">It only picks from the tools switched on below.</span></span><button class="switch" role="switch" aria-checked="false" aria-label="Let the planner pick tools"></button></div>
+    <div class="grp"><svg><use href="#i-shield"/></svg>Built in <small>· runs privately</small></div>
+    <div class="opt"><span class="mono">lookup</span><button class="switch" role="switch" aria-checked="true" aria-label="lookup"></button></div>
+    <div class="opt"><span class="mono">calculator</span><button class="switch" role="switch" aria-checked="true" aria-label="calculator"></button></div>
+    <div class="opt"><span class="mono">knowledge_search <span class="tag ok" style="font-family:var(--font-sans)">auto · 1 file</span></span><button class="switch" role="switch" aria-checked="true" aria-label="knowledge_search"></button></div>
+    <div class="grp"><svg><use href="#i-globe"/></svg>Web and research <small>· sends queries out</small></div>
+    <div class="opt"><span class="mono">web_search</span><button class="switch" role="switch" aria-checked="false" aria-label="web_search"></button></div>
+    <div class="opt"><span class="mono">wikipedia</span><button class="switch" role="switch" aria-checked="false" aria-label="wikipedia"></button></div>
+    <div class="opt"><span class="mono">arxiv</span><button class="switch" role="switch" aria-checked="false" aria-label="arxiv"></button></div>
+    <div class="opt"><span class="mono">pubmed</span><button class="switch" role="switch" aria-checked="false" aria-label="pubmed"></button></div>
+    <div class="grp"><svg><use href="#i-globe"/></svg>Data and finance <small>· sends queries out</small></div>
+    <div class="opt"><span class="mono">weather</span><button class="switch" role="switch" aria-checked="false" aria-label="weather"></button></div>
+    <div class="opt"><span class="mono">yahoo_finance_news</span><button class="switch" role="switch" aria-checked="false" aria-label="yahoo_finance_news"></button></div>
+    <div class="opt"><span class="mono">wolfram_alpha</span><button class="switch" role="switch" aria-checked="false" aria-label="wolfram_alpha"></button></div>
+    <div class="grp"><svg><use href="#i-plug"/></svg>MCP servers</div>
+    <div class="opt"><span>ZohoMcp <span class="sub">· 10 tools</span></span><a class="link" href="#attach">Attach</a></div>
+  </div>
+</template>
+
+<template id="tpl-add">
+  <div class="pop menu" style="width:340px" role="menu" aria-label="Add context">
+    <div class="opt" role="menuitem" tabindex="0"><span class="ico" style="background:var(--violet-soft);color:var(--violet)"><svg><use href="#i-upload"/></svg></span><span><span class="t">Upload files</span><span class="d">PDF, Word, text, Markdown or CSV</span></span></div>
+    <div class="opt" role="menuitem" tabindex="0"><span class="ico" style="background:var(--teal-soft);color:var(--teal)"><svg><use href="#i-book"/></svg></span><span><span class="t">Choose from library</span><span class="d">1 file ready</span></span></div>
+    <div class="opt" role="menuitem" tabindex="0"><span class="ico" style="background:var(--amber-soft);color:#B45309"><svg><use href="#i-db"/></svg></span><span><span class="t">Add data source</span><span class="d">BigQuery tables</span></span></div>
+    <div class="opt" role="menuitem" tabindex="0"><span class="ico" style="background:var(--sky-soft);color:#0369A1"><svg><use href="#i-plug"/></svg></span><span><span class="t">Attach MCP server</span><span class="d">ZohoMcp</span></span></div>
+  </div>
+</template>
+
+<template id="tpl-composer">
+  <div class="composer">
+    <textarea placeholder="Describe the task, or ask how to start..." aria-label="Describe the task"></textarea>
+    <div class="attachments"></div>
+    <div class="toolbar">
+      <div style="position:relative"><button class="chip icon" data-pop="add" aria-expanded="false" aria-label="Add context"><svg><use href="#i-plus"/></svg></button></div>
+      <div style="position:relative"><button class="chip" data-pop="model" aria-expanded="false"><svg><use href="#i-cpu"/></svg><span class="k">Model</span> Gemini 3.1 Pro<svg><use href="#i-chev"/></svg></button></div>
+      <div style="position:relative"><button class="chip" data-pop="team" aria-expanded="false"><svg><use href="#i-users"/></svg><span class="k">Team</span> Auto<svg><use href="#i-chev"/></svg></button></div>
+      <div style="position:relative"><button class="chip" data-pop="tools" aria-expanded="false"><svg><use href="#i-tool"/></svg><span class="k">Tools</span> 3<svg><use href="#i-chev"/></svg></button></div>
+      <span class="spacer"></span>
+      <button class="ap-btn-primary send" aria-label="Send"><svg><use href="#i-up"/></svg></button>
+    </div>
+  </div>
+</template>
+
+<template id="tpl-attachments">
+  <span class="att"><svg><use href="#i-file"/></svg>dpdp act 2023.pdf<button aria-label="Remove dpdp act 2023.pdf"><svg width="12" height="12"><use href="#i-x"/></svg></button></span>
+  <span class="att"><svg><use href="#i-db"/></svg>mydata.trips<button aria-label="Remove mydata.trips"><svg width="12" height="12"><use href="#i-x"/></svg></button></span>
+</template>
+
+<div class="page">
+  <div class="hero">
+    <h1>What should your agent team do?</h1>
+    <p>Describe the task. You review the plan before anything runs.</p>
+  </div>
+  <div id="live"></div>
+  <div class="templates">
+    <div class="tpl"><div class="ico" style="background:var(--violet-soft);color:var(--violet)"><svg><use href="#i-search"/></svg></div><b>Research and summarise</b><span>Research a topic, summarise it, then fact-check.</span></div>
+    <div class="tpl"><div class="ico" style="background:var(--teal-soft);color:var(--teal)"><svg><use href="#i-scale"/></svg></div><b>Pros, cons, verdict</b><span>One agent argues each side, another decides.</span></div>
+    <div class="tpl"><div class="ico" style="background:var(--amber-soft);color:#B45309"><svg><use href="#i-help"/></svg></div><b>Question answering</b><span>Answer a factual question and check the maths.</span></div>
+  </div>
+
+  <div class="gallery">
+    <div class="label">State: model picker open</div><div class="stage" data-open="model"></div>
+    <div class="label">State: tools picker open (with attachments)</div><div class="stage" data-open="tools" data-att="1" style="min-height:820px"></div>
+    <div class="label">State: add-context menu open</div><div class="stage" data-open="add" style="min-height:420px"></div>
+    <div class="label">State: team popover open</div><div class="stage" data-open="team" style="min-height:300px"></div>
+  </div>
+</div>
+
+<script>
+  const $ = (id) => document.getElementById(id).content.cloneNode(true);
+  function build(slot, { open, att } = {}) {
+    const c = $('tpl-composer'); slot.appendChild(c);
+    const comp = slot.querySelector('.composer');
+    if (att) comp.querySelector('.attachments').appendChild($('tpl-attachments'));
+    comp.querySelectorAll('[data-pop]').forEach(btn => {
+      const pop = $('tpl-' + btn.dataset.pop).firstElementChild; pop.hidden = true;
+      btn.parentElement.appendChild(pop);
+      btn.addEventListener('click', e => { e.stopPropagation(); const willOpen = pop.hidden; closeAll(comp); pop.hidden = !willOpen; btn.setAttribute('aria-expanded', String(willOpen)); });
+      pop.addEventListener('click', e => e.stopPropagation());
+      if (open === btn.dataset.pop) { pop.hidden = false; btn.setAttribute('aria-expanded', 'true'); }
+    });
+    comp.querySelectorAll('.switch').forEach(s => s.addEventListener('click', () => s.setAttribute('aria-checked', String(s.getAttribute('aria-checked') !== 'true'))));
+    comp.querySelectorAll('.seg button').forEach(b => b.addEventListener('click', () => { b.parentElement.querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', String(x === b))); }));
+    comp.querySelectorAll('.att button').forEach(b => b.addEventListener('click', () => b.parentElement.remove()));
+  }
+  function closeAll(scope) { scope.querySelectorAll('.pop').forEach(p => p.hidden = true); scope.querySelectorAll('[aria-expanded]').forEach(b => b.setAttribute('aria-expanded', 'false')); }
+  build(document.getElementById('live'));
+  document.querySelectorAll('.stage').forEach(s => build(s, { open: s.dataset.open, att: s.dataset.att }));
+  const live = document.getElementById('live');
+  document.addEventListener('click', () => closeAll(live));
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeAll(live); });
+</script>
+</body>
+</html>

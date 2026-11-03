@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
+import { settled } from "./settled.js";
 
 // Runs are saved on the server: a run's result survives switching steps, other pages and
 // a reload; a run in progress keeps going while you're elsewhere; the last 10 are listed
@@ -10,7 +11,7 @@ const RUN_URL = `/#/projects/${PROJECT}/run`;
 const TRIP = { origin: "Kolkata (CCU)", destination: "New Delhi (DEL)", month: "October", step_ms: 150 };
 
 async function axeProblems(page, label) {
-  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
+  const results = await new AxeBuilder({ page: await settled(page) }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
   return results.violations
     .filter((v) => ["serious", "critical"].includes(v.impact))
     .map((v) => `${label}: ${v.id}: ${v.nodes.slice(0, 3).map((n) => n.target.join(" ")).join(" | ")}`);

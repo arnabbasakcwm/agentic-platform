@@ -1,46 +1,37 @@
+import { CircleHelp, FileSearch, Scale } from "lucide-react";
 import { ProjectName } from "../components/ProjectName.jsx";
 import { cannotCallTools, pickerLabel, withVerdicts } from "../lib/models.js";
 import { useToolCheck } from "../lib/useToolCheck.js";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { Composer } from "../components/composer/Composer.jsx";
 import { Icon } from "../components/icons.jsx";
-import { ModelPicker } from "../components/ModelPicker.jsx";
-import {
-  ErrorCallout,
-  LinkButton,
-  Pill,
-  StatusBadge,
-  Switch,
-} from "../components/ui.jsx";
+import { LinkButton, Pill } from "../components/ui.jsx";
 import { api } from "../lib/api.js";
-import {
-  batches,
-  checkFiles,
-  documentBadge,
-  formatBytes,
-} from "../lib/knowledge.js";
 import { paths } from "../lib/router.js";
 import { addAnswer, latestBriefTurn, toApiMessages } from "../lib/intake.js";
 import { Markdown } from "../components/Markdown.jsx";
-import { useAction } from "../lib/useAction.js";
-
-const MIN_AGENTS = 1;
-const MAX_AGENTS = 10;
-const MAX_COMPOSER_HEIGHT = 220;
 
 // Starting points, not templates: picking one only fills the message box.
+// Template cards, coloured violet / teal / amber (DESIGN.md §2).
 const EXAMPLES = [
   {
     label: "Research and summarise",
+    icon: FileSearch,
+    tone: "violet",
     brief:
       "Research a topic the user names, draft a short summary of the key findings, then fact-check the summary and correct anything unsupported.",
   },
   {
     label: "Pros, cons, verdict",
+    icon: Scale,
+    tone: "teal",
     brief:
       "For a decision the user describes, have one agent argue the advantages and another the disadvantages independently, then a third weigh both and give a balanced verdict.",
   },
   {
     label: "Question answering",
+    icon: CircleHelp,
+    tone: "amber",
     brief:
       "Answer a factual question from the user, doing any arithmetic it needs, then rewrite the answer as one clear sentence.",
   },
@@ -53,6 +44,14 @@ const PATTERN_PHRASE = {
 };
 
 let nextMessageId = 0;
+
+/** A list with `item` added at the end (on) or removed (off), by id. */
+const toggled = (list, item, on) =>
+  on
+    ? list.some((x) => x.id === item.id)
+      ? list
+      : [...list, item]
+    : list.filter((x) => x.id !== item.id);
 
 function describeSettings(settings, tools, providers) {
   const parts = [
@@ -68,448 +67,6 @@ function describeSettings(settings, tools, providers) {
   );
   parts.push(`${settings.tools.length} of ${offered.length} tools`);
   return parts.join(" · ");
-}
-
-const filesLabel = (n) => `${n} file${n === 1 ? "" : "s"}`;
-
-// ------------------------------------------------------------------ knowledge tray
-/**
- * Pick knowledge files for the next project: upload new ones (they go into the library)
- * or tick existing library files. They're attached when the project is created, and the
- * planner is told about them so it can give agents knowledge_search.
- */
-function FilesTray({ selected, onChange, disabled }) {
-  const [library, setLibrary] = useState(null);
-  const [problems, setProblems] = useState([]);
-  const load = useAction();
-  const upload = useAction();
-  const inputRef = useRef(null);
-  const { run: runLoad } = load;
-
-  useEffect(() => {
-    runLoad(() => api.knowledgeOverview()).then(
-      (body) => body && setLibrary(body),
-    );
-  }, [runLoad]);
-
-  const ids = new Set(selected.map((d) => d.id));
-
-  function toggle(doc) {
-    onChange(
-      ids.has(doc.id)
-        ? selected.filter((d) => d.id !== doc.id)
-        : [...selected, doc],
-    );
-  }
-
-  async function addFiles(files) {
-    const { accepted, problems: refused } = checkFiles(
-      files,
-      library.limits,
-      library.documents.map((d) => d.filename),
-    );
-    setProblems(refused);
-    if (!accepted.length) return;
-    const added = await upload.run(async () => {
-      const docs = [];
-      for (const batch of batches(
-        accepted,
-        library.limits.max_files_per_upload,
-      )) {
-        docs.push(...(await api.uploadToLibrary(batch)).documents);
-      }
-      return docs;
-    });
-    if (added) {
-      onChange([...selected, ...added]);
-      setLibrary((lib) => ({
-        ...lib,
-        documents: [...added, ...lib.documents],
-      }));
-    }
-  }
-
-  return (
-    <div className="tray" id="composer-files">
-      <div className="tray__row tray__row--top">
-        <span className="tray__label">Knowledge</span>
-        <div className="tray__control">
-          <div className="row">
-            <button
-              type="button"
-              className="btn btn--sm"
-              onClick={() => inputRef.current?.click()}
-              disabled={disabled || !library || upload.busy}
-            >
-              {upload.busy ? (
-                <span className="spin" />
-              ) : (
-                <Icon name="upload" size={13} />
-              )}
-              Upload files
-            </button>
-            <input
-              ref={inputRef}
-              type="file"
-              multiple
-              accept={library?.limits.file_types.join(",")}
-              className="sr-only"
-              tabIndex={-1}
-              aria-label="Upload knowledge files"
-              onChange={(e) => {
-                if (e.target.files.length) addFiles([...e.target.files]);
-                e.target.value = "";
-              }}
-            />
-            <span className="tray__hint">
-              PDF, Word, text, Markdown or CSV. New files also go into your
-              library.
-            </span>
-          </div>
-          {problems.length > 0 && (
-            <span className="tray__hint tray__hint--warn">
-              {problems.join(" ")}
-            </span>
-          )}
-          <ErrorCallout error={load.error || upload.error} />
-          {library && library.documents.length > 0 && (
-            <fieldset className="filepick">
-              <legend className="tray__hint">
-                Or choose from your library
-              </legend>
-              {library.documents.map((doc) => {
-                const { badge, label } = documentBadge(doc.status);
-                return (
-                  <label key={doc.id} className="filepick__item">
-                    <input
-                      type="checkbox"
-                      checked={ids.has(doc.id)}
-                      onChange={() => toggle(doc)}
-                      disabled={disabled}
-                    />
-                    <Icon name="file" size={14} />
-                    <span className="filepick__name" title={doc.filename}>
-                      {doc.filename}
-                    </span>
-                    <span className="muted filepick__size">
-                      {formatBytes(doc.size_bytes)}
-                    </span>
-                    <StatusBadge status={badge} label={label} />
-                  </label>
-                );
-              })}
-            </fieldset>
-          )}
-          <span className="tray__hint">
-            Agents search these files with the knowledge_search tool; file text
-            is sent to the embedding provider to index it.
-          </span>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ------------------------------------------------------------------ data sources tray
-/**
- * Pick data sources (BigQuery) for the next project. They're attached when the project is
- * created, and the planner is told their table names so it can give agents the SQL tools.
- */
-function DataTray({ selected, onChange, disabled }) {
-  const [body, setBody] = useState(null);
-  const load = useAction();
-  const { run: runLoad } = load;
-
-  useEffect(() => {
-    runLoad(() => api.dataSources()).then((res) => res && setBody(res));
-  }, [runLoad]);
-
-  const ids = new Set(selected.map((s) => s.id));
-  const usable = (body?.sources ?? []).filter((s) => s.tables.length > 0);
-
-  function toggle(source) {
-    onChange(
-      ids.has(source.id)
-        ? selected.filter((s) => s.id !== source.id)
-        : [...selected, source],
-    );
-  }
-
-  return (
-    <div className="tray" id="composer-data">
-      <div className="tray__row tray__row--top">
-        <span className="tray__label">Data</span>
-        <div className="tray__control">
-          <ErrorCallout error={load.error} />
-          {body && usable.length === 0 && (
-            <span className="tray__hint">
-              No data source with tables yet.{" "}
-              <a href="#/data">Connect BigQuery and choose tables</a> first.
-            </span>
-          )}
-          {usable.length > 0 && (
-            <fieldset className="filepick">
-              <legend className="tray__hint">
-                Data sources agents may query
-              </legend>
-              {usable.map((s) => (
-                <label key={s.id} className="filepick__item">
-                  <input
-                    type="checkbox"
-                    checked={ids.has(s.id)}
-                    onChange={() => toggle(s)}
-                    disabled={disabled}
-                  />
-                  <Icon name="database" size={14} />
-                  <span className="filepick__name">{s.name}</span>
-                  <span className="muted filepick__size">
-                    {s.tables.length} table{s.tables.length === 1 ? "" : "s"}
-                  </span>
-                </label>
-              ))}
-            </fieldset>
-          )}
-          <span className="tray__hint">
-            Agents query these with sql_schema and sql_query: read-only, capped
-            per query. Results are sent to the agents&apos; model provider.
-          </span>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ------------------------------------------------------------------ MCP servers tray
-/**
- * Pick MCP servers for the next project. They're attached when the project is created, and
- * the planner is told the names and descriptions of their approved tools.
- */
-function McpTray({ selected, onChange, disabled }) {
-  const [body, setBody] = useState(null);
-  const load = useAction();
-  const { run: runLoad } = load;
-
-  useEffect(() => {
-    runLoad(() => api.mcpServers()).then((res) => res && setBody(res));
-  }, [runLoad]);
-
-  const ids = new Set(selected.map((s) => s.id));
-  const usable = (body?.servers ?? []).filter((s) =>
-    s.tools.some((t) => t.usable),
-  );
-
-  function toggle(server) {
-    onChange(
-      ids.has(server.id)
-        ? selected.filter((s) => s.id !== server.id)
-        : [...selected, server],
-    );
-  }
-
-  return (
-    <div className="tray" id="composer-mcp">
-      <div className="tray__row tray__row--top">
-        <span className="tray__label">Tools</span>
-        <div className="tray__control">
-          <ErrorCallout error={load.error} />
-          {body && usable.length === 0 && (
-            <span className="tray__hint">
-              No MCP server with approved tools yet.{" "}
-              <a href="#/mcp">Connect a server and approve its tools</a> first.
-            </span>
-          )}
-          {usable.length > 0 && (
-            <fieldset className="filepick">
-              <legend className="tray__hint">MCP servers agents may use</legend>
-              {usable.map((s) => {
-                const n = s.tools.filter((t) => t.usable).length;
-                return (
-                  <label key={s.id} className="filepick__item">
-                    <input
-                      type="checkbox"
-                      checked={ids.has(s.id)}
-                      onChange={() => toggle(s)}
-                      disabled={disabled}
-                    />
-                    <Icon name="bolt" size={14} />
-                    <span className="filepick__name">{s.name}</span>
-                    <span className="muted filepick__size">
-                      {n} approved tool{n === 1 ? "" : "s"}
-                    </span>
-                  </label>
-                );
-              })}
-            </fieldset>
-          )}
-          <span className="tray__hint">
-            Agents can call these servers&apos; approved tools; whatever they
-            pass to a tool is sent to that server.
-          </span>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ------------------------------------------------------------------ settings tray
-function SettingsTray({
-  settings,
-  onChange,
-  tools,
-  providers,
-  disabled,
-  name,
-  onNameChange,
-}) {
-  // SQL tools need a data source attached, which only an existing project can have.
-  const allTools = (tools.tools ?? []).filter(
-    (t) => t.name !== "sql_schema" && t.name !== "sql_query",
-  );
-  const defaultModel = providers.find((p) => p.default);
-  const auto = settings.agentCount === null;
-  const chosen = providers.find(
-    (p) => `${p.provider}/${p.model}` === settings.model,
-  );
-  const noTools = cannotCallTools(chosen);
-
-  function toggleTool(name) {
-    const next = new Set(settings.tools);
-    next.has(name) ? next.delete(name) : next.add(name);
-    // Registry order, so the request is the same however the chips were clicked.
-    onChange({ tools: allTools.map((t) => t.name).filter((n) => next.has(n)) });
-  }
-
-  const externalOn = allTools.filter(
-    (t) => t.side_effect && settings.tools.includes(t.name),
-  );
-
-  return (
-    <div className="tray" id="composer-settings">
-      <div className="tray__row">
-        <label className="tray__label" htmlFor="new-project-name">
-          Name
-        </label>
-        <div className="tray__control">
-          <input
-            id="new-project-name"
-            type="text"
-            className="tray__name"
-            value={name}
-            onChange={(e) => onNameChange(e.target.value)}
-            maxLength={100}
-            placeholder="Optional — otherwise the task's first line"
-            disabled={disabled}
-          />
-        </div>
-      </div>
-
-      <div className="tray__row">
-        <span className="tray__label">Team size</span>
-        <div className="tray__control">
-          <label className="row gap-xs">
-            <Switch
-              checked={auto}
-              onChange={(on) => onChange({ agentCount: on ? null : 3 })}
-              disabled={disabled}
-              label="Let the planner choose the team size"
-            />
-            <span>Let the planner choose</span>
-          </label>
-          {!auto && (
-            <div className="counter counter--sm">
-              <button
-                type="button"
-                aria-label="Fewer agents"
-                onClick={() =>
-                  onChange({
-                    agentCount: Math.max(MIN_AGENTS, settings.agentCount - 1),
-                  })
-                }
-                disabled={disabled || settings.agentCount <= MIN_AGENTS}
-              >
-                <Icon name="minus" size={13} />
-              </button>
-              <span className="counter__value" aria-live="polite">
-                {settings.agentCount}
-              </span>
-              <button
-                type="button"
-                aria-label="More agents"
-                onClick={() =>
-                  onChange({
-                    agentCount: Math.min(MAX_AGENTS, settings.agentCount + 1),
-                  })
-                }
-                disabled={disabled || settings.agentCount >= MAX_AGENTS}
-              >
-                <Icon name="plus" size={13} />
-              </button>
-            </div>
-          )}
-        </div>
-      </div>
-
-      <div className="tray__row">
-        <span className="tray__label">Model</span>
-        <div className="tray__control">
-          <ModelPicker
-            label="Model"
-            value={settings.model}
-            options={providers}
-            onChange={(model) => onChange({ model })}
-            emptyLabel={`Platform default${defaultModel ? ` (${defaultModel.name ?? defaultModel.model})` : ""}`}
-            disabled={disabled}
-          />
-        </div>
-      </div>
-
-      <div className="tray__row tray__row--top">
-        <span className="tray__label">Tools</span>
-        <div className="tray__control">
-          <div className="togglechips">
-            {allTools.map((tool) => {
-              const on = settings.tools.includes(tool.name);
-              return (
-                <button
-                  key={tool.name}
-                  type="button"
-                  className={[
-                    "togglechip",
-                    on && "togglechip--on",
-                    tool.side_effect && "togglechip--external",
-                  ]
-                    .filter(Boolean)
-                    .join(" ")}
-                  aria-pressed={on}
-                  title={
-                    tool.description +
-                    (tool.side_effect ? " — sends data to a third party" : "")
-                  }
-                  onClick={() => toggleTool(tool.name)}
-                  disabled={disabled || noTools}
-                >
-                  {on && <Icon name="check" size={12} />}
-                  {tool.name}
-                </button>
-              );
-            })}
-          </div>
-          {noTools && (
-            <span className="tray__hint tray__hint--warn" role="status">
-              {chosen.name ?? chosen.model} can&apos;t call tools, so its agents
-              get no tools (including knowledge search and data queries). Choose
-              another model to use tools.
-            </span>
-          )}
-          <span className="tray__hint">
-            {externalOn.length > 0
-              ? `External access on: agents may send task data to ${externalOn.map((t) => t.name).join(", ")}.`
-              : "Amber tools reach third-party services and stay off unless you switch them on."}
-          </span>
-        </div>
-      </div>
-    </div>
-  );
 }
 
 // ------------------------------------------------------------------ messages
@@ -797,20 +354,14 @@ function Message({
 export function NewProjectPage({ tools, providers, disabled, onCreated }) {
   const [draft, setDraft] = useState("");
   const [messages, setMessages] = useState([]);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [filesOpen, setFilesOpen] = useState(false);
   // Knowledge files for the next project (library documents).
   const [files, setFiles] = useState([]);
-  const [dataOpen, setDataOpen] = useState(false);
   // Data sources for the next project.
   const [sources, setSources] = useState([]);
-  const [mcpOpen, setMcpOpen] = useState(false);
   // MCP servers for the next project.
   const [mcpServers, setMcpServers] = useState([]);
   // agentCount null = the planner decides. tools null = follow the platform default.
   const [settings, setSettings] = useState(readSettings);
-  // The next project's name: per project, so it's cleared once a message is sent.
-  const [name, setName] = useState("");
   const toolCheck = useToolCheck();
   const modelList = withVerdicts(providers, toolCheck.verdicts);
   const textareaRef = useRef(null);
@@ -822,14 +373,6 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
   };
   const busy = messages.some((m) => m.status === "pending");
   const empty = messages.length === 0;
-
-  // Grow the message box with its content, up to a cap.
-  useLayoutEffect(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, MAX_COMPOSER_HEIGHT)}px`;
-  }, [draft]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
@@ -865,7 +408,7 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
         status: "error",
         error: {
           errorType: "ModelUnavailable",
-          message: `The model you chose (${request.model}) isn't in the list of available models right now. Choose a model in the settings and try again.`,
+          message: `The model you chose (${request.model}) isn't in the list of available models right now. Choose another model from the Model menu and try again.`,
         },
       });
       return;
@@ -893,9 +436,8 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
         ),
         { id: dividerId, role: "divider" },
       ]);
-      // The attachments and name belonged to this project.
+      // The attachments belonged to this project.
       setFiles([]);
-      setName("");
       onCreated(project);
     } catch (error) {
       patchMessage(replyId, { status: "error", error });
@@ -914,11 +456,11 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
       files,
       sources,
       mcpServers,
-      name: name.trim() || turnMessage.turn.name || "",
+      // No name field: the intake's suggested name, else the server names the project
+      // from the brief's first line. Renamed later from the project header.
+      name: turnMessage.turn.name || "",
       intake: toApiMessages(thread),
     };
-    setSettingsOpen(false);
-    setFilesOpen(false);
     // Ids are taken here, never inside a state updater (React may run those twice).
     const replyId = ++nextMessageId;
     setMessages((all) => [
@@ -974,8 +516,6 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
     const thread = [...messages, user];
     setMessages([...thread, reply]);
     setDraft("");
-    setSettingsOpen(false);
-    setFilesOpen(false);
     talk(thread, reply.id);
   }
 
@@ -1009,36 +549,15 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
   }
 
   return (
-    <div className="chat">
+    <div className={`chat${empty ? " chat--empty" : ""}`}>
       <div className={`chat__thread ${empty ? "chat__thread--empty" : ""}`}>
         {empty ? (
           <div className="chat__welcome">
-            <span className="chat__mark">
-              <Icon name="brand" size={22} />
-            </span>
+            <span className="chat__glow ap-glow-breathe" aria-hidden="true" />
             <h1>What should your agent team do?</h1>
             <p className="muted">
-              Tell me what you'd like your agents to do. I&apos;ll ask a few
-              questions to get it right, then plan the team when you&apos;re
-              ready. You review the plan before anything runs.
+              Describe the task. You review the plan before anything runs.
             </p>
-            <div className="suggestions">
-              {EXAMPLES.map((example) => (
-                <button
-                  key={example.label}
-                  type="button"
-                  className="suggestion"
-                  onClick={() => {
-                    setDraft(example.brief);
-                    textareaRef.current?.focus();
-                  }}
-                  disabled={disabled}
-                >
-                  <span className="suggestion__title">{example.label}</span>
-                  <span className="suggestion__text">{example.brief}</span>
-                </button>
-              ))}
-            </div>
           </div>
         ) : (
           messages.map((message) => (
@@ -1089,146 +608,60 @@ export function NewProjectPage({ tools, providers, disabled, onCreated }) {
         <div ref={endRef} />
       </div>
 
-      <form className="composer" onSubmit={send}>
-        <div className="composer__inner">
-          {filesOpen && (
-            <FilesTray selected={files} onChange={setFiles} disabled={busy} />
-          )}
-          {dataOpen && (
-            <DataTray
-              selected={sources}
-              onChange={setSources}
-              disabled={busy}
-            />
-          )}
-          {mcpOpen && (
-            <McpTray
-              selected={mcpServers}
-              onChange={setMcpServers}
-              disabled={busy}
-            />
-          )}
-          {settingsOpen && (
-            <SettingsTray
-              settings={effectiveSettings}
-              onChange={updateSettings}
-              tools={tools}
-              providers={modelList}
-              disabled={busy}
-              name={name}
-              onNameChange={setName}
-            />
-          )}
-          <div className="composer__box">
-            {files.length > 0 && (
-              <ul
-                className="composer__files"
-                aria-label="Knowledge files for this project"
-              >
-                {files.map((f) => (
-                  <li key={f.id} className="filechip">
-                    <Icon name="file" size={12} />
-                    <span className="filechip__name">{f.filename}</span>
-                    <button
-                      type="button"
-                      className="filechip__remove"
-                      onClick={() =>
-                        setFiles((all) => all.filter((x) => x.id !== f.id))
-                      }
-                      aria-label={`Remove ${f.filename}`}
-                    >
-                      <Icon name="close" size={11} />
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-            <textarea
-              ref={textareaRef}
-              rows={1}
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={onKeyDown}
-              placeholder={
-                empty
-                  ? "Describe the task, or ask how to start…"
-                  : "Reply, answer the questions, or describe another task…"
-              }
-              aria-label="Task description"
-              disabled={disabled}
-            />
-            <div className="composer__bar">
+      <Composer
+        draft={draft}
+        onDraft={setDraft}
+        onKeyDown={onKeyDown}
+        textareaRef={textareaRef}
+        placeholder={
+          empty
+            ? "Describe the task, or ask how to start…"
+            : "Reply, answer the questions, or describe another task…"
+        }
+        disabled={disabled}
+        busy={busy}
+        docked={!empty}
+        onSubmit={send}
+        settings={effectiveSettings}
+        onSettings={updateSettings}
+        tools={tools}
+        providers={modelList}
+        files={files}
+        sources={sources}
+        mcpServers={mcpServers}
+        // The next project's attachments: kept here, sent when it's created.
+        onToggleFile={(doc, on) => setFiles((all) => toggled(all, doc, on))}
+        onToggleSource={(s, on) => setSources((all) => toggled(all, s, on))}
+        onToggleMcp={(s, on) => setMcpServers((all) => toggled(all, s, on))}
+        onUploaded={(docs) => setFiles((all) => [...all, ...docs])}
+      />
+      {empty && (
+        // Below the composer, in reading and keyboard order (DESIGN.md §6 New project).
+        <div className="suggestions">
+          {EXAMPLES.map((example) => {
+            const ExampleIcon = example.icon;
+            return (
               <button
+                key={example.label}
                 type="button"
-                className={`composer__options ${filesOpen ? "composer__options--open" : ""}`}
-                onClick={() => setFilesOpen((open) => !open)}
-                aria-expanded={filesOpen}
-                aria-controls="composer-files"
-                title="Add knowledge files for the agents to search"
+                className="suggestion ap-lift"
+                data-tone={example.tone}
+                onClick={() => {
+                  setDraft(example.brief);
+                  textareaRef.current?.focus();
+                }}
+                disabled={disabled}
               >
-                <Icon name="file" size={14} />
-                {files.length ? filesLabel(files.length) : "Add files"}
-              </button>
-              <button
-                type="button"
-                className={`composer__options ${dataOpen ? "composer__options--open" : ""}`}
-                onClick={() => setDataOpen((open) => !open)}
-                aria-expanded={dataOpen}
-                aria-controls="composer-data"
-                title="Let the agents query your BigQuery tables"
-              >
-                <Icon name="database" size={14} />
-                {sources.length
-                  ? `${sources.length} data source${sources.length === 1 ? "" : "s"}`
-                  : "Add data"}
-              </button>
-              <button
-                type="button"
-                className={`composer__options ${mcpOpen ? "composer__options--open" : ""}`}
-                onClick={() => setMcpOpen((open) => !open)}
-                aria-expanded={mcpOpen}
-                aria-controls="composer-mcp"
-                title="Let the agents use tools from your MCP servers"
-              >
-                <Icon name="bolt" size={14} />
-                {mcpServers.length
-                  ? `${mcpServers.length} MCP server${mcpServers.length === 1 ? "" : "s"}`
-                  : "Add MCP"}
-              </button>
-              <button
-                type="button"
-                className={`composer__options ${settingsOpen ? "composer__options--open" : ""}`}
-                onClick={() => setSettingsOpen((open) => !open)}
-                aria-expanded={settingsOpen}
-                aria-controls="composer-settings"
-              >
-                <Icon name="sliders" size={14} />
-                <span className="composer__label">
-                  {describeSettings(effectiveSettings, tools, modelList)}
+                <span className="suggestion__icon" aria-hidden="true">
+                  <ExampleIcon size={18} />
                 </span>
+                <span className="suggestion__title">{example.label}</span>
+                <span className="suggestion__text">{example.brief}</span>
               </button>
-              <button
-                type="submit"
-                className="composer__send"
-                disabled={disabled || busy || !draft.trim()}
-                aria-label="Send"
-                title="Send (Enter)"
-              >
-                {busy ? (
-                  <span className="spin" />
-                ) : (
-                  <Icon name="arrowUp" size={16} />
-                )}
-              </button>
-            </div>
-          </div>
-          <p className="composer__hint">
-            Enter to send, Shift+Enter for a new line. The team is planned only
-            when you press Create plan or say so — nothing runs until you choose
-            to run it.
-          </p>
+            );
+          })}
         </div>
-      </form>
+      )}
     </div>
   );
 }

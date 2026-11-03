@@ -1,0 +1,147 @@
+{
+  "defaults": {
+    "create": {
+      "brief": "Answer questions about fares and holidays in Goa for a family of four travelling in December.",
+      "name": "Email digest",
+      "available_tools": [
+        "lookup",
+        "calculator"
+      ],
+      "intake": [
+        {
+          "role": "user",
+          "content": "Answer questions about fares and holidays in Goa for a family of four travelling in December."
+        },
+        {
+          "role": "assistant",
+          "content": "I have what I need. Shall I plan the team now?"
+        }
+      ]
+    },
+    "chat": {
+      "messages": [
+        {
+          "role": "user",
+          "content": "Answer questions about fares and holidays in Goa for a family of four travelling in December."
+        }
+      ]
+    }
+  },
+  "modelTeamTools": {
+    "create": {
+      "brief": "Answer questions about fares and holidays in Goa for a family of four travelling in December.",
+      "name": "Email digest",
+      "agent_count": 4,
+      "available_tools": [
+        "lookup",
+        "calculator",
+        "web_search",
+        "wikipedia"
+      ],
+      "available_llms": [
+        {
+          "provider": "bedrock",
+          "model": "in.anthropic.claude-haiku-4-5-20251001-v1:0"
+        }
+      ],
+      "intake": [
+        {
+          "role": "user",
+          "content": "Answer questions about fares and holidays in Goa for a family of four travelling in December."
+        },
+        {
+          "role": "assistant",
+          "content": "I have what I need. Shall I plan the team now?"
+        }
+      ]
+    },
+    "chat": {
+      "messages": [
+        {
+          "role": "user",
+          "content": "Answer questions about fares and holidays in Goa for a family of four travelling in December."
+        }
+      ]
+    }
+  },
+  "libraryDataMcp": {
+    "create": {
+      "brief": "Answer questions about fares and holidays in Goa for a family of four travelling in December.",
+      "name": "Email digest",
+      "available_tools": [
+        "lookup",
+        "calculator"
+      ],
+      "document_ids": [
+        "docseed1"
+      ],
+      "datasource_ids": [
+        "dsseed1"
+      ],
+      "mcp_server_ids": [
+        "mcpseed1"
+      ],
+      "intake": [
+        {
+          "role": "user",
+          "content": "Answer questions about fares and holidays in Goa for a family of four travelling in December."
+        },
+        {
+          "role": "assistant",
+          "content": "I have what I need. Shall I plan the team now?"
+        }
+      ]
+    },
+    "chat": {
+      "messages": [
+        {
+          "role": "user",
+          "content": "Answer questions about fares and holidays in Goa for a family of four travelling in December."
+        }
+      ],
+      "document_ids": [
+        "docseed1"
+      ],
+      "datasource_ids": [
+        "dsseed1"
+      ],
+      "mcp_server_ids": [
+        "mcpseed1"
+      ]
+    }
+  },
+  "uploaded": {
+    "create": {
+      "brief": "Answer questions about fares and holidays in Goa for a family of four travelling in December.",
+      "name": "Email digest",
+      "available_tools": [
+        "lookup",
+        "calculator"
+      ],
+      "document_ids": [
+        "<uploaded>"
+      ],
+      "intake": [
+        {
+          "role": "user",
+          "content": "Answer questions about fares and holidays in Goa for a family of four travelling in December."
+        },
+        {
+          "role": "assistant",
+          "content": "I have what I need. Shall I plan the team now?"
+        }
+      ]
+    },
+    "chat": {
+      "messages": [
+        {
+          "role": "user",
+          "content": "Answer questions about fares and holidays in Goa for a family of four travelling in December."
+        }
+      ],
+      "document_ids": [
+        "<uploaded>"
+      ]
+    }
+  }
+}

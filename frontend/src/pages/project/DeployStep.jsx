@@ -234,27 +234,53 @@ function StatusPanel({
     );
   }
 
-  const pill = !deployment ? (
-    <Pill dot>Not deployed</Pill>
-  ) : deployment.in_progress ? (
-    <Pill tone="accent" dot>
-      Deploying
-    </Pill>
-  ) : deployment.live ? (
-    <Pill tone={deployment.outdated ? "warn" : "success"} dot>
-      {deployment.outdated ? "Live · outdated" : "Live"}
-    </Pill>
-  ) : (
-    <Pill tone="danger" dot>
-      Failed
-    </Pill>
-  );
+  // Not deployed → Deploying (pulsing) → Live (DESIGN.md §7); each change fades in.
+  const state = !deployment
+    ? "none"
+    : deployment.in_progress
+      ? "deploying"
+      : deployment.live
+        ? deployment.outdated
+          ? "outdated"
+          : "live"
+        : "failed";
+  const pill = {
+    none: (
+      <Pill tone="slate" dot>
+        Not deployed
+      </Pill>
+    ),
+    deploying: (
+      <Pill tone="running" live>
+        Deploying
+      </Pill>
+    ),
+    outdated: (
+      <Pill tone="warn" dot>
+        Live · outdated
+      </Pill>
+    ),
+    live: (
+      <Pill tone="success" live>
+        Live
+      </Pill>
+    ),
+    failed: (
+      <Pill tone="danger" dot>
+        Failed
+      </Pill>
+    ),
+  }[state];
 
   return (
     <Panel
       title="Deployment"
       subtitle="Amazon Bedrock AgentCore Runtime"
-      actions={pill}
+      actions={
+        <span key={state} className="ap-fade">
+          {pill}
+        </span>
+      }
     >
       <div className="stack">{body}</div>
     </Panel>
@@ -504,7 +530,7 @@ export function DeployStep({ project, onDeploymentChanged }) {
       <ActionBar note="A deployment serves the plan version it was built from; plan changes need a compile and a redeploy.">
         <LinkButton href={paths.project(project.project_id, "run")}>
           <Icon name="arrowLeft" />
-          Run
+          Back to Run
         </LinkButton>
       </ActionBar>
     </>

@@ -1,12 +1,21 @@
 /* global process, console */
 // Finds design values written outside the token definitions: colours, font sizes and
-// spacing (padding / margin / gap / inset) in styles.css outside the theme blocks, and
-// inline style={{ … }} values in JSX. Usage: node scripts/audit-tokens.mjs [--list]
+// spacing (padding / margin / gap / inset) in the stylesheet partials (src/styles.css and
+// src/styles/**; tokens.css is where tokens are defined, so it is skipped), and inline
+// style={{ … }} values in JSX. Usage: node scripts/audit-tokens.mjs [--list]
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 const list = process.argv.includes("--list");
-const css = readFileSync("src/styles.css", "utf8");
+function cssFiles(dir) {
+  return readdirSync(dir).flatMap((name) => {
+    const p = join(dir, name);
+    return statSync(p).isDirectory() ? cssFiles(p) : p.endsWith(".css") ? [p] : [];
+  });
+}
+const sheets = ["src/styles.css", ...cssFiles("src/styles")]
+  .filter((p) => !/tokens\.css$/.test(p))
+  .map((p) => [p.split("\\").join("/").replace(/^src\//, ""), readFileSync(p, "utf8")]);
 
 // Theme blocks (`:root {`, `:root[data-theme…] {`, and the dark media query) are where
 // tokens are defined; everything else must use var(--…).
@@ -39,12 +48,12 @@ const SPACING = /^\s*(padding|margin|gap|row-gap|column-gap|top|right|bottom|lef
 const SPACING_OK = /^(0|auto|-?100%|50%|inherit|initial|unset|none)$/;
 
 const findings = { color: [], fontSize: [], spacing: [] };
-for (const [n, line] of stripTokenBlocks(css)) {
+for (const [file, css] of sheets) for (const [n, line] of stripTokenBlocks(css)) {
   if (/^\s*(\/\*|\*)/.test(line)) continue;
-  for (const m of line.match(COLOR) || []) findings.color.push(`styles.css:${n}  ${m}`);
+  for (const m of line.match(COLOR) || []) findings.color.push(`${file}:${n}  ${m}`);
   const fs = line.match(FONT_SIZE);
   if (fs && !/var\(--/.test(fs[1]) && !/^(inherit|1em|100%)$/.test(fs[1].trim())) {
-    findings.fontSize.push(`styles.css:${n}  ${fs[1].trim()}`);
+    findings.fontSize.push(`${file}:${n}  ${fs[1].trim()}`);
   }
   const sp = line.match(SPACING);
   if (sp) {
@@ -52,7 +61,7 @@ for (const [n, line] of stripTokenBlocks(css)) {
     // value; percentages, em-relative lengths and zeros are not design values.
     const parts = sp[3].replace(/var\([^)]*\)/g, "").split(/[\s(),*/+]+/).filter(Boolean);
     const bad = parts.filter((p) => /^-?\d+(\.\d+)?(px|rem)$/.test(p) && !/^-?0(px)?$/.test(p) && !SPACING_OK.test(p));
-    if (bad.length) findings.spacing.push(`styles.css:${n}  ${sp[1]}${sp[2] ?? ""}: ${sp[3].trim()}`);
+    if (bad.length) findings.spacing.push(`${file}:${n}  ${sp[1]}${sp[2] ?? ""}: ${sp[3].trim()}`);
   }
 }
 

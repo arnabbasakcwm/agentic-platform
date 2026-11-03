@@ -1,0 +1,507 @@
+/* ================================================================ knowledge page */
+.callout--info {
+  background: var(--info-soft);
+  border-color: var(--info-border);
+  color: var(--info);
+}
+
+/* A fixed dark red in both themes: the dark theme's --danger is a light red for text,
+   which white button text can't sit on. */
+.btn--danger {
+  background: var(--danger-fill);
+  border-color: var(--danger-fill);
+  color: var(--on-primary);
+}
+
+.btn--danger:hover:not(:disabled) {
+  filter: brightness(0.92);
+}
+
+.dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-xl) var(--space-md);
+  border: 1.5px dashed var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+  text-align: center;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.dropzone--over {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.dropzone__title {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.dropzone__hint {
+  font-size: var(--text-caption);
+  color: var(--text-muted);
+}
+
+.doclist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.doclist__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  color: var(--text-muted);
+}
+
+.doclist__item + .doclist__item {
+  border-top: 1px solid var(--border);
+}
+
+.doclist__main {
+  flex: 1;
+  min-width: 0;
+}
+
+.doclist__name {
+  color: var(--text);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.doclist__meta {
+  font-size: var(--text-caption);
+  color: var(--text-subtle);
+}
+
+.doclist__error {
+  margin-top: var(--space-xxs);
+  font-size: var(--text-caption);
+  color: var(--danger);
+  overflow-wrap: anywhere;
+}
+
+.searchrow {
+  display: flex;
+  gap: var(--space-xs);
+}
+
+.searchrow input {
+  flex: 1;
+  min-width: 0;
+}
+
+.hits {
+  list-style: none;
+  margin: var(--space-sm) 0 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-sm);
+}
+
+.hit {
+  padding: var(--space-sm) var(--space-sm);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+
+.hit__cite {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-xxs);
+  font-size: var(--text-caption);
+  margin-bottom: var(--space-xxs);
+}
+
+.hit__file {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.hit__score {
+  margin-left: auto;
+  color: var(--text-muted);
+}
+
+.hit__text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: var(--text-caption);
+  max-height: 160px;
+  overflow: auto;
+}
+
+.assistant-note {
+  margin-top: var(--space-sm);
+  padding: var(--space-sm) var(--space-sm);
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-caption);
+  white-space: pre-wrap;
+}
+
+.assistant-note__label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: var(--space-2xs);
+}
+
+
+/* ================================================================ knowledge workspace page */
+/* KpiTile (DESIGN.md §5.12), shared by Usage, Admin and Knowledge: label and icon on
+   top, a big value in the tile's colour, a helper line, a sparkline. */
+.kstats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: var(--space-card-gap);
+  margin-bottom: var(--space-md);
+}
+
+.kstat {
+  --tone-c: var(--violet);
+  --tone-ink: var(--violet-ink);
+  --tone-soft: var(--violet-soft);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xxs);
+  min-width: 0;
+  padding: var(--space-md);
+  border: 1px solid var(--border);
+  border-top: 3px solid var(--tone-c);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+
+.kstat[data-tone="sky"] { --tone-c: var(--sky); --tone-ink: var(--sky-ink); --tone-soft: var(--sky-soft); }
+.kstat[data-tone="teal"] { --tone-c: var(--teal); --tone-ink: var(--teal-ink); --tone-soft: var(--teal-soft); }
+.kstat[data-tone="amber"] { --tone-c: var(--amber); --tone-ink: var(--amber-ink); --tone-soft: var(--amber-soft); }
+.kstat[data-tone="pink"] { --tone-c: var(--pink); --tone-ink: var(--pink-ink); --tone-soft: var(--pink-soft); }
+.kstat[data-tone="emerald"] { --tone-c: var(--emerald); --tone-ink: var(--emerald-ink); --tone-soft: var(--emerald-soft); }
+
+/* Knowledge's status tiles: their value carries the status colour. */
+.kstat:not([data-tone]) {
+  border-top-color: var(--border);
+}
+
+.kstat__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-xs);
+}
+
+.kstat__icon {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-md);
+  background: var(--tone-soft);
+  color: var(--tone-c);
+  flex-shrink: 0;
+}
+
+.kstat__value {
+  font-family: var(--mono);
+  font-size: var(--text-kpi);
+  font-weight: 500;
+  line-height: var(--lh-h2);
+  letter-spacing: var(--track-heading);
+  font-variant-numeric: tabular-nums;
+  color: var(--tone-ink);
+}
+
+.kstat:not([data-tone]) .kstat__value {
+  color: var(--text-strong);
+}
+
+.kstat__label {
+  font-size: var(--text-overline);
+  font-weight: 600;
+  letter-spacing: var(--track-overline);
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.kstat--success .kstat__value {
+  color: var(--success);
+}
+
+.kstat--info .kstat__value {
+  color: var(--info);
+}
+
+.kstat--danger .kstat__value {
+  color: var(--danger);
+}
+
+/* The sparkline: the tile's colour, a soft fill under the line. */
+.sparkline {
+  display: block;
+  width: 100%;
+  height: 32px;
+  margin-top: var(--space-xs);
+  color: var(--tone-c);
+  overflow: visible;
+}
+
+.sparkline__line {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.sparkline__area {
+  fill: var(--tone-soft);
+  stroke: none;
+}
+
+.ktoolbar {
+  display: flex;
+  gap: var(--space-xs);
+  padding: var(--space-sm) var(--space-md);
+  border-bottom: 1px solid var(--border);
+}
+
+.ktoolbar input {
+  flex: 1;
+  min-width: 0;
+}
+
+.ktoolbar select {
+  width: auto;
+  max-width: 220px;
+}
+
+.ktable td {
+  vertical-align: middle;
+}
+
+.ktable tbody tr {
+  cursor: default;
+}
+
+.kfile {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-sm);
+  min-width: 0;
+  color: var(--text-muted);
+}
+
+.kfile__main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.kmain {
+  min-width: 0;
+}
+
+.kfile__name {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kproject {
+  color: var(--text);
+  text-decoration: none;
+}
+
+.kproject:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.kproject__hint {
+  display: block;
+  margin-top: var(--space-xxs);
+  text-decoration: none;
+  width: fit-content;
+}
+
+/* Add files: centred above the table, without a card around it. */
+.kadd {
+  margin-bottom: var(--space-md);
+}
+
+.kadd__inner {
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+.kadd__note {
+  margin: 0;
+  font-size: var(--text-caption);
+  color: var(--text-muted);
+  text-align: center;
+}
+
+/* A file's embedding model, with the inline re-index confirmation. */
+.kmodel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-field);
+  min-width: 0;
+}
+
+.kmodel select {
+  width: auto;
+  max-width: 260px;
+}
+
+.kmodel__confirm {
+  flex-wrap: wrap;
+  gap: var(--space-field);
+}
+
+.kmodel__prompt {
+  flex-basis: 100%;
+  font-size: var(--text-caption);
+  color: var(--text);
+}
+
+.kcol-actions {
+  width: 1%;
+  white-space: nowrap;
+  text-align: right;
+}
+
+@media (max-width: 1100px) {
+  .kstats {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+}
+
+@media (max-width: 640px) {
+  .kstats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ktoolbar {
+    flex-wrap: wrap;
+  }
+
+  .ktoolbar select {
+    max-width: none;
+    flex: 1;
+  }
+}
+
+
+/* ================================================================ delete confirmation */
+.table__actions {
+  width: 1%;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.table tbody tr .table__actions {
+  cursor: default;
+}
+
+.confirm-delete {
+  justify-content: flex-end;
+  flex-wrap: nowrap;
+}
+
+.confirm-delete__prompt {
+  font-size: var(--text-caption);
+  color: var(--danger);
+  white-space: nowrap;
+}
+
+/* ================================================================ library: project attachments */
+.kattach {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-xxs);
+}
+
+.kattach__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xxs);
+}
+
+.kattach__item {
+  display: flex;
+  flex-direction: column;
+}
+
+.kattach__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xxs);
+  padding: var(--space-2xs) var(--space-xs);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--text-caption);
+  cursor: pointer;
+}
+
+.kattach__toggle:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.kattach__toggle[aria-expanded="true"] {
+  color: var(--accent);
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
+/* Expands in place (the table's panel clips anything floating over its edge). */
+.kattach__panel {
+  min-width: 220px;
+  margin: var(--space-xxs) 0 0;
+  padding: var(--space-field) var(--space-xs);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+
+.kattach__legend {
+  padding: 0 var(--space-xxs) var(--space-field);
+  font-size: var(--text-caption);
+  color: var(--text-muted);
+}
+
+.kattach__option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: var(--space-field) var(--space-xxs);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  color: var(--text);
+}
+
+.kattach__option:hover {
+  background: var(--surface-sunken);
+}
+
+

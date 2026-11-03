@@ -1,0 +1,70 @@
+/* ---------------------------------------------------------------- reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  /* Static state colours only: no glow pulse, no flowing dashes, no spinners. */
+  .flow-node--running::after,
+  .flow-edge__dash,
+  .skeleton__line,
+  .timeline__bar--running {
+    animation: none !important;
+  }
+
+  .flow-node--running::after {
+    opacity: 0.6;
+  }
+
+  .flow-edge__dash {
+    stroke-dasharray: 6 6;
+  }
+
+  .spin {
+    animation: none !important;
+    border-right-color: currentColor;
+    opacity: 0.6;
+  }
+}
+
+@media (max-width: 900px) {
+  .stepper-bar {
+    padding-left: var(--space-md);
+    padding-right: var(--space-md);
+  }
+
+  .timeline__row {
+    grid-template-columns: minmax(80px, 110px) minmax(0, 1fr) 60px;
+    gap: var(--space-xs);
+  }
+
+  .timeline__axis {
+    margin-left: calc(var(--timeline-label-w-narrow) + var(--space-xs));
+    margin-right: calc(var(--timeline-value-w-narrow) + var(--space-xs));
+  }
+
+  .data__row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-2xs);
+  }
+}
+
+/* Run panel headers carry status badges: on narrow screens they wrap rather than
+   push the panel wider than the screen. */
+.run-page .panel__header {
+  flex-wrap: wrap;
+  row-gap: var(--space-xs);
+}
+
+/* Scrolled-to panels land below the sticky stepper, not under it. */
+.run-flow,
+.run-col {
+  scroll-margin-top: var(--sticky-stepper-h);
+}
+
+

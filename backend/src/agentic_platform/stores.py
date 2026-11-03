@@ -245,11 +245,14 @@ class ProjectStore(Protocol):
         messages: list[ChatMessage],
         brief: str | None = None,
         plan: AgentPlan | None = None,
+        side_effect_tools_enabled: list[str] | None = None,
     ) -> ProjectRecord | None:
         """Append chat messages and, if given, replace the brief and plan (bumping
         plan_version) — all in one write, and only if the plan is still at
         `expected_version`. None if it has moved on or the project is gone, so a revision
-        computed from a stale plan is never saved over a newer one."""
+        computed from a stale plan is never saved over a newer one. If given,
+        `side_effect_tools_enabled` replaces the project's external-tool opt-ins in the
+        same write."""
         ...
 
 
@@ -317,6 +320,7 @@ class InMemoryProjectStore:
         messages: list[ChatMessage],
         brief: str | None = None,
         plan: AgentPlan | None = None,
+        side_effect_tools_enabled: list[str] | None = None,
     ) -> ProjectRecord | None:
         record = self._records.get(project_id)
         if record is None or record.plan_version != expected_version:
@@ -327,6 +331,8 @@ class InMemoryProjectStore:
             record.plan = plan.model_copy(deep=True)
         if brief is not None or plan is not None:
             record.plan_version += 1
+        if side_effect_tools_enabled is not None:
+            record.side_effect_tools_enabled = list(side_effect_tools_enabled)
         record.conversation = [*record.conversation, *messages][-CONVERSATION_LIMIT:]
         record.updated_at = _now()
         return record.model_copy(deep=True)
@@ -482,6 +488,7 @@ class MongoProjectStore:
         messages: list[ChatMessage],
         brief: str | None = None,
         plan: AgentPlan | None = None,
+        side_effect_tools_enabled: list[str] | None = None,
     ) -> ProjectRecord | None:
         from pymongo import ReturnDocument
 
@@ -490,6 +497,8 @@ class MongoProjectStore:
             changes["brief"] = brief
         if plan is not None:
             changes["plan"] = plan.model_dump()
+        if side_effect_tools_enabled is not None:
+            changes["side_effect_tools_enabled"] = list(side_effect_tools_enabled)
         update: dict[str, Any] = {
             "$set": changes,
             "$push": {

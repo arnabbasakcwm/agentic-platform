@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
+import { settled } from "./settled.js";
 
 // The design tokens and dark theme apply to the whole console: the other pages must
 // stay readable and accessible in both themes too.
@@ -29,7 +30,7 @@ for (const scheme of ["light", "dark"]) {
       await page.goto(url);
       await expect(page.locator(ready).first()).toBeVisible();
       await page.screenshot({ path: `e2e/screenshots/page-${name}-${scheme}.png` });
-      const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
+      const results = await new AxeBuilder({ page: await settled(page) }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
       const bad = results.violations.filter((v) => ["serious", "critical"].includes(v.impact));
       expect(bad.map((v) => `${name}: ${v.id}: ${v.nodes.slice(0, 3).map((n) => n.target.join(" ")).join(" | ")}`)).toEqual([]);
     }

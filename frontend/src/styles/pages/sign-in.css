@@ -1,0 +1,353 @@
+/* ---------------------------------------------------------------- sign-in screen */
+/* DESIGN.md §6 Sign in: split 50/50; on the left an aubergine mesh (drifting slowly,
+   .ap-mesh) with the headline, a mini pipeline of three glass chips and three feature
+   rows; on the right the sign-in card. */
+.authscreen {
+  min-height: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  background: var(--canvas);
+}
+
+.authintro {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xxl);
+  padding: var(--space-3xl);
+  background: var(--gradient-auth);
+  color: var(--on-night);
+}
+
+/* The sidebar's brand grows to fill its row; here it stays at the top. */
+.authintro .brand,
+.authscreen__brand {
+  flex: none;
+}
+
+.authintro .brand__name {
+  color: var(--on-night);
+}
+
+.authintro__body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: var(--space-xxl);
+  max-width: 520px;
+}
+
+.authintro__title {
+  margin: 0;
+  font-size: var(--text-h1);
+  line-height: var(--lh-h1);
+  font-weight: 700;
+  letter-spacing: var(--track-h1);
+  color: var(--on-night);
+  text-wrap: balance;
+}
+
+/* The pipeline: three glass chips joined by a hairline, each lit in turn. */
+.authintro__team {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-xs);
+  max-width: 440px;
+}
+
+.authintro__chip {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--glass);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-control);
+  backdrop-filter: blur(12px);
+  animation: ap-chip-light 6s var(--ease-out) infinite;
+  animation-delay: calc(var(--i, 0) * 2s);
+}
+
+/* The hairline between chips: the work handed along. */
+.authintro__chip + .authintro__chip::before {
+  content: "";
+  position: absolute;
+  left: calc(var(--space-md) + var(--space-px));
+  bottom: 100%;
+  width: 2px;
+  height: var(--space-xs);
+  background: var(--glass-border);
+}
+
+.authintro__bar {
+  flex: none;
+  width: 4px;
+  height: 24px;
+  border-radius: var(--radius-pill);
+}
+
+.authintro__chip--1 .authintro__bar {
+  background: var(--agent-1);
+}
+
+.authintro__chip--2 .authintro__bar {
+  background: var(--agent-2);
+}
+
+.authintro__chip--3 .authintro__bar {
+  background: var(--agent-3);
+}
+
+.authintro__name {
+  flex: 1;
+  font-size: var(--text-body-sm);
+  font-weight: 600;
+}
+
+/* The state, as on a run: light text on a tinted glass pill. */
+.authintro__state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-field);
+  height: 22px;
+  padding: 0 var(--space-xs);
+  border-radius: var(--radius-pill);
+  font-size: var(--text-eyebrow);
+  font-weight: 500;
+  background: var(--glass);
+  border: 1px solid var(--glass-border);
+  color: var(--on-night);
+}
+
+.authintro__state--success .dot,
+.authintro__state--success::before {
+  color: var(--emerald);
+}
+
+.authintro__state--success::before,
+.authintro__state--warn::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: currentColor;
+}
+
+.authintro__state--warn::before {
+  color: var(--amber);
+}
+
+.authintro__state--running .dot {
+  color: var(--sky);
+}
+
+.authintro__points {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-lg);
+}
+
+.authintro__points li {
+  display: flex;
+  gap: var(--space-sm);
+  align-items: flex-start;
+  font-size: var(--text-body-sm);
+  line-height: var(--lh-body);
+  color: var(--on-night);
+}
+
+.authintro__points strong {
+  display: block;
+  font-weight: 600;
+}
+
+.authintro__text {
+  display: block;
+  color: var(--on-night-muted);
+}
+
+.authintro__icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-md);
+  background: var(--night-fill);
+  border: 1px solid var(--night-line);
+  color: var(--on-night);
+}
+
+.authscreen__main {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4xl) var(--space-lg) var(--space-3xl);
+}
+
+.authscreen__status {
+  position: absolute;
+  top: var(--space-lg);
+  right: var(--space-lg);
+}
+
+.authscreen__form {
+  width: 100%;
+  max-width: 400px;
+}
+
+/* On wide screens the brand sits in the intro column. */
+.authscreen__brand {
+  display: none;
+  margin-bottom: var(--space-lg);
+}
+
+.auth {
+  width: 100%;
+  padding: var(--space-xxl);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-raised);
+}
+
+.auth__title {
+  margin: 0 0 var(--space-xxs);
+  font-size: var(--text-h2);
+  line-height: 1.25;
+  font-weight: 700;
+  letter-spacing: var(--track-heading);
+  color: var(--text-strong);
+}
+
+.auth__sub {
+  margin: 0 0 var(--space-lg);
+  font-size: var(--text-caption);
+  color: var(--text-muted);
+}
+
+.auth__modes {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2xs);
+  padding: var(--space-xxs);
+  margin-bottom: var(--space-lg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface-sunken);
+}
+
+.auth__mode {
+  position: relative;
+  z-index: 1;
+  height: 34px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--text-caption);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.auth__mode:hover {
+  color: var(--text);
+}
+
+.auth__mode--on {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.auth__mode:focus-visible,
+.pwfield__toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.auth__fields {
+  display: grid;
+  gap: var(--space-md);
+}
+
+.auth__fields .field {
+  margin-bottom: 0;
+}
+
+.auth__fields input {
+  height: 40px;
+  font-size: var(--text-caption);
+}
+
+.auth__fields .btn {
+  height: 40px;
+  margin-top: var(--space-xxs);
+}
+
+.pwfield {
+  position: relative;
+}
+
+.pwfield input {
+  padding-right: var(--space-3xl);
+}
+
+.pwfield__toggle {
+  position: absolute;
+  top: 50%;
+  right: var(--space-xxs);
+  transform: translateY(-50%);
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.pwfield__toggle:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--surface-sunken);
+}
+
+@media (max-width: 900px) {
+  .authscreen {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .authintro {
+    display: none;
+  }
+
+  .authscreen__main {
+    align-items: flex-start;
+    padding: var(--space-4xl) var(--space-md) var(--space-xxl);
+  }
+
+  .authscreen__brand {
+    display: flex;
+    justify-content: center;
+  }
+
+  .authscreen__status {
+    right: var(--space-md);
+  }
+}
+
+@media (max-width: 480px) {
+  .auth {
+    padding: var(--space-lg) var(--space-lg);
+  }
+}
+

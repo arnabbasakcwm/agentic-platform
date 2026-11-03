@@ -1,0 +1,421 @@
+/* Agentic Platform console — design tokens, from docs/design.md (the source of truth;
+   the full redesign spec is design/DESIGN.md). A soft grey canvas with white cards and
+   hairline borders; colour carries meaning (one per phase, agent, metric and status),
+   and the violet → pink → orange gradient marks primary actions and the active state.
+   This is the only file allowed raw values: every other partial uses var(--…).
+
+   Role names (--canvas, --surface, --text, --primary, --success…) are kept from the
+   earlier system and re-pointed, so existing rules take the new look unchanged. Status
+   colours used as TEXT are the deeper shades from the pack's reference (#047857,
+   #B45309, #0369A1…): the bright accent hues fail WCAG AA as text on white. */
+
+:root {
+  color-scheme: light;
+
+  /* ---- neutrals (DESIGN.md §2) */
+  --bg-canvas: #f7f8fc;
+  --bg-card: #ffffff;
+  --bg-subtle: #f1f3f9;
+  --border-hairline: #e4e7f0;
+  --text-strong: #0f172a;
+  --text-body: #334155;
+  --text-muted-ink: #5b6b82; /* the pack's #64748B is 4.3:1 on --bg-subtle; this passes AA on every light surface */
+  --code-bg: #0f172a;
+  --code-text: #e2e8f0;
+
+  /* ---- accents + soft tints */
+  --violet: #7c3aed;
+  --violet-soft: #f3eeff;
+  --pink: #db2777;
+  --pink-soft: #fdeef6;
+  --orange: #f97316;
+  --orange-soft: #fff2e8;
+  --teal: #0d9488;
+  --teal-soft: #e7f7f5;
+  --emerald: #10b981;
+  --emerald-soft: #e8f8f1;
+  --amber: #f59e0b;
+  --amber-soft: #fef5e4;
+  --sky: #0ea5e9;
+  --sky-soft: #e8f6fd;
+  --rose: #e11d48;
+  --rose-soft: #fdecef;
+  --slate: #64748b;
+  --slate-soft: #f1f5f9;
+
+  /* Each accent as readable text on its soft tint and on white (≥ 4.5:1). */
+  --violet-ink: #6d28d9;
+  --pink-ink: #be185d;
+  --orange-ink: #c2410c;
+  --teal-ink: #0f766e;
+  --emerald-ink: #047857;
+  --amber-ink: #b45309;
+  --sky-ink: #0369a1;
+  --rose-ink: #be123c;
+  --slate-ink: #475569;
+
+  /* Focus rings around a phase's active circle (reference: 4px soft ring). */
+  --violet-ring: rgba(124, 58, 237, 0.18);
+  --pink-ring: rgba(219, 39, 119, 0.16);
+  --orange-ring: rgba(249, 115, 22, 0.18);
+  --teal-ring: rgba(13, 148, 136, 0.18);
+  --emerald-ring: rgba(16, 185, 129, 0.18);
+  --amber-ring: rgba(245, 158, 11, 0.2);
+  --sky-ring: rgba(14, 165, 233, 0.18);
+  --rose-ring: rgba(225, 29, 72, 0.16);
+
+  /* ---- gradients */
+  --gradient-primary: linear-gradient(90deg, #7c3aed 0%, #db2777 55%, #f97316 100%);
+  --gradient-bars: linear-gradient(180deg, #7c3aed 0%, #db2777 100%);
+  --gradient-bar-highlight: linear-gradient(180deg, #f97316 0%, #db2777 100%);
+  --gradient-hero-glow: radial-gradient(60% 60% at 30% 40%, rgba(124, 58, 237, 0.14), transparent 70%),
+    radial-gradient(50% 50% at 70% 40%, rgba(219, 39, 119, 0.12), transparent 70%),
+    radial-gradient(40% 40% at 50% 70%, rgba(249, 115, 22, 0.1), transparent 70%);
+  --gradient-auth: radial-gradient(60% 50% at 80% 20%, rgba(219, 39, 119, 0.28), transparent 60%),
+    radial-gradient(50% 40% at 20% 90%, rgba(249, 115, 22, 0.16), transparent 60%),
+    linear-gradient(160deg, #1e1b4b 0%, #4c1d95 100%);
+  --gradient-shimmer: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.35), transparent);
+
+  /* ---- semantic mappings (DESIGN.md §2) */
+  --phase-brief: var(--violet);
+  --phase-resources: var(--teal);
+  --phase-plan: var(--amber);
+  --phase-compile: var(--emerald);
+  --phase-run: var(--pink);
+  --phase-deploy: var(--orange);
+
+  /* Agents, in plan order: violet, teal, amber, rose, sky, emerald. */
+  --agent-1: var(--violet);
+  --agent-2: var(--teal);
+  --agent-3: var(--amber);
+  --agent-4: var(--rose);
+  --agent-5: var(--sky);
+  --agent-6: var(--emerald);
+  --agent-1-soft: var(--violet-soft);
+  --agent-2-soft: var(--teal-soft);
+  --agent-3-soft: var(--amber-soft);
+  --agent-4-soft: var(--rose-soft);
+  --agent-5-soft: var(--sky-soft);
+  --agent-6-soft: var(--emerald-soft);
+  --agent-1-ink: var(--violet-ink);
+  --agent-2-ink: var(--teal-ink);
+  --agent-3-ink: var(--amber-ink);
+  --agent-4-ink: var(--rose-ink);
+  --agent-5-ink: var(--sky-ink);
+  --agent-6-ink: var(--emerald-ink);
+
+  --status-success: var(--emerald);
+  --status-warning: var(--amber);
+  --status-failed: var(--rose);
+  --status-running: var(--sky);
+  --status-idle: var(--slate);
+
+  /* ---- roles (the names the rest of the stylesheet uses) */
+  --canvas-soft: var(--bg-canvas);
+  --white: var(--bg-card);
+  --hairline-color: var(--border-hairline);
+  --field-border: #cbd2e1;
+  --ink: var(--text-strong);
+  --ink-secondary: var(--text-body);
+  --ink-muted: var(--text-muted-ink);
+  --ink-faint: #94a3b8;
+
+  --canvas: var(--bg-canvas);
+  --surface: var(--bg-card);
+  --surface-sunken: var(--bg-subtle);
+  --surface-hover: rgba(15, 23, 42, 0.04);
+
+  --border: var(--border-hairline);
+  --border-strong: #cbd2e1;
+
+  --text: var(--text-body);
+  --text-secondary: var(--text-body);
+  --text-muted: var(--text-muted-ink);
+  --text-subtle: var(--text-muted-ink);
+  --text-faint: var(--ink-faint); /* placeholders, disabled glyphs, decoration only */
+
+  /* A solid accent where a gradient can't go (focus outlines, checkboxes, single
+     strokes). Buttons use --gradient-primary. */
+  --primary: var(--violet);
+  --primary-hover: var(--violet-ink);
+  --primary-active: var(--violet-ink);
+  --on-primary: #ffffff;
+  --link: var(--violet-ink);
+  --accent: var(--violet-ink);
+  --accent-soft: var(--violet-soft);
+  --accent-border: #dccdfb;
+  --ring: rgba(124, 58, 237, 0.35);
+
+  --success: var(--emerald-ink);
+  --success-soft: var(--emerald-soft);
+  --success-border: #a7e3c9;
+  --warn: var(--amber-ink);
+  --warn-soft: var(--amber-soft);
+  --warn-border: #f6d58f;
+  --danger: var(--rose-ink);
+  --danger-soft: var(--rose-soft);
+  --danger-border: #f5bccb;
+  --danger-fill: var(--rose); /* white text on it: 4.7:1 */
+  --running: var(--sky-ink);
+  --running-soft: var(--sky-soft);
+  --running-border: #bae6fd;
+  /* Info is neutral (slate): sky means "running". */
+  --info: var(--slate-ink);
+  --info-soft: var(--slate-soft);
+  --info-border: var(--border-hairline);
+
+  --chart: var(--violet);
+
+  /* JSON syntax colours: light views and the dark editor. */
+  --code-key: var(--violet-ink);
+  --code-string: var(--emerald-ink);
+  --code-number: var(--amber-ink);
+  --code-literal: var(--sky-ink);
+  --code-dark-key: #c4b5fd;
+  --code-dark-string: #6ee7b7;
+  --code-dark-number: #fcd34d;
+  --code-dark-literal: #7dd3fc;
+
+  /* ---- spacing (4px grid) */
+  --space-px: 1px;
+  --space-2xs: 2px;
+  --space-xxs: 4px;
+  --space-field: 6px;
+  --space-xs: 8px;
+  --space-btn-y: 10px;
+  --space-sm: 12px;
+  --space-btn: 14px;
+  --space-md: 16px;
+  --space-card-gap: 16px;
+  --space-lg: 24px;
+  --space-card: 20px;
+  --space-xl: 28px;
+  --space-xxl: 32px;
+  --space-3xl: 48px;
+  --space-4xl: 64px;
+
+  /* ---- type (DESIGN.md §3): page 28/34, section 18/26, card 15/22, body 14/22,
+     small 12/16, overline 11/16 */
+  --text-overline: 11px;
+  --text-xs: 11px;
+  --text-eyebrow: 12px;
+  --text-code: 13px;
+  --text-caption: 13px;
+  --text-body-sm: 14px;
+  --text-body: 15px;
+  --text-button: 14px;
+  --text-card-title: 15px;
+  --text-title: 16px;
+  --text-section: 18px;
+  --text-h3: 20px;
+  --text-kpi: 28px;
+  --text-h2: 28px;
+  --text-project-title: 30px;
+  --text-h1: 34px;
+  --text-display-2: 40px;
+  --text-display-1: 48px;
+
+  --lh-tight: 1;
+  --lh-display-2: 1.1;
+  --lh-h1: 1.18;
+  --lh-h2: 1.21;
+  --lh-h3: 1.3;
+  --lh-title: 1.45;
+  --lh-body: 1.57;
+  --lh-body-sm: 1.45;
+  --lh-caption: 1.45;
+  --lh-eyebrow: 1.33;
+
+  --track-heading: -0.01em;
+  --track-display-1: -0.02em;
+  --track-display-2: -0.02em;
+  --track-h1: -0.01em;
+  --track-h2: -0.01em;
+  --track-h3: -0.01em;
+  --track-title: -0.01em;
+  --track-eyebrow: 0.01em;
+  --track-overline: 0.06em;
+
+  /* ---- shape (cards 12, inputs and buttons 10, pills 999) */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-control: 10px;
+  --radius-lg: 12px;
+  --radius-card: 12px;
+  --radius-xl: 16px;
+  --radius-full: 9999px;
+  --radius-pill: 999px;
+  --radius: var(--radius-card);
+
+  /* ---- elevation */
+  --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.04), 0 4px 16px rgba(15, 23, 42, 0.04);
+  --shadow-raised: 0 8px 24px rgba(15, 23, 42, 0.08);
+  --shadow-primary: 0 6px 20px rgba(219, 39, 119, 0.25);
+  --shadow-primary-hover: 0 10px 28px rgba(219, 39, 119, 0.32);
+  --shadow-footer: 0 -4px 16px rgba(15, 23, 42, 0.04);
+  --shadow-1: var(--shadow-card);
+  --shadow-2: 0 8px 24px rgba(15, 23, 42, 0.1), 0 24px 56px rgba(15, 23, 42, 0.12);
+  --shadow-hover: var(--shadow-raised);
+  --shadow-overlay: var(--shadow-2);
+  --glow-running: rgba(14, 165, 233, 0.18);
+  --glow-running-0: rgba(14, 165, 233, 0);
+  --glow-success: rgba(16, 185, 129, 0.28);
+  --glow-success-0: rgba(16, 185, 129, 0);
+  --focus-ring-gradient: 0 0 0 1.5px #7c3aed, 0 0 0 5px rgba(219, 39, 119, 0.12);
+  --skeleton-highlight: #ffffff;
+
+  /* ---- glass chips on the dark sign-in panel */
+  --glass: rgba(255, 255, 255, 0.08);
+  --glass-border: rgba(255, 255, 255, 0.15);
+
+  /* ---- layout (sidebar 248 / 64, top bar 56, content 1280 with 32 sides) */
+  --content-max: 1280px;
+  --sidebar-w: 248px;
+  --sidebar-w-collapsed: 64px;
+  --topbar-h: 56px;
+  --touch-target: 44px;
+  --scrim: rgba(15, 23, 42, 0.4);
+  --node-w: 220px;
+  /* Phase stepper geometry (reference): the connector sits on the circles' centre line
+     and starts/ends 4px clear of each 28px circle. */
+  --step-line-top: 25px;
+  --step-line-top-compact: 21px;
+  --step-line-inset: 18px;
+  /* The sticky stepper's height plus its gap: where scrolled-to panels land. */
+  --sticky-stepper-h: 168px;
+  /* The dark sign-in band: aubergine mesh, white type. */
+  --night: #1e1b4b;
+  --on-night: #ffffff;
+  --on-night-muted: rgba(255, 255, 255, 0.78);
+  --night-line: rgba(255, 255, 255, 0.28);
+  --night-fill: rgba(255, 255, 255, 0.08);
+  --chat-max: 820px;
+  --timeline-label-w: 180px;
+  --timeline-value-w: 72px;
+  --timeline-label-w-narrow: 110px;
+  --timeline-value-w-narrow: 60px;
+
+  --text-code-inline: 0.9em;
+  --list-indent: 1.4em;
+
+  --font-sans: "Inter Variable", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font: var(--font-sans);
+  --mono: var(--font-mono);
+
+  /* ---- motion (DESIGN.md §7) */
+  --ease-out: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --dur-fast: 160ms;
+  --dur: 240ms;
+  --dur-slow: 400ms;
+}
+
+/* Dark theme: the same accents on darker neutrals; text tints lightened to stay ≥ 4.5:1.
+   Follows the system unless the toggle chose light, or when it chose dark. The two
+   blocks below are identical. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+
+    --bg-canvas: #0b1020;
+    --bg-card: #121933;
+    --bg-subtle: #1a2242;
+    --border-hairline: #253056;
+    --text-strong: #f8fafc;
+    --text-body: #cbd5e1;
+    --text-muted-ink: #94a3b8;
+    --code-bg: #0a0f1f;
+
+    --violet-soft: #251d4a;
+    --pink-soft: #391a33;
+    --orange-soft: #392516;
+    --teal-soft: #0f2f30;
+    --emerald-soft: #0f2d27;
+    --amber-soft: #352a12;
+    --sky-soft: #0f2b40;
+    --rose-soft: #3a1726;
+    --slate-soft: #1c2440;
+
+    --violet-ink: #c4b5fd;
+    --pink-ink: #f9a8d4;
+    --orange-ink: #fdba74;
+    --teal-ink: #5eead4;
+    --emerald-ink: #6ee7b7;
+    --amber-ink: #fcd34d;
+    --sky-ink: #7dd3fc;
+    --rose-ink: #fda4af;
+    --slate-ink: #cbd5e1;
+
+    --field-border: #34406b;
+    --ink-faint: #64748b;
+    --surface-hover: rgba(255, 255, 255, 0.05);
+    --border-strong: #34406b;
+    --accent-border: #4c3a8a;
+    --ring: rgba(167, 139, 250, 0.5);
+    --success-border: #1f5c48;
+    --warn-border: #6b5016;
+    --danger-border: #6e2a3c;
+    --running-border: #1d4f70;
+    --danger-fill: #e11d48;
+
+    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 16px rgba(0, 0, 0, 0.25);
+    --shadow-raised: 0 8px 24px rgba(0, 0, 0, 0.4);
+    --shadow-footer: 0 -4px 16px rgba(0, 0, 0, 0.3);
+    --shadow-2: 0 8px 24px rgba(0, 0, 0, 0.4), 0 24px 56px rgba(0, 0, 0, 0.45);
+    --skeleton-highlight: #253056;
+    --scrim: rgba(0, 0, 0, 0.55);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg-canvas: #0b1020;
+  --bg-card: #121933;
+  --bg-subtle: #1a2242;
+  --border-hairline: #253056;
+  --text-strong: #f8fafc;
+  --text-body: #cbd5e1;
+  --text-muted-ink: #94a3b8;
+  --code-bg: #0a0f1f;
+
+  --violet-soft: #251d4a;
+  --pink-soft: #391a33;
+  --orange-soft: #392516;
+  --teal-soft: #0f2f30;
+  --emerald-soft: #0f2d27;
+  --amber-soft: #352a12;
+  --sky-soft: #0f2b40;
+  --rose-soft: #3a1726;
+  --slate-soft: #1c2440;
+
+  --violet-ink: #c4b5fd;
+  --pink-ink: #f9a8d4;
+  --orange-ink: #fdba74;
+  --teal-ink: #5eead4;
+  --emerald-ink: #6ee7b7;
+  --amber-ink: #fcd34d;
+  --sky-ink: #7dd3fc;
+  --rose-ink: #fda4af;
+  --slate-ink: #cbd5e1;
+
+  --field-border: #34406b;
+  --ink-faint: #64748b;
+  --surface-hover: rgba(255, 255, 255, 0.05);
+  --border-strong: #34406b;
+  --accent-border: #4c3a8a;
+  --ring: rgba(167, 139, 250, 0.5);
+  --success-border: #1f5c48;
+  --warn-border: #6b5016;
+  --danger-border: #6e2a3c;
+  --running-border: #1d4f70;
+  --danger-fill: #e11d48;
+
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 16px rgba(0, 0, 0, 0.25);
+  --shadow-raised: 0 8px 24px rgba(0, 0, 0, 0.4);
+  --shadow-footer: 0 -4px 16px rgba(0, 0, 0, 0.3);
+  --shadow-2: 0 8px 24px rgba(0, 0, 0, 0.4), 0 24px 56px rgba(0, 0, 0, 0.45);
+  --skeleton-highlight: #253056;
+  --scrim: rgba(0, 0, 0, 0.55);
+}

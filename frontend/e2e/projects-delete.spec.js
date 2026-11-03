@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
+import { settled } from "./settled.js";
 
 // Deleting a project from the Projects page: the trash button asks for confirmation in
 // place (and never opens the project), Keep backs out, Delete removes the project and its
@@ -40,7 +41,7 @@ for (const scheme of ["light", "dark"]) {
     await expect(page).toHaveURL(/#\/projects$/);
     await expect(row).toContainText("Delete this project? Its files stay in your library.");
     await page.screenshot({ path: `e2e/screenshots/projects-delete-confirm-${scheme}.png` });
-    const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
+    const results = await new AxeBuilder({ page: await settled(page) }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
     const bad = results.violations.filter((v) => ["serious", "critical"].includes(v.impact));
     expect(bad.map((v) => `${v.id}: ${v.nodes.slice(0, 3).map((n) => n.target.join(" ")).join(" | ")}`)).toEqual([]);
 

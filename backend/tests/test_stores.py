@@ -221,6 +221,20 @@ def test_exchange_with_changes_bumps_version_and_keeps_messages(store):
     assert store.get(record.id) == updated
 
 
+def test_exchange_can_replace_the_external_tool_opt_ins(store):
+    record = _record()
+    store.create(record)
+    updated = store.record_exchange(
+        record.id, 1, [_msg("user", "search the web")], side_effect_tools_enabled=["web_search"],
+    )
+    assert updated.side_effect_tools_enabled == ["web_search"]
+    assert updated.plan_version == 1  # no plan change, no new version
+    assert store.get(record.id) == updated
+    # Not given: left as it was.
+    again = store.record_exchange(record.id, 1, [_msg("user", "thanks")])
+    assert again.side_effect_tools_enabled == ["web_search"]
+
+
 def test_exchange_without_changes_only_appends(store):
     record = _record()
     store.create(record)

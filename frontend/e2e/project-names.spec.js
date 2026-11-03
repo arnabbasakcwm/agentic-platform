@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
+import { settled } from "./settled.js";
 
 // Project names: set one when creating a project, and rename with the pencil from the
 // project page, the Projects list and the planner's reply; the new name shows everywhere.
@@ -7,7 +8,7 @@ const API = "http://127.0.0.1:8765";
 const PROJECT = "e2e0travel0project";
 
 async function axeProblems(page, label) {
-  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
+  const results = await new AxeBuilder({ page: await settled(page) }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
   return results.violations
     .filter((v) => ["serious", "critical"].includes(v.impact))
     .map((v) => `${label}: ${v.id}: ${v.nodes.slice(0, 3).map((n) => n.target.join(" ")).join(" | ")}`);
@@ -74,25 +75,20 @@ test("rename from the Projects list without opening the project", async ({ page 
   await expect(page.locator(".sidebar__recent")).toContainText("Budget flights");
 });
 
-test("name a project when creating it, and rename it from the reply", async ({ page, request }) => {
+test("a new project is named from its task's first line, and renamed from the reply", async ({ page, request }) => {
   await page.goto("/#/new");
-  await page.getByRole("button", { name: /Auto team size/ }).click();
-  await page.getByLabel("Name", { exact: true }).fill("Goa getaway");
+  // The composer has no Name field (design/new-project-composer.html).
+  await expect(page.getByLabel("Name", { exact: true })).toHaveCount(0);
   await page.getByLabel("Task description").fill("Find cheap flights to Goa");
   // Sending talks it through first; planning is the explicit Create plan step.
   await page.getByRole("button", { name: "Send", exact: true }).click();
   await page.getByRole("region", { name: "Task brief" }).getByRole("button", { name: "Create plan" }).click();
   const reply = page.locator(".msg--assistant").last();
-  await expect(reply).toContainText("Goa getaway");
-  expect((await (await request.get(`${API}/__last_create`)).json()).name).toBe("Goa getaway");
-  // The name field is cleared for the next project.
-  if (!(await page.getByLabel("Name", { exact: true }).isVisible())) {
-    await page.getByRole("button", { name: /Auto team size/ }).click();
-  }
-  await expect(page.getByLabel("Name", { exact: true })).toHaveValue("");
+  await expect(reply).toContainText("Find cheap flights to Goa");
+  expect(await (await request.get(`${API}/__last_create`)).json()).not.toHaveProperty("name");
 
-  await reply.getByRole("button", { name: "Rename Goa getaway" }).click();
-  await expect(reply.getByLabel("Project name")).toHaveValue("Goa getaway");
+  await reply.getByRole("button", { name: "Rename Find cheap flights to Goa" }).click();
+  await reply.getByLabel("Project name").fill("Goa getaway");
   await reply.getByLabel("Project name").pressSequentially(" in December");
   await expect(reply.getByLabel("Project name")).toHaveValue("Goa getaway in December");
   await reply.getByLabel("Project name").press("Enter");

@@ -10,14 +10,23 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { END, START, buildGraph } from "../lib/flow.js";
+import { END, START, agentIndex, agentStyle, buildGraph } from "../lib/flow.js";
 import { formatDuration } from "../lib/format.js";
 import { serverNow } from "../lib/runState.js";
 import { useTheme } from "../lib/theme.js";
 import { Icon } from "./icons.jsx";
 
-const AGENT_SIZE = { width: 216, height: 66 };
+// AgentNode (DESIGN.md §5.9, design/reference/phase-chrome.html): 220px wide, wider
+// only when an agent key is too long for one line (keys are never wrapped or cut).
+const AGENT_W = 220;
+const AGENT_H = 112;
+const KEY_CHAR_PX = 8.6; // JetBrains Mono 14px
+const NODE_PAD_PX = 30;
 const TERMINAL_SIZE = { width: 76, height: 36 };
+
+function agentWidth(id) {
+  return Math.max(AGENT_W, Math.ceil(id.length * KEY_CHAR_PX + NODE_PAD_PX));
+}
 // Below this width the diagram runs top-to-bottom so nodes stay readable.
 const NARROW_PX = 640;
 
@@ -42,7 +51,7 @@ function layoutGraph(graph, direction) {
   g.setGraph({
     rankdir: direction,
     nodesep: 28,
-    ranksep: direction === "LR" ? 64 : 44,
+    ranksep: direction === "LR" ? 56 : 44,
     marginx: 12,
     marginy: 12,
   });
@@ -51,7 +60,9 @@ function layoutGraph(graph, direction) {
   // needs its own copy — a shared object would leave all nodes at the last position.
   g.setNode(START, { ...TERMINAL_SIZE });
   g.setNode(END, { ...TERMINAL_SIZE });
-  for (const agent of graph.agents) g.setNode(agent.id, { ...AGENT_SIZE });
+  for (const agent of graph.agents) {
+    g.setNode(agent.id, { width: agentWidth(agent.id), height: AGENT_H });
+  }
   for (const edge of graph.edges) g.setEdge(edge.source, edge.target);
   layout(g);
   const positions = {};
@@ -76,21 +87,35 @@ function stateOf(id, run) {
 }
 
 // An edge carries data while its target is working on what its source produced; it is
-// done once the target has finished.
+// done once the target has finished. "Pending": the target is queued behind a source
+// that is still running — the next hand-off (DESIGN.md §7: edges into queued nodes flow).
 function edgeState(edge, run) {
   const source = stateOf(edge.source, run);
   const target = stateOf(edge.target, run);
   if (target === "failed" && source === "completed") return "failed";
   if (target === "running" && source === "completed") return "active";
   if (target === "completed" && source === "completed") return "done";
+  if (target === "queued" && source === "running") return "pending";
   return "idle";
 }
 
+const PILL_TONE = {
+  idle: "slate",
+  queued: "amber",
+  running: "sky",
+  completed: "success",
+  failed: "danger",
+  skipped: "slate",
+};
+
 function AgentNode({ data }) {
   const {
+    id,
+    index,
     title,
     role,
-    color,
+    model,
+    tools,
     state,
     durationMs,
     liveMs,
@@ -101,14 +126,17 @@ function AgentNode({ data }) {
   } = data;
   const time = state === "running" ? liveMs : durationMs;
   const label = `${title}: ${STATE_LABEL[state].toLowerCase()}${time != null ? `, ${formatDuration(time)}` : ""}. Show its output.`;
+  const meta = [model, isRouter ? "routes the team" : tools.join(", ") || "no tools"]
+    .filter(Boolean)
+    .join(" · ");
   return (
     <div
       className={`flow-node flow-node--${state}`}
-      style={{ "--agent-color": color }}
+      style={{ ...agentStyle(index), width: agentWidth(id) }}
       role="button"
       tabIndex={0}
       aria-label={label}
-      title={state === "failed" && error ? error : undefined}
+      title={state === "failed" && error ? error : role}
       // Mouse clicks arrive through ReactFlow's onNodeClick (it only lets pointer events
       // reach nodes when that handler is set); keyboard activation is handled here.
       onKeyDown={(e) => {
@@ -123,22 +151,28 @@ function AgentNode({ data }) {
         position={direction === "LR" ? Position.Left : Position.Top}
         isConnectable={false}
       />
-      <span className="flow-node__stripe" aria-hidden="true" />
-      <div className="flow-node__main">
-        <span className="flow-node__title">
-          {title}
-          {isRouter && <span className="flow-node__tag">router</span>}
-        </span>
-        <span className="flow-node__role">{role}</span>
-      </div>
-      <span className="flow-node__state">
-        {state === "running" ? (
-          <span className="spin spin--sm" aria-hidden="true" />
-        ) : (
-          STATE_ICON[state] && <Icon name={STATE_ICON[state]} size={12} />
-        )}
-        <span>{time != null ? formatDuration(time) : STATE_LABEL[state]}</span>
+      <span className="flow-node__idx">
+        {agentIndex(index)}
+        {isRouter && <span className="flow-node__tag">router</span>}
       </span>
+      <span className="flow-node__name">{id}</span>
+      <span className="flow-node__state">
+        <span className={`pill pill--${PILL_TONE[state]} flow-node__pill`}>
+          {state === "running" ? (
+            <span className="spin spin--sm" aria-hidden="true" />
+          ) : (
+            STATE_ICON[state] && (
+              // Re-mounted on each state change, so a fresh check pops once.
+              <span key={state} className={state === "completed" ? "ap-pop flow-node__icon" : "flow-node__icon"}>
+                <Icon name={STATE_ICON[state]} size={12} />
+              </span>
+            )
+          )}
+          {STATE_LABEL[state]}
+        </span>
+        {time != null && <span className="flow-node__time">{formatDuration(time)}</span>}
+      </span>
+      <span className="flow-node__meta">{meta}</span>
       <Handle
         type="source"
         position={direction === "LR" ? Position.Right : Position.Bottom}
@@ -303,13 +337,14 @@ export function RunDiagram({ plan, run, clock, onSelectAgent }) {
         return {
           ...edge,
           type: "flow",
+          className: state === "pending" ? "ap-edge-flow" : undefined,
           data: { state, color },
           markerEnd: {
             type: MarkerType.ArrowClosed,
             width: 16,
             height: 16,
             color:
-              state === "idle"
+              state === "idle" || state === "pending"
                 ? "var(--border-strong)"
                 : state === "failed"
                   ? "var(--danger)"

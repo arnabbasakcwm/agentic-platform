@@ -1,0 +1,62 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--canvas);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: var(--text-body-sm);
+  line-height: var(--lh-body);
+  font-feature-settings: "lnum" 1, "locl" 1;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* One visible focus signal everywhere: the primary violet. */
+:where(a, button, summary, [tabindex], select, input[type="checkbox"], input[type="radio"]):focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+a {
+  color: inherit;
+}
+
+.mono {
+  font-family: var(--mono);
+  font-size: var(--text-code);
+}
+
+.muted {
+  color: var(--text-muted);
+}
+
+.icon {
+  flex-shrink: 0;
+}
+

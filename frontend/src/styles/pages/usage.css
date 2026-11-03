@@ -1,0 +1,313 @@
+/* ================================================================ usage page */
+.ufilters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-md);
+}
+
+.ufilters select {
+  width: auto;
+  min-width: 200px;
+}
+
+/* A search box in the filter bar sits inline with the other controls. */
+.ufilters input[type="search"] {
+  width: auto;
+  flex: 0 1 260px;
+  min-width: 180px;
+}
+
+.kstat__hint {
+  font-size: var(--text-caption);
+  color: var(--text-muted);
+}
+
+.costchart__frame {
+  position: relative;
+}
+
+.costchart__svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: var(--radius-md);
+}
+
+.costchart__svg:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+
+.costchart__grid {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.costchart__axis {
+  stroke: var(--border-strong);
+  stroke-width: 1;
+}
+
+.costchart__tick {
+  fill: var(--text-muted);
+  font-size: var(--text-eyebrow);
+  font-family: var(--font);
+}
+
+/* Bars take their gradient from the <defs> stops below (fill set in CostChart). */
+.costchart__bar {
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+.costchart__stop-top {
+  stop-color: var(--violet);
+}
+
+.costchart__stop-bottom {
+  stop-color: var(--pink);
+}
+
+.costchart__stop-hot-top {
+  stop-color: var(--orange);
+}
+
+.costchart__stop-hot-bottom {
+  stop-color: var(--pink);
+}
+
+.costchart__hit {
+  fill: transparent;
+  cursor: default;
+}
+
+.costchart__tip {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-px);
+  padding: var(--space-field) var(--space-sm);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-hover);
+  font-size: var(--text-caption);
+  color: var(--text-muted);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.costchart__tip strong {
+  color: var(--text);
+  font-size: var(--text-caption);
+}
+
+.costchart__table {
+  margin-top: var(--space-xs);
+  max-height: 280px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.linkbtn {
+  margin-top: var(--space-xs);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: var(--text-caption);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.urun-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.urun + .urun {
+  border-top: 1px solid var(--border);
+}
+
+.urun__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  width: 100%;
+  padding: var(--space-sm) var(--space-md);
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.urun__head:hover {
+  background: var(--surface-sunken);
+}
+
+.urun__chevron {
+  display: inline-grid;
+  place-items: center;
+  width: 14px;
+  color: var(--text-muted);
+  transition: transform 0.15s;
+}
+
+.urun__chevron--open {
+  transform: rotate(90deg);
+}
+
+.urun__main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.urun__project {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.urun__when {
+  font-size: var(--text-caption);
+  color: var(--text-muted);
+}
+
+.urun__tokens,
+.urun__cost {
+  font-size: var(--text-caption);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.urun__cost {
+  min-width: 90px;
+  text-align: right;
+  color: var(--text);
+}
+
+.urun__detail {
+  padding: 0 var(--space-md) var(--space-sm) var(--space-3xl);
+  overflow-x: auto;
+}
+
+.unotes {
+  margin-top: var(--space-md);
+  font-size: var(--text-caption);
+  max-width: 900px;
+}
+
+.unotes summary {
+  width: fit-content;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.unotes p {
+  margin-top: var(--space-xs);
+}
+
+/* Usage breakdowns: a tab strip sitting on top of one panel. */
+.usage__tabs {
+  margin-bottom: 0;
+}
+
+.usage__tabs .count-chip {
+  margin-left: var(--space-field);
+}
+
+.usage__tabs .segmented__item--on .count-chip {
+  background: var(--surface);
+}
+
+.usage__panel {
+  overflow: hidden;
+}
+
+.usage__hint {
+  padding: var(--space-sm) var(--space-lg);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--text-caption);
+}
+
+/* The arrow that opens the rest of a list (and closes it again). */
+.showmore {
+  display: flex;
+  justify-content: center;
+  border-top: 1px solid var(--border);
+}
+
+.showmore__button {
+  display: inline-grid;
+  place-items: center;
+  width: 100%;
+  min-height: 36px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.showmore__button:hover {
+  background: var(--surface-sunken);
+  color: var(--text);
+}
+
+.showmore__icon {
+  display: inline-grid;
+  transition: transform 0.15s;
+}
+
+.showmore__icon--open {
+  transform: rotate(180deg);
+}
+
+.usageline {
+  display: flex;
+  align-items: center;
+  gap: var(--space-field);
+  padding: var(--space-field) var(--space-md);
+  font-size: var(--text-caption);
+  color: var(--text-muted);
+}
+
+.usageline a {
+  margin-left: auto;
+  color: var(--accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .urun__chevron {
+    transition: none;
+  }
+}
+
+
+/* ================================================================ usage: deployed sync */
+.usync {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  margin-bottom: var(--space-md);
+}
+
+.usync__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+  font-size: var(--text-caption);
+}
+
+

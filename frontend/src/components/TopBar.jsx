@@ -11,7 +11,7 @@ const STATUS = {
 export function HealthPill({ health }) {
   const status = STATUS[health] ?? STATUS.checking;
   return (
-    <Pill tone={status.tone} dot>
+    <Pill tone={status.tone} dot live={health === "online"}>
       {status.label}
     </Pill>
   );
@@ -43,7 +43,11 @@ export function TopBar({ crumbs, health }) {
           const last = i === crumbs.length - 1;
           return (
             <span key={i} className="crumbs__item">
-              {i > 0 && <span className="crumbs__sep">/</span>}
+              {i > 0 && (
+                <span className="crumbs__sep" aria-hidden="true">
+                  <Icon name="chevronRight" size={13} />
+                </span>
+              )}
               {last || !crumb.href ? (
                 <span className={last ? "crumbs__current" : undefined}>{crumb.label}</span>
               ) : (

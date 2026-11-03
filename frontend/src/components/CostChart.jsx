@@ -1,9 +1,10 @@
 import { useId, useState } from "react";
 import { formatCost, formatCount, niceScale, shortDate } from "../lib/usage.js";
 
-// Estimated cost per day as columns: one series, one hue (the accent token, so it follows
-// light/dark), columns capped at 24px with a 4px rounded top and a square baseline, a 2px
-// gap between neighbours, hairline gridlines. Each day is a hit target (the full column
+// Estimated cost per day as columns: one series in the violet → pink bar gradient, the
+// latest day (or the one pointed at) in orange (DESIGN.md §2), columns capped at 24px with
+// a 4px rounded top and a square baseline, a 2px gap between neighbours, hairline
+// gridlines. Bars grow up from the baseline, staggered, on first show (.ap-bar-grow). Each day is a hit target (the full column
 // slot, not just the painted bar); the chart is one tab stop and the arrow keys move
 // between days. Every value is also in the table view, so the tooltip never gates data.
 
@@ -24,6 +25,9 @@ export function CostChart({ days, currency = "USD" }) {
   const [active, setActive] = useState(null);
   const [showTable, setShowTable] = useState(false);
   const titleId = useId();
+  const barFill = useId();
+  const hotFill = useId();
+  const latest = days.reduce((last, d, i) => (d.cost > 0 ? i : last), -1);
   const plotW = W - PAD.left - PAD.right;
   const plotH = H - PAD.top - PAD.bottom;
   const scale = niceScale(Math.max(0, ...days.map((d) => d.cost)));
@@ -59,6 +63,16 @@ export function CostChart({ days, currency = "USD" }) {
           onPointerLeave={() => setActive(null)}
         >
           <title id={titleId}>Estimated cost per day. Use the left and right arrow keys to read each day.</title>
+          <defs>
+            <linearGradient id={barFill} x1="0" x2="0" y1="0" y2="1">
+              <stop offset="0" className="costchart__stop-top" />
+              <stop offset="1" className="costchart__stop-bottom" />
+            </linearGradient>
+            <linearGradient id={hotFill} x1="0" x2="0" y1="0" y2="1">
+              <stop offset="0" className="costchart__stop-hot-top" />
+              <stop offset="1" className="costchart__stop-hot-bottom" />
+            </linearGradient>
+          </defs>
           {scale.ticks.map((t) => (
             <g key={t}>
               <line className="costchart__grid" x1={PAD.left} x2={W - PAD.right} y1={y(t)} y2={y(t)} />
@@ -74,8 +88,10 @@ export function CostChart({ days, currency = "USD" }) {
               <g key={d.date}>
                 {h > 0 && (
                   <path
-                    className={`costchart__bar${active === i ? " costchart__bar--active" : ""}`}
+                    className={`costchart__bar ap-bar-grow${active === i ? " costchart__bar--active" : ""}`}
                     d={columnPath(x, PAD.top + plotH - h, barW, h)}
+                    fill={`url(#${active === i || (active === null && i === latest) ? hotFill : barFill})`}
+                    style={{ "--i": i }}
                   />
                 )}
                 {/* The whole slot is the hit target, so short or empty days are easy to point at. */}

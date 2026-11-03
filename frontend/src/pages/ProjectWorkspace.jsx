@@ -1,18 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { AssistantPanel } from "../components/AssistantPanel.jsx";
-import { Icon } from "../components/icons.jsx";
 import { Stepper } from "../components/Stepper.jsx";
-import {
-  Button,
-  Empty,
-  ErrorCallout,
-  LinkButton,
-  PageHeader,
-  Panel,
-  Pill,
-} from "../components/ui.jsx";
+import { ProjectHeader } from "../components/ProjectHeader.jsx";
+import { Empty, ErrorCallout, LinkButton, Panel } from "../components/ui.jsx";
 import { api } from "../lib/api.js";
-import { ProjectName } from "../components/ProjectName.jsx";
 import { paths } from "../lib/router.js";
 import { useAction } from "../lib/useAction.js";
 import { resourcesHint, resourcesReady } from "../lib/resources.js";
@@ -168,6 +159,7 @@ export function ProjectWorkspace({
       label: "Run",
       hint: runHint(project, run),
       done: run?.status === "completed" && !run.halted,
+      busy: run?.status === "running",
     },
     {
       key: "deploy",
@@ -208,47 +200,20 @@ export function ProjectWorkspace({
     <div className="workspace">
       <div className="workspace__main">
         <div className="page page--head">
-          <PageHeader
-            title={
-              <ProjectName
-                project={project}
-                max={110}
-                renderName={(name) => (
-                  <h1 className="pagehead__title">{name}</h1>
-                )}
-                onRenamed={(updated) => {
-                  setProject((p) => ({
-                    ...p,
-                    name: updated.name,
-                    named: updated.named,
-                  }));
-                  onChanged();
-                }}
-              />
-            }
-            meta={
-              <>
-                <Pill tone="accent">{project.plan.orchestration_pattern}</Pill>
-                {project.compiled ? (
-                  <Pill tone="success" dot>
-                    Ready to run
-                  </Pill>
-                ) : (
-                  <Pill dot>Not compiled</Pill>
-                )}
-                <span className="mono muted">{project.project_id}</span>
-              </>
-            }
-            actions={
-              assistantAvailable && !assistantOpen ? (
-                <Button
-                  onClick={() => setAssistant(true)}
-                  aria-expanded={false}
-                >
-                  <Icon name="chat" />
-                  Assistant
-                </Button>
-              ) : null
+          <ProjectHeader
+            project={project}
+            onRenamed={(updated) => {
+              setProject((p) => ({
+                ...p,
+                name: updated.name,
+                named: updated.named,
+              }));
+              onChanged();
+            }}
+            assistant={
+              assistantAvailable && !assistantOpen
+                ? { onOpen: () => setAssistant(true) }
+                : null
             }
           />
         </div>
@@ -317,7 +282,12 @@ export function ProjectWorkspace({
       {showAssistant && (
         <AssistantPanel
           project={project}
+          tools={tools}
+          providers={providers}
           onRevised={projectChanged}
+          onResourcesChanged={() =>
+            api.getProject(id).then(projectChanged, () => {})
+          }
           onClose={() => setAssistant(false)}
         />
       )}

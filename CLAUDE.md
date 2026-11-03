@@ -810,6 +810,80 @@ whenever a change departs from or extends the contract above — don't silently 
     `UsageDashboard` as the Usage page. Admin views never link into a user's projects,
     which an admin can't open.
 
+### 2026-11-03 — The console moves to the multi-colour redesign (design/)
+- **Why:** the user approved a redesign (a Google Stitch handoff in `design/`): calm
+  neutrals with meaningful colour — one per phase, agent, metric and status — and a
+  violet → pink → orange gradient for primary actions. It supersedes the 2026-10-09
+  design-system entry: blue is no longer the only accent, and its "no pink or purple"
+  and grey-page decisions no longer apply.
+- **Rule:**
+  - **Spec:** `docs/design.md` is the spec (from `design/DESIGN.md`).
+    `design/reference/phase-chrome.html` is the source of truth for the ProjectHeader,
+    PhaseStepper, StickyFooter and AgentNode.
+  - **One shared component each:** those four are single components, identical on Brief,
+    Resources, Plan, Compile, Run and Deploy; only the current step, the footer text and
+    the footer buttons change.
+  - **Tokens only, still:** raw values live only in `frontend/src/styles/tokens.css`.
+    The stylesheet is split into partials under `frontend/src/styles/`, and
+    `node scripts/audit-tokens.mjs` checks every partial.
+  - **Readable status colours:** status text uses the `--<accent>-ink` shades, because
+    the bright hues fail AA as text.
+  - **Motion:** motion is the `.ap-*` classes in `styles/motion.css`. Decorative motion
+    stops under `prefers-reduced-motion`; state changes still show, instantly.
+  - **Run-graph floor:** the graph's animations and states are a floor, recorded in
+    `design/baseline/`: the inventory, before/after recordings
+    (`npm run test:baseline`) and the comparison. A change that makes any state less
+    clear than the baseline is a bug.
+  - **Libraries:** added `@fontsource` (self-hosted Inter and JetBrains Mono, no Google
+    Fonts request) and `lucide-react` (only for icons the app's own set lacks). Still no
+    Tailwind, TypeScript, router, state library or component framework.
+  - **Visual only:** routes, API calls, state and behaviour are unchanged.
+
+### 2026-11-03 — New project: one composer, settings in chip popovers
+- **Why:** the New project page stacked a settings card, a knowledge card and three trays
+  around the message box; the model menu opened upward, covered the headline and was cut
+  off by the top bar. `design/new-project-composer.html` replaces them with one composer.
+- **Rule:**
+  - **Same request:** the create and brief-chat requests are byte-for-byte the old page's
+    for the same choices, checked against fixtures recorded from the old page
+    (`e2e/fixtures/composer-requests.json`, `e2e/new-project-composer.spec.js`).
+  - **Chips:** `+` (upload, library, data source, MCP server, each a checklist inside the
+    same popover) · Model · Team · Tools. Team is Auto or "up to N" (1–10, sent as
+    `agent_count`). There's no Name field: the intake's suggested name or the brief's first
+    line names the project, and it's renamed from the project header or the reply. This
+    supersedes "the new-project settings have an optional Name field" above.
+  - **knowledge_search** is shown locked: on with "auto · n files" when files are
+    attached, and never sent in `available_tools` (the server adds it, `app.py`).
+  - **Model list:** Recommended (the default, then recommended Bedrock models) and More
+    models; keyless models are one muted row. Tags only where the data supports them
+    (Default, Local for Ollama).
+  - **Tool groups** come from the registry's `side_effect` flag: private tools under Built
+    in, third-party ones under "sends queries out" (a small name list splits off Data and
+    finance; any other third-party tool lands under Web and research).
+  - **Popovers** (`components/composer/Popover.jsx`): one at a time, in a portal at
+    `<body>` with `position: fixed`; placed beside the whole composer (below on the empty
+    page, above once it's docked), flipped when the other side has more room, clamped to
+    the viewport less the top bar and sidebar, with content scrolling inside.
+
+### 2026-11-03 — The plan Assistant uses the same composer; its chips limit each change
+- **Why:** the user wanted opening the Assistant (side panel or fullscreen) to feel like
+  returning to New project, with the same model, team and tool controls.
+- **Rule:**
+  - **One composer:** `AssistantPanel.jsx` renders `components/composer/Composer.jsx`
+    (`variant="panel"`), the New project hero ("What should change?") and template cards
+    when the conversation is empty. Attachments reach the composer through callbacks, so
+    New project keeps local lists (its request fixtures still match) and the Assistant
+    attaches to the project at once, through the Resources step's own API calls.
+  - **Chips limit one change:** `POST /projects/{id}/revise` takes optional `model`,
+    `agent_count` and `tools`. Untouched chips send exactly `{message}`, as before. A model
+    must be one the platform offers (or one an agent already uses); every agent of the
+    revised plan then uses it. `agent_count` is a hard limit checked in `_semantic_check`.
+  - **Opt-in:** this amends the 2026-10-01 rule "a chat message is not an opt-in". The
+    message still never is; switching an external tool on in the Tools chip is, like
+    `PUT /agents`. The project's `side_effect_tools_enabled` becomes the chip's external
+    tools plus any the saved plan still uses, in the same conditional write
+    (`record_exchange(..., side_effect_tools_enabled=…)`).
+
 ## Working style — verify-and-retry, always
 
 Never mark something done because the code looks right.

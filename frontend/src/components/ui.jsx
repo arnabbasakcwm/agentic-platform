@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
+import { useSlidingIndicator } from "../lib/useSlidingIndicator.js";
 import { Icon } from "./icons.jsx";
 
 export function Panel({ title, subtitle, actions, children, footer, flush }) {
@@ -37,11 +38,14 @@ export function PageHeader({ title, subtitle, meta, actions }) {
 
 // The bar pinned to the bottom of a page: a status note on the left, the page's
 // back/continue actions on the right.
+// The StickyFooter (DESIGN.md §5.5, ported from design/reference/phase-chrome.html): the
+// same bar on every phase page, helper text on the left, "← Back to X" and the primary
+// "Next →" on the right.
 export function ActionBar({ note, children }) {
   return (
     <div className="actionbar">
-      <div className="actionbar__note">{note}</div>
-      {children}
+      <p className="actionbar__note">{note}</p>
+      <div className="actionbar__actions">{children}</div>
     </div>
   );
 }
@@ -56,10 +60,13 @@ export function Field({ label, hint, children }) {
   );
 }
 
+// primary = the gradient button with its shimmer (.ap-btn-primary, DESIGN.md §5.8);
+// no variant = the outlined secondary button; ghost = text only; danger = destructive.
 function buttonClasses({ variant, size, block }) {
   return [
     "btn",
     variant && `btn--${variant}`,
+    variant === "primary" && "ap-btn-primary",
     size && `btn--${size}`,
     block && "btn--block",
   ]
@@ -104,12 +111,16 @@ export function Switch({ checked, onChange, disabled, label }) {
   );
 }
 
-export function Pill({ tone, dot, children }) {
+// `tone`: success | warn | danger | running | accent, or a colour (violet, teal, amber,
+// sky, rose, slate). `live` makes the dot pulse (a live connection or a running state).
+export function Pill({ tone, dot, live, children }) {
   return (
     <span
       className={["pill", tone && `pill--${tone}`].filter(Boolean).join(" ")}
     >
-      {dot && <span className="dot" />}
+      {(dot || live) && (
+        <span className={live ? "dot ap-dot ap-dot--live" : "dot"} aria-hidden="true" />
+      )}
       {children}
     </span>
   );
@@ -257,3 +268,21 @@ export function DeleteButton({ name, onDelete, prompt }) {
     </button>
   );
 }
+
+/**
+ * The sliding thumb of a segmented control or tab strip (DESIGN.md §7: the pill slides
+ * between options). Drop it in as the control's first child; it measures the active
+ * option (`active`, a selector) and moves under it. `on` is what's selected, so it
+ * re-measures when that changes. Decorative: the active option is styled on its own
+ * until the thumb has been placed.
+ */
+export function SlidingThumb({ on, active = ".segmented__item--on" }) {
+  const thumb = useRef(null);
+  const parent = useRef(null);
+  useLayoutEffect(() => {
+    parent.current = thumb.current?.parentElement ?? null;
+  });
+  useSlidingIndicator(parent, active, [on]);
+  return <span ref={thumb} className="segmented__thumb ap-nav-indicator" aria-hidden="true" />;
+}
+

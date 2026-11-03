@@ -22,6 +22,7 @@ import {
   Field,
   LinkButton,
   Panel,
+  SlidingThumb,
   StatusBadge,
 } from "../../components/ui.jsx";
 import { agentTitle, buildGraph, finalAgentIds } from "../../lib/flow.js";
@@ -212,6 +213,7 @@ function InputPanel({
         }
       >
         <div className="segmented" role="tablist" aria-label="What to run">
+          <SlidingThumb on={mode} />
           {[
             ["graph", "Full graph"],
             ["agent", "Single agent"],
@@ -574,7 +576,7 @@ export function RunStep({
       <ActionBar note="Runs are saved on the server: leave this page while one runs and come back to its result.">
         <LinkButton href={paths.project(project.project_id, "compile")}>
           <Icon name="arrowLeft" />
-          Compile
+          Back to Compile
         </LinkButton>
         <LinkButton
           variant="primary"
