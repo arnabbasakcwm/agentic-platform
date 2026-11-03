@@ -251,3 +251,21 @@ export function sortRows(rows, column, direction, numeric) {
     })
     .map((x) => x.row);
 }
+
+// Spreadsheet apps run a cell starting with one of these as a formula.
+const FORMULA_START = /^[=+\-@\t\r]/;
+
+/**
+ * A table as a CSV file's text: UTF-8 BOM (so Excel reads the encoding), CRLF rows,
+ * cells quoted when they hold a comma, quote or line break (quotes doubled), and a cell
+ * that would run as a formula prefixed with ' — the same rules as the server's export.
+ */
+export function toCsv(header, rows) {
+  const cell = (value) => {
+    let text = value == null ? "" : String(value);
+    if (FORMULA_START.test(text)) text = `'${text}`;
+    return /[",\r\n]|^\s|\s$/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+  };
+  const lines = [header, ...rows].map((row) => row.map(cell).join(","));
+  return `\ufeff${lines.join("\r\n")}\r\n`;
+}

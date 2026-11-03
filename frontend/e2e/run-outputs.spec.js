@@ -183,7 +183,7 @@ test("a CSV answer shows as a sortable table, with Raw and Copy", async ({ page 
   await analyzer.getByRole("button", { name: "Raw" }).click();
   await expect(analyzer.locator(".datatable__raw")).toContainText('Air India,,"Full service, ""premium"""');
   await expect(table).toHaveCount(0);
-  await analyzer.getByRole("button", { name: "Table" }).click();
+  await analyzer.getByRole("button", { name: "Table", exact: true }).click();
   await expect(analyzer.getByRole("table")).toBeVisible();
   await expect(analyzer.getByRole("button", { name: "Copy" }).last()).toBeVisible();
   expect(await axeProblems(page, "csv table")).toEqual([]);
@@ -252,4 +252,31 @@ test("old outputs without citations still render as before", async ({ page }) =>
   await expect(page.getByRole("region", { name: "Sources" })).toHaveCount(0);
   await expect(card(page, "price_analyzer").getByRole("table")).toBeVisible(); // its Markdown table
   await expect(page.locator(".cite__marker")).toHaveCount(0);
+});
+
+// ------------------------------------------------------------------ tables: Download CSV
+test("any table can be downloaded as its own CSV file", async ({ page }) => {
+  const fs = await import("node:fs/promises");
+  await runRich(page);
+
+  // A whole-answer CSV.
+  const analyzer = card(page, "price_analyzer");
+  let download = page.waitForEvent("download");
+  await analyzer.getByRole("button", { name: "Download price_analyzer table as CSV" }).click();
+  let file = await download;
+  expect(file.suggestedFilename()).toMatch(/^Travel-agent-for-finding-cheap-flights_price-analyzer_[A-Za-z0-9-]{1,8}\.csv$/);
+  let text = await fs.readFile(await file.path(), "utf8");
+  expect(text.startsWith("﻿airline,fare_inr,notes\r\n")).toBe(true);
+  expect(text).toContain('Akasa Air,7004,"Promotional, mornings only"');
+
+  // A ```csv block inside a report: just that table, not the whole answer.
+  const advisor = card(page, "travel_advisor");
+  await expect(advisor.getByRole("table").first()).toBeVisible();
+  download = page.waitForEvent("download");
+  await advisor.getByRole("button", { name: "Download Table as CSV" }).click();
+  file = await download;
+  expect(file.suggestedFilename()).toMatch(/^Travel-agent-for-finding-cheap-flights_travel-advisor_[A-Za-z0-9-]{1,8}_table\.csv$/);
+  text = await fs.readFile(await file.path(), "utf8");
+  expect(text).toBe('﻿airline,fare_inr,note\r\nAkasa Air,7004,"Mornings, promo"\r\nIndiGo,8249,"\'=HYPERLINK(""x"")"\r\n');
+  expect(text).not.toContain("Book Akasa Air early");
 });

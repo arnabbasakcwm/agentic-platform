@@ -130,3 +130,26 @@ describe("parseMarkdownTable", () => {
     expect(parseMarkdownTable("| a | b |\n| 1 | 2 |")).toBeNull();
   });
 });
+
+describe("toCsv", () => {
+  it("writes a BOM, CRLF rows, quotes where needed and guards formulas", async () => {
+    const { toCsv } = await import("./tabular.js");
+    const text = toCsv(["name", "note"], [
+      ["Smith, J", 'said "hi"'],
+      ["=SUM(A1)", "-5"],
+      ["multi\nline", ""],
+    ]);
+    expect(text.startsWith("﻿")).toBe(true);
+    expect(text.slice(1)).toBe(
+      'name,note\r\n"Smith, J","said ""hi"""\r\n\'=SUM(A1),\'-5\r\n"multi\nline",\r\n',
+    );
+    // It reads back to the same cells (bar the formula guard).
+    const { parseDelimited } = await import("./tabular.js");
+    expect(parseDelimited(text.slice(1))).toEqual([
+      ["name", "note"],
+      ["Smith, J", 'said "hi"'],
+      ["'=SUM(A1)", "'-5"],
+      ["multi\nline", ""],
+    ]);
+  });
+});

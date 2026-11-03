@@ -81,7 +81,8 @@ function outputs(input) {
           },
     travel_advisor: {
       ...base.travel_advisor,
-      content: "Book Akasa Air early.\n\n## Sources\n[1] Akasa fares — https://www.akasaair.com/fares",
+      // A report with its table embedded as a ```csv block (like a formatter agent's).
+      content: "Book Akasa Air early.\n\n## CSV Format\n```csv\nairline,fare_inr,note\nAkasa Air,7004,\"Mornings, promo\"\nIndiGo,8249,=HYPERLINK(\"x\")\n```\n\n## Sources\n[1] Akasa fares — https://www.akasaair.com/fares",
       citations: [
         { n: 1, kind: "web", source_id: "1", title: "Akasa fares", url: "https://www.akasaair.com/fares", domain: "www.akasaair.com", retrieved_at: "2026-11-03T09:31:00Z", snippet: "Morning promotional fares." },
       ],

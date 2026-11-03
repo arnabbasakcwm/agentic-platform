@@ -1,5 +1,6 @@
 import { forwardRef, useMemo, useState } from "react";
 import { agentTitle } from "../lib/flow.js";
+import { fileBase } from "../lib/exports.js";
 import { formatDuration } from "../lib/format.js";
 import { citationMap, splitSources } from "../lib/citations.js";
 import { detectTable } from "../lib/tabular.js";
@@ -16,8 +17,9 @@ import { Pill, Skeleton, StatusBadge } from "./ui.jsx";
  * The answer itself: a table when it is one (CSV, JSON array, Markdown table), else
  * Markdown. A table that can't be read shows the raw text with a notice instead.
  */
-function OutputContent({ output, agentId }) {
+function OutputContent({ output, agentId, projectName, runId }) {
   const content = output.content ?? "";
+  const base = fileBase({ projectName, agentId, runId });
   const table = useMemo(() => {
     try {
       return detectTable(content, output.content_type);
@@ -31,18 +33,18 @@ function OutputContent({ output, agentId }) {
     return (
       <>
         <TableBoundary raw={content}>
-          <DataTable table={table} raw={content} label={`${agentId} table`} />
+          <DataTable table={table} raw={content} label={`${agentId} table`} fileName={`${base}.csv`} />
         </TableBoundary>
         <SourcesPanel agentId={agentId} citations={output.citations} autoAppended={output.citations_auto_appended} />
       </>
     );
   }
-  if (citations.size === 0) return <Markdown>{content}</Markdown>;
+  if (citations.size === 0) return <Markdown fileBase={base}>{content}</Markdown>;
   // With structured citations, the written Sources section gives way to the panel.
   const { body } = splitSources(content);
   return (
     <>
-      <Markdown citations={citations} onCite={(n) => showSource(agentId, n)}>
+      <Markdown citations={citations} onCite={(n) => showSource(agentId, n)} fileBase={base}>
         {body}
       </Markdown>
       <SourcesPanel
@@ -133,7 +135,7 @@ export const AgentOutputCard = forwardRef(function AgentOutputCard(
           {output ? (
             // Fades in as the agent's answer arrives.
             <div className="ap-fade">
-              <OutputContent output={output} agentId={agentId} />
+              <OutputContent output={output} agentId={agentId} projectName={projectName} runId={runId} />
               <DataView data={output.data} />
             </div>
           ) : node.status === "running" || node.status === "queued" ? (
