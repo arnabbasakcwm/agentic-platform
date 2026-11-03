@@ -14,7 +14,7 @@ import { Pill, Skeleton, StatusBadge } from "./ui.jsx";
  * the agent's node in the diagram and its bar in the timeline.
  */
 export const AgentOutputCard = forwardRef(function AgentOutputCard(
-  { agentId, role, color, node, isFinal, highlighted, projectId, runId },
+  { agentId, role, color, node, isFinal, highlighted, projectId, projectName, runId },
   ref,
 ) {
   const [open, setOpen] = useState(true);
@@ -60,7 +60,12 @@ export const AgentOutputCard = forwardRef(function AgentOutputCard(
           {node.attempts > 1 && <Pill tone="warn">{node.attempts} attempts</Pill>}
           {output?.content && <CopyButton text={output.content} label="Copy" />}
           {output && node.status === "completed" && (
-            <OutputActions projectId={projectId} runId={runId} agentId={agentId} />
+            <OutputActions
+              projectId={projectId}
+              projectName={projectName}
+              runId={runId}
+              agentId={agentId}
+            />
           )}
           <button
             type="button"

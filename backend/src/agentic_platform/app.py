@@ -18,6 +18,7 @@ import threading
 import time
 import uuid
 from datetime import date, datetime, timedelta, timezone
+from email.message import EmailMessage
 from urllib.parse import quote
 from typing import Any, Callable, Literal
 
@@ -28,9 +29,10 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, EmailStr, Field, ValidationError
+from pydantic import BaseModel, EmailStr, Field, ValidationError, field_validator, model_validator
 
 from . import export as export_mod
+from . import mailer
 from . import knowledge as kb
 from . import usage as usage_mod
 from .agent_schema import AgentPlan, EmbeddingConfig, LLMConfig, RunBounds
@@ -270,6 +272,34 @@ class DeployedInvokeRequest(BaseModel):
 
 class RunRequest(BaseModel):
     input: dict[str, Any]
+
+
+class EmailRunRequest(BaseModel):
+    """Email a run's output (one agent's, or every finished agent's) as attachments."""
+
+    to: list[EmailStr] = Field(min_length=1, max_length=mailer.MAX_RECIPIENTS)
+    cc: list[EmailStr] = Field(default_factory=list, max_length=mailer.MAX_RECIPIENTS)
+    subject: str = Field(min_length=1, max_length=200)
+    message: str = Field(default="", max_length=5_000)
+    formats: list[Literal["docx", "pdf", "csv"]] = Field(min_length=1, max_length=6)  # de-duplicated below
+    include_body: bool = False
+    agent_id: str | None = Field(default=None, max_length=64)
+
+    @field_validator("subject")
+    @classmethod
+    def _one_line(cls, value: str) -> str:
+        # A line break in a header would let the sender inject other headers.
+        if "\r" in value or "\n" in value:
+            raise ValueError("the subject must be a single line")
+        return value.strip()
+
+    @model_validator(mode="after")
+    def _recipients(self) -> "EmailRunRequest":
+        everyone = [a.lower() for a in [*self.to, *self.cc]]
+        if len(set(everyone)) > mailer.MAX_RECIPIENTS:
+            raise ValueError(f"at most {mailer.MAX_RECIPIENTS} recipients (To and CC together)")
+        self.formats = list(dict.fromkeys(self.formats))
+        return self
 
 
 class AgentInvokeRequest(BaseModel):
@@ -933,6 +963,66 @@ def export_run(
         headers={"Content-Disposition": _attachment(export_mod.filename(doc, format)),
                  "Cache-Control": "no-store"},
     )
+
+
+@app.post("/projects/{project_id}/runs/{run_id}/email")
+def email_run(
+    project_id: str, run_id: str, req: EmailRunRequest, user: UserRecord = Depends(current_user)
+) -> dict[str, Any]:
+    """Email a run's output with Word / PDF / CSV attachments made by the export pipeline
+    (sources included), and optionally the output in the body. Owner-only; at most 10
+    recipients and 20 MB of attachments; rate-limited per user. A sending failure is
+    logged here and reported to the client without the server's details."""
+    project = _get_project(project_id, user)
+    run = _get_run(project_id, run_id, user)
+    config = mailer.mail_config()
+    if config is None:
+        raise MailError(503, "MailNotConfigured",
+                        "email isn't set up on this server (an administrator sets SMTP_HOST and MAIL_FROM)")
+    doc = export_mod.build_export(project, run, req.agent_id)
+    files = [(export_mod.filename(doc, f), export_mod.MEDIA_TYPES[f], export_mod.render(doc, f)) for f in req.formats]
+    total = sum(len(data) for _, _, data in files)
+    if total > mailer.MAX_ATTACHMENT_BYTES:
+        raise MailError(413, "AttachmentsTooLarge",
+                        f"the attachments come to {total / 1_048_576:.1f} MB; the limit is 20 MB — choose fewer formats")
+    if not mailer.limiter.allow(user.id):
+        raise MailError(429, "RateLimited", "too many emails in the last hour; try again later")
+
+    message = EmailMessage()
+    message["From"] = config.sender
+    message["To"] = ", ".join(req.to)
+    if req.cc:
+        message["Cc"] = ", ".join(req.cc)
+    message["Reply-To"] = user.email
+    message["Subject"] = req.subject
+    body = [req.message.strip()] if req.message.strip() else []
+    if req.include_body:
+        body.append(export_mod.as_text(doc))
+    body.append(f"— Sent by {user.email} from Agentic Platform ({doc.project_name}, run {run.id[:8]}).")
+    message.set_content("\n\n".join(body))
+    for name, media, data in files:
+        maintype, subtype = media.split(";")[0].split("/")
+        message.add_attachment(data, maintype=maintype, subtype=subtype, filename=name)
+    try:
+        mailer.send(config, message)
+    except Exception:  # noqa: BLE001 — logged in full here, never sent to the client
+        logger.exception("email of run %s (project %s, user %s) failed", run.id, project_id, user.id)
+        raise MailError(502, "MailSendFailed", "the email couldn't be sent; try again later")
+    recipients = len({a.lower() for a in [*req.to, *req.cc]})
+    logger.info("emailed run %s (project %s) for user %s to %d recipient(s)", run.id, project_id, user.id, recipients)
+    return {"sent": True, "recipients": recipients, "attachments": [name for name, _, _ in files]}
+
+
+class MailError(Exception):
+    def __init__(self, status: int, error_type: str, message: str):
+        self.status = status
+        self.error_type = error_type
+        super().__init__(message)
+
+
+@app.exception_handler(MailError)
+def _handle_mail(_req: Request, exc: MailError):
+    return _error_response(exc.status, exc.error_type, str(exc))
 
 
 def _attachment(name: str) -> str:

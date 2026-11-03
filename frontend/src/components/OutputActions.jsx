@@ -1,14 +1,10 @@
-import { Download, FileSpreadsheet, FileText, FileType } from "lucide-react";
+import { Download } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../lib/api.js";
 import { saveBlob } from "../lib/download.js";
+import { EXPORT_FORMATS } from "../lib/exports.js";
 import { Popover } from "./composer/Popover.jsx";
-
-export const EXPORT_FORMATS = [
-  { id: "docx", label: "Word", ext: ".docx", icon: FileText },
-  { id: "pdf", label: "PDF", ext: ".pdf", icon: FileType },
-  { id: "csv", label: "CSV", ext: ".csv", icon: FileSpreadsheet },
-];
+import { EmailButton } from "./EmailOutput.jsx";
 
 /**
  * "Export" ▾ — Word, PDF or CSV of one agent's output (`agentId`) or of the whole run,
@@ -122,13 +118,19 @@ function ExportItems({ onPick }) {
   );
 }
 
-/** The actions on a finished output: Export (and, with email, Send by email). */
-export function OutputActions({ projectId, runId, agentId, label, children }) {
+/** The actions on a finished output: Export and Send by email. */
+export function OutputActions({ projectId, projectName, runId, agentId, label }) {
   if (!projectId || !runId) return null;
   return (
     <span className="outactions">
       <ExportMenu projectId={projectId} runId={runId} agentId={agentId} label={label} />
-      {children}
+      <EmailButton
+        projectId={projectId}
+        projectName={projectName}
+        runId={runId}
+        agentId={agentId}
+        label={label}
+      />
     </span>
   );
 }

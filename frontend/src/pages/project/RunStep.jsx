@@ -356,6 +356,7 @@ function ResultsPanel({
           run.order.some((id) => run.nodes[id]?.status === "completed") && (
             <OutputActions
               projectId={project.project_id}
+              projectName={project.name}
               runId={runId}
               label="the whole run"
             />
@@ -419,6 +420,7 @@ function ResultsPanel({
                 }
                 highlighted={highlighted === id}
                 projectId={project.project_id}
+                projectName={project.name}
                 runId={runId}
               />
             ))}

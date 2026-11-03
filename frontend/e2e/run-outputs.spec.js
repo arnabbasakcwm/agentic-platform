@@ -86,3 +86,62 @@ test("a failed export says so, and the menu works by keyboard", async ({ page })
   await expect(page.getByRole("menu")).toHaveCount(0);
   expect(await axeProblems(page, "run outputs")).toEqual([]);
 });
+
+// ------------------------------------------------------------------ Feature 2: email
+test("Send by email validates the form, then sends the chosen formats", async ({ page, request }) => {
+  await runRich(page);
+  await card(page, "price_analyzer").getByRole("button", { name: "Send price_analyzer output by email" }).click();
+  const dialog = page.getByRole("dialog", { name: "Send by email" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByLabel("Subject")).toHaveValue(/price_analyzer output$/);
+  await expect(dialog.getByRole("checkbox", { name: /PDF/ })).toBeChecked();
+
+  // Nothing filled in: every problem is named, and nothing is sent.
+  await dialog.getByRole("checkbox", { name: /PDF/ }).uncheck();
+  await dialog.getByLabel("Subject").fill("");
+  await dialog.getByRole("button", { name: "Send" }).click();
+  await expect(dialog.getByText("Add at least one recipient.")).toBeVisible();
+  await expect(dialog.getByText("Add a subject.")).toBeVisible();
+  await expect(dialog.getByText("Choose at least one format.")).toBeVisible();
+  await expect(dialog.getByLabel("To", { exact: true })).toBeFocused();
+  await expect(dialog.getByLabel("To", { exact: true })).toHaveAttribute("aria-invalid", "true");
+
+  await dialog.getByLabel("To", { exact: true }).fill("bob@example.com, not-an-email");
+  await dialog.getByRole("button", { name: "Send" }).click();
+  await expect(dialog.getByText("Not an email address: not-an-email")).toBeVisible();
+  expect(await (await request.get(`${API}/__last_email`)).json()).toEqual({});
+
+  await dialog.getByLabel("To", { exact: true }).fill("bob@example.com; carol@example.com");
+  await dialog.getByLabel("CC (optional)").fill("dan@example.com");
+  await dialog.getByLabel("Subject").fill("Goa fares");
+  await dialog.getByLabel("Message (optional)").fill("See attached.");
+  await dialog.getByRole("checkbox", { name: /Word/ }).check();
+  await dialog.getByRole("checkbox", { name: /CSV/ }).check();
+  await dialog.getByRole("switch", { name: "Include output in email body" }).click();
+  expect(await axeProblems(page, "email modal")).toEqual([]);
+  await dialog.getByRole("button", { name: "Send" }).click();
+  await expect(dialog.getByRole("status")).toContainText("Sent to 3 recipients");
+  expect(await (await request.get(`${API}/__last_email`)).json()).toEqual({
+    to: ["bob@example.com", "carol@example.com"],
+    cc: ["dan@example.com"],
+    subject: "Goa fares",
+    message: "See attached.",
+    formats: ["docx", "csv"],
+    include_body: false,
+    agent_id: "price_analyzer",
+  });
+  await dialog.getByRole("button", { name: "Done" }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(card(page, "price_analyzer").getByRole("button", { name: "Send price_analyzer output by email" })).toBeFocused();
+});
+
+test("a sending failure is shown in the modal, and Esc closes it", async ({ page }) => {
+  await runRich(page);
+  await page.getByRole("button", { name: "Send the whole run by email" }).click();
+  const dialog = page.getByRole("dialog", { name: "Send by email" });
+  await dialog.getByLabel("To", { exact: true }).fill("ops@fail.example");
+  await dialog.getByRole("button", { name: "Send" }).click();
+  await expect(dialog.getByText("the email couldn't be sent; try again later")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+});

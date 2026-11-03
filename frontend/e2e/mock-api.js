@@ -378,6 +378,7 @@ const briefChats = { last: null };
 // The last change request the assistant sent (its chips' fields included).
 const revises = { last: null };
 const exports = { last: null };
+const emails = { last: null };
 
 // Deploys: off ("AWS not set up") unless a test turns them on with POST /__deploy_available.
 const deploys = { available: false, current: null, count: 0 };
@@ -670,6 +671,7 @@ function reset() {
   briefChats.last = null;
   revises.last = null;
   exports.last = null;
+  emails.last = null;
 }
 
 // ---- knowledge library: files belong to the user and are attached to any number of
@@ -878,6 +880,23 @@ const server = http.createServer(async (req, res) => {
     return res.end(format === "pdf" ? "%PDF-1.4 mock" : "\ufeffrun_id,agent\r\nr1,a\r\n");
   }
   if (path === "/__last_export") return send(res, 200, exports.last ?? {});
+  // Send by email: recorded, never sent. A recipient at fail.example answers like an
+  // SMTP failure (the real one is logged on the server, not shown).
+  const emailMatch = path.match(/^\/projects\/([^/]+)\/runs\/([^/]+)\/email$/);
+  if (emailMatch && req.method === "POST") {
+    const body = await readBody(req);
+    emails.last = body;
+    if ([...(body.to ?? []), ...(body.cc ?? [])].some((a) => a.endsWith("@fail.example"))) {
+      return send(res, 502, { error_type: "MailSendFailed", message: "the email couldn't be sent; try again later", details: null });
+    }
+    const agent = body.agent_id ?? "all";
+    return send(res, 200, {
+      sent: true,
+      recipients: new Set([...(body.to ?? []), ...(body.cc ?? [])].map((a) => a.toLowerCase())).size,
+      attachments: (body.formats ?? []).map((f) => `Travel-agent_${agent}_${emailMatch[2].slice(0, 8)}_20261103-0930.${f}`),
+    });
+  }
+  if (path === "/__last_email") return send(res, 200, emails.last ?? {});
   if (path === "/__reset" && req.method === "POST") {
     reset();
     return send(res, 200, { reset: true });

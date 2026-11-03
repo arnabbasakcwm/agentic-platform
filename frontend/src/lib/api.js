@@ -341,6 +341,20 @@ export const api = {
       },
     }),
   compile: (id) => request(`/projects/${id}/compile`, { method: "POST" }),
+  // Email a run's output with attachments made by the export.
+  emailRun: (id, runId, { to, cc, subject, message, formats, includeBody, agentId }) =>
+    request(`/projects/${id}/runs/${runId}/email`, {
+      method: "POST",
+      body: {
+        to,
+        cc,
+        subject,
+        message,
+        formats,
+        include_body: includeBody,
+        ...(agentId ? { agent_id: agentId } : {}),
+      },
+    }),
   // A run's output (one agent's, or every finished agent's) as docx | pdf | csv.
   exportRun: (id, runId, format, agentId) =>
     download(

@@ -114,6 +114,8 @@ cp .env.example .env
 # GOOGLE_API_KEY or GEMINI_API_KEY is the easiest to start with). Knowledge bases
 # also need a Gemini or OpenAI key, for embeddings.
 # TAVILY_API_KEY is only needed if a project opts into the web_search tool.
+# SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS and MAIL_FROM turn on "Send by email" on
+# the Run tab (see "Exporting and emailing run outputs" below); without them it's off.
 # Set MONGODB_URI=mongodb://localhost:27017 to persist projects and accounts; leave it
 # unset and everything is kept in memory and lost when the server stops.
 # Set JWT_SECRET to a long random value so sign-ins survive a server restart:
@@ -246,6 +248,40 @@ npm run e2e    # Playwright + axe against a scripted mock API; uses the installe
 
 ---
 
+## Exporting and emailing run outputs
+
+On the Run tab every finished output, and the whole run from the Result header, has
+**Export** (Word, PDF, CSV) and **Email**. The files are made on the server from one
+export model (`backend/src/agentic_platform/export.py`), so all three carry the same
+content and the same Sources:
+
+- **Word**: real headings, lists and tables, and a Sources section with clickable links.
+- **PDF**: a header with the project, agent and date, "Page n of N", tables fitted to
+  the page, a Unicode font (DejaVu in the Docker image, Arial on Windows; `PDF_FONT_PATH`
+  overrides), and linked Sources.
+- **CSV** (UTF-8 with BOM): the answer's own table when it is one (CSV text, a Markdown
+  table or a JSON array of objects), otherwise one row per section with
+  `run_id, agent, timestamp, section, content, sources`. Cells starting with `= + - @`,
+  a tab or CR get a leading `'`, so spreadsheets don't run them as formulas.
+- Files are named `<project>_<agent>_<runid-short>_<YYYYMMDD-HHmm>.<ext>`.
+
+Email uses plain SMTP (`backend/src/agentic_platform/mailer.py`), so any provider works:
+
+| Variable | Meaning |
+|---|---|
+| `SMTP_HOST` | SMTP server; empty turns email off (503 `MailNotConfigured`) |
+| `SMTP_PORT` | 587 (default, STARTTLS), 465 for `SMTP_SECURITY=ssl` |
+| `SMTP_SECURITY` | `starttls` (default), `ssl` or `none` |
+| `SMTP_USER`, `SMTP_PASS` | Sign-in for the SMTP server (never logged or returned) |
+| `MAIL_FROM` | Sender, e.g. `Agentic Platform <noreply@example.com>`; replies go to the user |
+| `EMAIL_RATE_LIMIT_PER_HOUR` | Emails per user per hour (default 10) |
+
+The server checks every address, allows at most 10 recipients (To and CC together)
+and 20 MB of attachments, and rate-limits each user. A sending failure is logged on the
+server; the client only sees `502 MailSendFailed`. With no job queue yet, the email is
+sent during the request (30 s SMTP timeout), and the rate limit is per process (the API
+runs one worker).
+
 ## Orchestration patterns
 
 Chosen automatically by the planner per project, never hardcoded to one:
@@ -285,6 +321,8 @@ signed-in user's projects. Interactive docs: http://127.0.0.1:8000/docs.
 | `GET /projects/{id}/runs/{run_id}` | One saved run: input, events, outputs, errors, usage |
 | `GET /projects/{id}/runs/{run_id}/stream?after=N` | Replay a saved run's events from N, then follow it live |
 | `POST /projects/{id}/runs/{run_id}/stop` | Stop a running local run; it ends within seconds as failed with `RunStopped` |
+| `GET /projects/{id}/runs/{run_id}/export?format=docx\|pdf\|csv&agent_id=` | One agent's output (or the whole run's) as a Word, PDF or CSV file, with its sources |
+| `POST /projects/{id}/runs/{run_id}/email` | Email that output: `{to, cc?, subject, message?, formats, include_body, agent_id?}`; ≤10 recipients, ≤20 MB, rate-limited |
 | `POST /projects/{id}/deployment/runs` | Run the deployment in the background (the console's Try it); saved like any run |
 | `POST /projects/{id}/agents/{agent_id}/invoke` | Run one agent on its own |
 | `GET /knowledge` | Your library: every file with the projects it's attached to and its embedding model, the default model for new uploads, limits |
