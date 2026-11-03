@@ -208,3 +208,48 @@ test("a long table is paged, and a broken one falls back to the raw text", async
   // The other outputs still render.
   await expect(card(page, "flight_searcher")).toContainText("Flights found");
 });
+
+// ------------------------------------------------------------------ Feature 4: citations
+test("cited answers show clickable markers with a preview and a Sources panel", async ({ page }) => {
+  await runRich(page);
+  const searcher = card(page, "flight_searcher");
+  const marker = searcher.getByRole("button", { name: "Source 1: IndiGo schedule" });
+  await expect(marker).toHaveText("[1]");
+  // Hover preview: title, domain, snippet.
+  await marker.hover();
+  const tip = searcher.getByRole("tooltip").filter({ hasText: "IndiGo schedule" });
+  await expect(tip).toBeVisible();
+  await expect(tip).toContainText("www.goindigo.in");
+  await expect(tip).toContainText("Six daily departures");
+  // Clicking jumps to the source in the panel.
+  await marker.click();
+  await expect(searcher.locator("#source-flight_searcher-1")).toBeFocused();
+
+  const sources = searcher.getByRole("region", { name: "Sources" });
+  const link = sources.getByRole("link", { name: /IndiGo schedule/ });
+  await expect(link).toHaveAttribute("href", "https://www.goindigo.in/schedule");
+  await expect(link).toHaveAttribute("target", "_blank");
+  await expect(link).toHaveAttribute("rel", "noopener noreferrer");
+  await expect(sources).toContainText("fares.pdf, p. 3");
+  // The written Sources section gives way to the panel (shown once).
+  await expect(searcher.getByText("[1] IndiGo schedule — https://www.goindigo.in/schedule")).toHaveCount(0);
+  await expect(sources.getByText("Added by the platform")).toHaveCount(0);
+
+  // An answer whose sources the platform appended carries a badge.
+  const advisor = card(page, "travel_advisor");
+  await expect(advisor.getByRole("region", { name: "Sources" }).getByText("Added by the platform")).toBeVisible();
+  // Answers without citations are unchanged (no panel).
+  await expect(card(page, "price_analyzer").getByRole("region", { name: "Sources" })).toHaveCount(0);
+  expect(await axeProblems(page, "citations")).toEqual([]);
+});
+
+test("old outputs without citations still render as before", async ({ page }) => {
+  await page.goto(RUN_URL);
+  await expect(page.locator(".flow-node")).toHaveCount(3);
+  await page.locator(".run-input").fill(JSON.stringify({ ...RICH, scenario: undefined }));
+  await page.getByRole("button", { name: "Run graph" }).click();
+  await expect(page.locator(".outcard--completed")).toHaveCount(3, { timeout: 20_000 });
+  await expect(page.getByRole("region", { name: "Sources" })).toHaveCount(0);
+  await expect(card(page, "price_analyzer").getByRole("table")).toBeVisible(); // its Markdown table
+  await expect(page.locator(".cite__marker")).toHaveCount(0);
+});

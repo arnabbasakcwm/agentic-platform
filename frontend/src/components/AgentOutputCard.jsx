@@ -1,7 +1,9 @@
 import { forwardRef, useMemo, useState } from "react";
 import { agentTitle } from "../lib/flow.js";
 import { formatDuration } from "../lib/format.js";
+import { citationMap, splitSources } from "../lib/citations.js";
 import { detectTable } from "../lib/tabular.js";
+import { SourcesPanel, showSource } from "./Citations.jsx";
 import { DataTable, RawFallback, TableBoundary } from "./DataTable.jsx";
 import { DataView } from "./DataView.jsx";
 import { Icon } from "./icons.jsx";
@@ -23,15 +25,33 @@ function OutputContent({ output, agentId }) {
       return { error: error.message };
     }
   }, [content, output.content_type]);
+  const citations = useMemo(() => citationMap(output.citations), [output.citations]);
   if (table?.error) return <RawFallback raw={content} reason={table.error} />;
   if (table) {
     return (
-      <TableBoundary raw={content}>
-        <DataTable table={table} raw={content} label={`${agentId} table`} />
-      </TableBoundary>
+      <>
+        <TableBoundary raw={content}>
+          <DataTable table={table} raw={content} label={`${agentId} table`} />
+        </TableBoundary>
+        <SourcesPanel agentId={agentId} citations={output.citations} autoAppended={output.citations_auto_appended} />
+      </>
     );
   }
-  return <Markdown>{content}</Markdown>;
+  if (citations.size === 0) return <Markdown>{content}</Markdown>;
+  // With structured citations, the written Sources section gives way to the panel.
+  const { body } = splitSources(content);
+  return (
+    <>
+      <Markdown citations={citations} onCite={(n) => showSource(agentId, n)}>
+        {body}
+      </Markdown>
+      <SourcesPanel
+        agentId={agentId}
+        citations={[...citations.values()]}
+        autoAppended={output.citations_auto_appended}
+      />
+    </>
+  );
 }
 
 /**

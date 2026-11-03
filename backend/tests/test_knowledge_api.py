@@ -217,7 +217,7 @@ def test_a_run_searches_the_projects_documents(monkeypatch):
     c.post(f"/projects/{pid}/compile")
     r = c.post(f"/projects/{pid}/run", json={"input": {"q": "hotel cap?"}})
     assert r.status_code == 200 and r.json()["errors"] == []
-    assert "[policy.md — section \"Hotels\"" in seen[1].content and "INR 9,000" in seen[1].content
+    assert "[1] policy.md — section \"Hotels\"" in seen[1].content and "INR 9,000" in seen[1].content
 
 
 

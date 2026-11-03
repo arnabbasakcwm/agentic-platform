@@ -282,6 +282,30 @@ server; the client only sees `502 MailSendFailed`. With no job queue yet, the em
 sent during the request (30 s SMTP timeout), and the rate limit is per process (the API
 runs one worker).
 
+## Source citations (web and document search)
+
+Agents that use `web_search` or `knowledge_search` must cite what they found
+(`backend/src/agentic_platform/citations.py`):
+
+- **Numbered results.** Each search result reaches the agent numbered [1], [2], … with its
+  metadata: web results carry `source_id, url, title, domain, retrieved_at, snippet`;
+  document passages carry `source_id, document_id, document_name, page/section, chunk_id,
+  snippet`.
+- **One rule for every agent.** A platform rule is added to every agent's system prompt:
+  cite each claim taken from a result with its number, end with a "Sources" section, and
+  cite only sources the tools returned (or say nothing relevant was found).
+- **Checked after each agent.** If the answer used results but cites none, the agent is
+  asked once to add them. If it still doesn't, the platform appends a Sources section
+  built from the tool results and flags the output `citations_auto_appended`. Numbers
+  that match no result are removed (`citations_invalid`). The Sources section is always
+  rebuilt from the real results.
+- **Stored** with the run output as `citations` (structured), shown on the Run tab as
+  clickable [n] markers with a preview and a Sources panel, and carried into the Word /
+  PDF Sources section, the CSV `sources` column and emails.
+
+`REQUIRE_CITATIONS=true` (the default) turns the rule and the check on; `false` turns
+them off. Outputs from before this feature have no citations and display as before.
+
 ## Orchestration patterns
 
 Chosen automatically by the planner per project, never hardcoded to one:

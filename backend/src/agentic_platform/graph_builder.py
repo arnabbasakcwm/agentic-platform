@@ -48,6 +48,7 @@ from .errors import (
     RunStoppedError,
     UnsupportedProviderError,
 )
+from .citations import CITATION_RULES, CitationLog, enforce, require_citations
 from .tools import get_tools
 from .usage import UsageCallback, UsageCollector
 
@@ -298,8 +299,13 @@ def _run_agent_once(
     mcp: McpContext | None = None,
     json_answer: bool = False,
     stop: threading.Event | None = None,
+    citations_out: dict[str, Any] | None = None,
 ) -> AgentOutput:
     """One full attempt for an agent node: bounded tool loop, then structured output.
+
+    Sources the search tools return are numbered in this attempt's CitationLog; when
+    citations are required and the answer used any, it's checked (citations.enforce) and
+    the structured citations are put in `citations_out`.
 
     Any exception here (tool error, schema-validation failure) propagates to the caller's
     retry loop, which feeds the error text back into the agent's own context. A stopped
@@ -315,7 +321,10 @@ def _run_agent_once(
         if usage is not None
         else {}
     )
-    tool_config: RunnableConfig = {"configurable": {"usage": usage, "agent_id": spec.id}}
+    citation_log = CitationLog()
+    tool_config: RunnableConfig = {
+        "configurable": {"usage": usage, "agent_id": spec.id, "citations": citation_log}
+    }
 
     if tools:
         bound = llm.bind_tools(tools)
@@ -358,7 +367,9 @@ def _run_agent_once(
     if json_answer:
         # The model can't call tools (capabilities.py), so it can't use structured output
         # either: ask for the same schema as JSON, and validate it exactly as strictly.
-        return _json_answer(llm, messages, call_config)
+        output = _json_answer(llm, list(messages), call_config)
+        return _cited(output, spec, citation_log, citations_out, stop,
+                      lambda extra: _json_answer(llm, [*messages, extra], call_config))
     structured = llm.with_structured_output(AgentOutput)
     messages.append(
         HumanMessage(
@@ -390,7 +401,41 @@ def _run_agent_once(
         retry = structured.invoke(messages, config=call_config)
         if retry is not None and not _looks_flattened(retry.content):
             output = retry
-    return output
+    return _cited(output, spec, citation_log, citations_out, stop,
+                  lambda extra: structured.invoke([*messages, extra], config=call_config))
+
+
+def _cited(
+    output: AgentOutput,
+    spec: AgentSpec,
+    log: CitationLog,
+    citations_out: dict[str, Any] | None,
+    stop: threading.Event | None,
+    ask: Callable[[HumanMessage], AgentOutput | None],
+) -> AgentOutput:
+    """The answer with its citations checked (citations.py), if any were needed."""
+    if citations_out is None or not log.sources or not require_citations():
+        return output
+
+    def reask(instruction: str) -> str | None:
+        _check_stop(stop)
+        try:
+            retry = ask(HumanMessage(content=f"Your answer was:\n{output.content}\n\n{instruction}"))
+        except RunStoppedError:
+            raise
+        except Exception as e:  # noqa: BLE001 — a failed re-ask falls back to auto-append
+            logger.warning("agent %s: asking for citations failed: %s", spec.id, e)
+            return None
+        return retry.content if retry is not None else None
+
+    result = enforce(output.content, log, reask)
+    if result.auto_appended:
+        logger.warning("agent %s cited none of its %d sources; Sources appended by the platform",
+                       spec.id, len(log.sources))
+    if result.invalid:
+        logger.warning("agent %s cited sources that don't exist: %s (removed)", spec.id, result.invalid)
+    citations_out.update(result.meta())
+    return output.model_copy(update={"content": result.content})
 
 
 def _no_tools_message(llm: LLMConfig) -> str:
@@ -508,8 +553,10 @@ def _make_node(
         emit("node_started", node=spec.id)
 
         llm = get_llm(spec.llm)
+        # The platform's citation rule goes to every agent, current and future.
+        system = spec.system_prompt + (f"\n\n{CITATION_RULES}" if require_citations() else "")
         base_messages: list[AnyMessage] = [
-            SystemMessage(content=spec.system_prompt),
+            SystemMessage(content=system),
             HumanMessage(content=_build_context(state, spec, include_all_outputs)),
         ]
 
@@ -528,9 +575,11 @@ def _make_node(
                     )
                 )
             try:
+                citations: dict[str, Any] = {}
                 output = _run_agent_once(llm, spec, attempt_messages, bounds, knowledge, usage, data, mcp,
-                                         json_answer, stop)
-                dumped = output.model_dump()
+                                         json_answer, stop, citations)
+                # Structured citations travel with the output (and are stored with the run).
+                dumped = {**output.model_dump(), **citations}
                 emit("node_completed", node=spec.id, duration_ms=elapsed_ms(),
                      attempts=attempt, output=dumped,
                      usage=usage.entries(spec.id) if usage else [])

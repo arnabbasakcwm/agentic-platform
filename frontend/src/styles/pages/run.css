@@ -706,3 +706,153 @@
   color: var(--warn);
   font-size: var(--text-caption);
 }
+
+/* ================================================================ citations
+   [n] markers with a preview on hover / focus, and the Sources panel under an answer. */
+.cite {
+  position: relative;
+  display: inline-block;
+}
+
+.cite__marker {
+  padding: 0 var(--space-2xs);
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: var(--violet-soft);
+  color: var(--violet-ink);
+  font: inherit;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: 1.4;
+  vertical-align: super;
+  cursor: pointer;
+}
+
+.cite__marker:hover,
+.cite__marker:focus-visible {
+  background: var(--violet);
+  color: var(--on-primary);
+}
+
+.cite__tip {
+  position: absolute;
+  bottom: calc(100% + var(--space-xxs));
+  left: 50%;
+  z-index: 5;
+  display: none;
+  flex-direction: column;
+  gap: var(--space-2xs);
+  width: max-content;
+  max-width: 300px;
+  padding: var(--space-xs) var(--space-sm);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-overlay);
+  color: var(--text);
+  font-size: var(--text-caption);
+  font-weight: 400;
+  line-height: var(--lh-caption);
+  text-align: left;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.cite:hover .cite__tip,
+.cite__marker:focus-visible + .cite__tip {
+  display: flex;
+}
+
+.cite__tiptitle {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.cite__tipwhere {
+  color: var(--text-muted);
+}
+
+.cite__tipsnippet {
+  color: var(--text);
+}
+
+.sources {
+  margin-top: var(--space-md);
+  padding-top: var(--space-sm);
+  border-top: 1px solid var(--border);
+}
+
+.sources__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  margin-bottom: var(--space-xs);
+}
+
+.sources__title {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--text-overline);
+  font-weight: 600;
+  letter-spacing: var(--track-overline);
+  text-transform: uppercase;
+}
+
+.sources__list {
+  display: grid;
+  gap: var(--space-xxs);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sources__item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-xs);
+  padding: var(--space-xxs) var(--space-xs);
+  border-radius: var(--radius-md);
+  font-size: var(--text-caption);
+}
+
+.sources__item:focus {
+  outline: 2px solid var(--primary);
+  outline-offset: 0;
+  background: var(--violet-soft);
+}
+
+.sources__n {
+  flex: none;
+  color: var(--violet-ink);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.sources__icon {
+  flex: none;
+  margin-top: var(--space-2xs);
+  color: var(--text-muted);
+}
+
+.sources__body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.sources__body a {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xxs);
+  color: var(--link);
+  overflow-wrap: anywhere;
+}
+
+.sources__name {
+  color: var(--text-strong);
+}
+
+.sources__meta {
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}

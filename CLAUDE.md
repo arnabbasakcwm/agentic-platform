@@ -884,6 +884,34 @@ whenever a change departs from or extends the contract above — don't silently 
     tools plus any the saved plan still uses, in the same conditional write
     (`record_exchange(..., side_effect_tools_enabled=…)`).
 
+### 2026-11-03 — Run outputs: export, email, tables, and mandatory citations
+- **Why:** users need to take an agent's answer elsewhere (a document, a spreadsheet, a
+  colleague's inbox), read table answers as tables, and trust what agents say they found.
+- **Rule:**
+  - **One export model** (`export.py`): Word, PDF and CSV all render from `ExportDoc`
+    (Markdown parsed into blocks, plus structured citations). `GET
+    /projects/{id}/runs/{run_id}/export` is owner-only like the run (someone else's is a
+    404, never a 403). CSV is UTF-8 with BOM and guards cells against formula injection.
+    PDFs use a Unicode TrueType font (DejaVu in the API image). `reportlab`, `export.py`
+    and `mailer.py` are platform-only, never in a runtime package.
+  - **Email** (`mailer.py`) is plain SMTP configured by env (`SMTP_*`, `MAIL_FROM`); no
+    SMTP_HOST means it's off (503). At most 10 recipients and 20 MB, a per-user hourly
+    limit, a one-line subject; a send failure is logged and the client gets only
+    `502 MailSendFailed`. **Known deviation:** sent in the request (no job queue yet) and
+    rate-limited per process (one API worker); move both to the queue/Redis with it.
+  - **Tables** (`lib/tabular.js`, `DataTable.jsx`): an answer that is CSV (declared, a
+    ```csv block, or the heuristic: header plus ≥2 rows with a steady field count and
+    short cells), a JSON array of objects or a whole-answer Markdown table shows as a
+    sortable, paged table with Raw and Copy; a table that can't be read falls back to the
+    raw text. Cells are text only. `export.detect_table` follows the same rules.
+  - **Citations** (`citations.py`): search tools number their results in a per-attempt
+    `CitationLog`; `CITATION_RULES` is added to every agent's system prompt; after the
+    answer, `enforce` asks once for missing citations, then appends Sources from the log
+    (`citations_auto_appended`), strips markers that match no result
+    (`citations_invalid`), and always rebuilds the Sources section from the log. The
+    structured `citations` are stored with the output (no migration: outputs are free-form
+    dicts). `REQUIRE_CITATIONS` (env, default true) — no per-user switch.
+
 ## Working style — verify-and-retry, always
 
 Never mark something done because the code looks right.

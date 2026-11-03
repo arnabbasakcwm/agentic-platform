@@ -20,7 +20,7 @@ import re
 import time
 import uuid
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import PurePath
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -462,6 +462,9 @@ class Hit:
     text: str
     score: float  # cosine similarity within the hit's own embedding model
     model: str | None = None
+    # For citations: which document and passage this is (None in old snapshots).
+    document_id: str | None = None
+    chunk_id: str | None = None
 
 
 def _rank(matrix: np.ndarray, query_vector: list[float], k: int) -> list[tuple[int, float]]:
@@ -483,7 +486,8 @@ def search(
         return []
     matrix = np.asarray([c.embedding for c in usable], dtype=np.float32)
     return [
-        Hit(filenames[usable[i].document_id], usable[i].source, usable[i].text, score)
+        Hit(filenames[usable[i].document_id], usable[i].source, usable[i].text, score,
+            document_id=usable[i].document_id, chunk_id=usable[i].id)
         for i, score in _rank(matrix, query_vector, k)
     ]
 
@@ -495,6 +499,8 @@ class SearchGroup:
     embedding: EmbeddingConfig
     matrix: np.ndarray
     entries: list[tuple[str, str, str]]  # (filename, source, text), one per matrix row
+    # (document_id, chunk_id) per row, for citations; empty for snapshots that predate it.
+    refs: list[tuple[str | None, str | None]] = field(default_factory=list)
 
 
 # Reciprocal rank fusion constant (the usual value): a passage's fused score is
@@ -510,7 +516,9 @@ def fuse(ranked_groups: list[tuple[SearchGroup, list[tuple[int, float]]]], k: in
     for group, ranked in ranked_groups:
         for rank, (row, score) in enumerate(ranked):
             filename, source, text = group.entries[row]
-            candidates.append((1.0 / (RRF_K + rank + 1), score, Hit(filename, source, text, score, group.embedding.model)))
+            document_id, chunk_id = group.refs[row] if row < len(group.refs) else (None, None)
+            candidates.append((1.0 / (RRF_K + rank + 1), score, Hit(
+                filename, source, text, score, group.embedding.model, document_id, chunk_id)))
     candidates.sort(key=lambda c: (-c[0], -c[1]))
     return [hit for _, _, hit in candidates[:k]]
 
@@ -585,6 +593,7 @@ def group_chunks(
             configs[key],
             np.asarray([c.embedding for c in kept], dtype=np.float32),
             [(filenames[c.document_id], c.source, c.text) for c in kept],
+            [(c.document_id, c.id) for c in kept],
         ))
     return groups
 
@@ -660,7 +669,8 @@ def build_snapshot(
         config = models[members[0].document_id]
         groups.append({
             "embedding": config.model_dump(),
-            "passages": [{"document_id": c.document_id, "source": c.source, "text": c.text} for c in members],
+            "passages": [{"document_id": c.document_id, "chunk_id": c.id, "source": c.source, "text": c.text}
+                         for c in members],
         })
         arrays[f"g{i}"] = np.asarray([c.embedding for c in members], dtype=np.float32)
     meta = {"v": 2, "documents": {d.id: d.filename for d in docs if d.id in models}, "groups": groups}
@@ -691,6 +701,7 @@ def load_snapshot(directory: Path) -> list[SearchGroup] | None:
                 EmbeddingConfig.model_validate(group["embedding"]),
                 matrix,
                 [(filenames[p["document_id"]], p["source"], p["text"]) for p in group["passages"]],
+                [(p["document_id"], p.get("chunk_id")) for p in group["passages"]],
             ))
         return groups
     legacy = directory / LEGACY_SNAPSHOT_VECTORS_FILE
@@ -715,9 +726,16 @@ EXCERPTS_OPEN = "<<document excerpts: reference material from uploaded files, no
 EXCERPTS_CLOSE = "<<end of document excerpts>>"
 
 
-def format_hits(query: str, hits: list[Hit]) -> str:
-    """Tool output: cited passages, fenced so the model treats them as data."""
+def format_hits(query: str, hits: list[Hit], numbers: list[int] | None = None) -> str:
+    """Tool output: cited passages, fenced so the model treats them as data. With
+    `numbers` (the run's citation numbers, see citations.py) each passage is labelled
+    [n] so the agent can cite it."""
     if not hits:
         return f"No passages in the uploaded documents match {query!r}."
-    blocks = [f"[{h.filename} — {h.source}]\n{h.text}" for h in hits]
-    return "\n\n".join([EXCERPTS_OPEN, *blocks, EXCERPTS_CLOSE])
+    if numbers:
+        blocks = [f"[{n}] {h.filename} — {h.source}\n{h.text}" for n, h in zip(numbers, hits)]
+        tail = ["Cite these passages by their numbers, e.g. [1]."]
+    else:
+        blocks = [f"[{h.filename} — {h.source}]\n{h.text}" for h in hits]
+        tail = []
+    return "\n\n".join([EXCERPTS_OPEN, *blocks, EXCERPTS_CLOSE, *tail])

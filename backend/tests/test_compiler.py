@@ -271,7 +271,8 @@ def test_agent_searches_the_projects_documents_and_gets_cited_passages(monkeypat
     assert queries == ["hotel cap"]
     tool_result = RecordingLLM.seen[-1].content
     assert tool_result.startswith(EXCERPTS_OPEN)
-    assert "[policy.pdf — page 4]" in tool_result
+    # Numbered for citation, with the file and page.
+    assert "[1] policy.pdf — page 4" in tool_result
 
 
 def test_knowledge_search_is_never_offered_by_default():

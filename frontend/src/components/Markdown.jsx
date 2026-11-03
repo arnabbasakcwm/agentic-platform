@@ -1,5 +1,8 @@
+import { useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { rehypeCitations } from "../lib/citations.js";
+import { CitationMarker } from "./Citations.jsx";
 import { detectTable } from "../lib/tabular.js";
 import { DataTable, RawFallback, TableBoundary } from "./DataTable.jsx";
 
@@ -38,10 +41,37 @@ const components = {
   ),
 };
 
-export function Markdown({ children }) {
+/**
+ * `citations` (a Map of n → citation, optional): [n] markers that match one become
+ * clickable markers with a preview; `onCite(n)` is called when one is pressed.
+ */
+export function Markdown({ children, citations, onCite }) {
+  const cited = citations?.size > 0;
+  const rehypePlugins = useMemo(
+    () => (cited ? [[rehypeCitations, { known: citations }]] : []),
+    [cited, citations],
+  );
+  const parts = useMemo(
+    () =>
+      cited
+        ? {
+            ...components,
+            "cite-marker": ({ n }) => {
+              const citation = citations.get(Number(n));
+              return citation ? <CitationMarker citation={citation} onCite={onCite} /> : `[${n}]`;
+            },
+          }
+        : components,
+    [cited, citations, onCite],
+  );
   return (
     <div className="md">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components} skipHtml>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        rehypePlugins={rehypePlugins}
+        components={parts}
+        skipHtml
+      >
         {children ?? ""}
       </ReactMarkdown>
     </div>

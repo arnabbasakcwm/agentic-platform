@@ -228,11 +228,51 @@ def test_web_search_missing_key_raises(monkeypatch):
     assert exc_info.value.env_var == "TAVILY_API_KEY"
 
 
+class _FakeTavily:
+    """Stands in for langchain_tavily.TavilySearch: no network."""
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+    def invoke(self, args):
+        return {"query": args["query"], "results": [
+            {"url": "https://www.goindigo.in/schedule", "title": "IndiGo schedule", "content": "6 daily departures."},
+            {"url": "https://example.org/fares", "title": "", "content": "Akasa from ₹7,004."},
+            {"title": "no url — skipped"},
+        ]}
+
+
 def test_web_search_resolves_with_key(monkeypatch):
     monkeypatch.setenv("TAVILY_API_KEY", "fake-key-for-test")
-    sentinel = object()
-    monkeypatch.setattr(
-        "langchain_tavily.TavilySearch", lambda **kwargs: sentinel
-    )
-    resolved = get_tools(["web_search"])
-    assert resolved == [sentinel]
+    monkeypatch.setattr("langchain_tavily.TavilySearch", _FakeTavily)
+    (resolved,) = get_tools(["web_search"])
+    assert resolved.name == "web_search"
+
+
+def test_web_search_numbers_its_results_with_their_metadata(monkeypatch):
+    from agentic_platform.citations import CitationLog
+
+    monkeypatch.setenv("TAVILY_API_KEY", "fake-key-for-test")
+    monkeypatch.setattr("langchain_tavily.TavilySearch", _FakeTavily)
+    (search,) = get_tools(["web_search"])
+    log = CitationLog()
+    out = search.invoke({"query": "goa fares"}, config={"configurable": {"citations": log}})
+    assert "[1] IndiGo schedule\nURL: https://www.goindigo.in/schedule (www.goindigo.in)" in out
+    assert "[2] example.org\nURL: https://example.org/fares" in out
+    assert out.startswith("<<web search results")
+    first = log.sources[0]
+    assert {k: first[k] for k in ("n", "source_id", "kind", "url", "title", "domain", "snippet")} == {
+        "n": 1, "source_id": "1", "kind": "web", "url": "https://www.goindigo.in/schedule",
+        "title": "IndiGo schedule", "domain": "www.goindigo.in", "snippet": "6 daily departures.",
+    }
+    assert first["retrieved_at"].endswith("+00:00")
+    # The same page found again keeps its number.
+    again = search.invoke({"query": "goa fares"}, config={"configurable": {"citations": log}})
+    assert "[1] IndiGo schedule" in again and len(log.sources) == 2
+
+
+def test_web_search_reports_a_failed_search_plainly(monkeypatch):
+    from agentic_platform.tools import format_web_results
+
+    assert "no usable results" in format_web_results("q", "error: quota exceeded")
+    assert "found nothing" in format_web_results("q", {"results": []})
