@@ -1,12 +1,38 @@
-import { forwardRef, useState } from "react";
+import { forwardRef, useMemo, useState } from "react";
 import { agentTitle } from "../lib/flow.js";
 import { formatDuration } from "../lib/format.js";
+import { detectTable } from "../lib/tabular.js";
+import { DataTable, RawFallback, TableBoundary } from "./DataTable.jsx";
 import { DataView } from "./DataView.jsx";
 import { Icon } from "./icons.jsx";
 import { CopyButton } from "./JsonView.jsx";
 import { Markdown } from "./Markdown.jsx";
 import { OutputActions } from "./OutputActions.jsx";
 import { Pill, Skeleton, StatusBadge } from "./ui.jsx";
+
+/**
+ * The answer itself: a table when it is one (CSV, JSON array, Markdown table), else
+ * Markdown. A table that can't be read shows the raw text with a notice instead.
+ */
+function OutputContent({ output, agentId }) {
+  const content = output.content ?? "";
+  const table = useMemo(() => {
+    try {
+      return detectTable(content, output.content_type);
+    } catch (error) {
+      return { error: error.message };
+    }
+  }, [content, output.content_type]);
+  if (table?.error) return <RawFallback raw={content} reason={table.error} />;
+  if (table) {
+    return (
+      <TableBoundary raw={content}>
+        <DataTable table={table} raw={content} label={`${agentId} table`} />
+      </TableBoundary>
+    );
+  }
+  return <Markdown>{content}</Markdown>;
+}
 
 /**
  * One agent's part of a run: a readable title, its state, how long it took, and its
@@ -87,7 +113,7 @@ export const AgentOutputCard = forwardRef(function AgentOutputCard(
           {output ? (
             // Fades in as the agent's answer arrives.
             <div className="ap-fade">
-              <Markdown>{output.content}</Markdown>
+              <OutputContent output={output} agentId={agentId} />
               <DataView data={output.data} />
             </div>
           ) : node.status === "running" || node.status === "queued" ? (

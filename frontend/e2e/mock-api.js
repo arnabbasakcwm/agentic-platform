@@ -67,10 +67,18 @@ function outputs(input) {
       ],
       citations_auto_appended: false,
     },
-    price_analyzer: {
-      ...base.price_analyzer,
-      content: 'airline,fare_inr,notes\nAkasa Air,7004,"Promotional, mornings only"\nIndiGo,8249,Most flexible\nAir India,,"Full service, ""premium"""\nSpiceJet,6899,<script>alert(1)</script>',
-    },
+    price_analyzer: input.broken
+      ? // Says it's CSV but a quote is never closed: the tab falls back to the raw text.
+        { ...base.price_analyzer, content_type: "text/csv", content: 'airline,fare\n"Akasa Air,7004\nIndiGo,8249' }
+      : input.rows
+        ? {
+            ...base.price_analyzer,
+            content: ["route,fare_inr", ...Array.from({ length: input.rows }, (_, i) => `Route ${i + 1},${1000 + ((i * 37) % 500)}`)].join("\n"),
+          }
+        : {
+            ...base.price_analyzer,
+            content: 'airline,fare_inr,notes\nAkasa Air,7004,"Promotional, mornings only"\nIndiGo,8249,Most flexible\nAir India,,"Full service, ""premium"""\nSpiceJet,6899,<script>alert(1)</script>',
+          },
     travel_advisor: {
       ...base.travel_advisor,
       content: "Book Akasa Air early.\n\n## Sources\n[1] Akasa fares — https://www.akasaair.com/fares",

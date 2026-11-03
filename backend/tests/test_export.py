@@ -97,9 +97,10 @@ def test_filename_follows_the_pattern_and_is_safe():
 # ------------------------------------------------------------------ tabular detection
 @pytest.mark.parametrize("text, rows", [
     ("a,b\n1,2\n3,4", [["a", "b"], ["1", "2"], ["3", "4"]]),
-    ("a;b\n1;2", [["a", "b"], ["1", "2"]]),
-    ("a\tb\n1\t2", [["a", "b"], ["1", "2"]]),
-    ('name,note\n"Smith, J","said ""hi""\nthen left"', [["name", "note"], ["Smith, J", 'said "hi"\nthen left']]),
+    ("a;b\n1;2\n3;4", [["a", "b"], ["1", "2"], ["3", "4"]]),
+    ("a\tb\n1\t2\n3\t4", [["a", "b"], ["1", "2"], ["3", "4"]]),
+    ('name,note\n"Smith, J","said ""hi""\nthen left"\nAl,ok',
+     [["name", "note"], ["Smith, J", 'said "hi"\nthen left'], ["Al", "ok"]]),
     ('[{"a": 1, "b": "x"}, {"a": 2, "c": true}]', [["a", "b", "c"], ["1", "x", ""], ["2", "", "True"]]),
     ("| a | b |\n|---|---|\n| 1 | 2 |", [["a", "b"], ["1", "2"]]),
     ("```csv\na,b\n1,2\n```", [["a", "b"], ["1", "2"]]),
@@ -111,6 +112,8 @@ def test_tables_are_detected(text, rows):
 @pytest.mark.parametrize("text", [
     "Just a sentence, with a comma.",
     "One line only,a,b",
+    "Hello, world\nFoo, bar",  # too short to tell from prose
+    "This sentence, which goes on, is prose.\nSo is this one, written at length, by a model.\nA third, line.",
     "# Heading\nSome text, more text.\nAnother line without the same commas",
     "Intro\n\n| a | b |\n|---|---|\n| 1 | 2 |",  # a table inside prose isn't a tabular answer
     "",
@@ -140,9 +143,9 @@ def test_csv_of_prose_has_sections_bom_quoting_and_sources():
 
 
 def test_csv_of_a_table_is_that_table():
-    doc = ex.build_export(_project(), _run({"analyst": {"content": "a,b\n=1,2\n"}}), "analyst")
+    doc = ex.build_export(_project(), _run({"analyst": {"content": "a,b\n=1,2\n3,4\n"}}), "analyst")
     rows = list(csv.reader(io.StringIO(ex.render_csv(doc).decode("utf-8-sig"))))
-    assert rows == [["a", "b"], ["'=1", "2"]]
+    assert rows == [["a", "b"], ["'=1", "2"], ["3", "4"]]
 
 
 # ------------------------------------------------------------------ endpoint

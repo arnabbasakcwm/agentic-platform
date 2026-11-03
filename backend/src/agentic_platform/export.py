@@ -338,6 +338,16 @@ def detect_table(content: str) -> list[list[str]] | None:
         blocks = parse_markdown(text)
         if len(blocks) == 1 and blocks[0].kind == "code":
             text = blocks[0].text.strip()
+            if blocks[0].lang in ("csv", "tsv"):
+                # Labelled CSV: no guessing needed.
+                delim = "\t" if blocks[0].lang == "tsv" else ","
+                try:
+                    rows = [[c.strip() for c in r] for r in csv.reader(io.StringIO(text), delimiter=delim)
+                            if any(c.strip() for c in r)]
+                except csv.Error:
+                    rows = []
+                if len(rows) >= 2:
+                    return rows
     if text.startswith("["):
         try:
             data = json.loads(text)
@@ -359,26 +369,47 @@ def detect_table(content: str) -> list[list[str]] | None:
     return None
 
 
+_NUMBERISH = re.compile(r"^[-+]?\W?\s?\d[\d,_\s]*(\.\d+)?\s?%?$")
+_MARKDOWN_START = re.compile(r"^\s*(#{1,6}\s|[-*+]\s|>\s|\d+\.\s)")
+
+
+def _looks_like_header(cells: list[str]) -> bool:
+    """Short labels: none empty, not all numbers, each a few words at most."""
+    return all(c.strip() and len(c) <= 40 and len(c.split()) <= 4 for c in cells) and not all(
+        _NUMBERISH.match(c.strip()) for c in cells
+    )
+
+
 def detect_csv(text: str) -> list[list[str]] | None:
+    """CSV/TSV/;/| text: a header and at least two rows with the same number of fields
+    (quotes respected), short cells. The same rules as the console (lib/tabular.js), so
+    an answer shown as a table also exports as one."""
     lines = [ln for ln in text.splitlines() if ln.strip()]
-    if len(lines) < 2:
+    if len(lines) < 3 or _MARKDOWN_START.match(lines[0]):
         return None
-    sample = lines[:10]
+    if any(_TABLE_SEP.match(ln) for ln in lines[:3]):
+        return None  # a Markdown table: the Markdown path handles it
+    best: tuple[int, str] | None = None
     for delim in _DELIMITERS:
         try:
-            rows = list(csv.reader(io.StringIO("\n".join(sample)), delimiter=delim))
+            sample = [[c.strip() for c in r] for r in csv.reader(io.StringIO(text), delimiter=delim)
+                      if any(c.strip() for c in r)][:10]
         except csv.Error:
             continue
-        widths = {len(r) for r in rows}
-        if len(widths) == 1 and next(iter(widths)) >= 2:
-            # A Markdown table also has consistent pipes; leave it to the Markdown path.
-            if delim == "|" and any(_TABLE_SEP.match(ln) for ln in sample):
-                return None
-            try:
-                return [r for r in csv.reader(io.StringIO(text), delimiter=delim) if any(c.strip() for c in r)]
-            except csv.Error:
-                return None
-    return None
+        widths = {len(r) for r in sample}
+        if len(sample) < 3 or len(widths) != 1 or next(iter(widths)) < 2 or not _looks_like_header(sample[0]):
+            continue
+        lengths = sorted(len(c) for r in sample for c in r)
+        if lengths[len(lengths) // 2] > 40 or lengths[-1] > 400:
+            continue
+        if best is None or len(sample[0]) > best[0]:
+            best = (len(sample[0]), delim)
+    if best is None:
+        return None
+    try:
+        return [[c.strip() for c in r] for r in csv.reader(io.StringIO(text), delimiter=best[1]) if any(c.strip() for c in r)]
+    except csv.Error:
+        return None
 
 
 def _cell_text(value: Any) -> str:

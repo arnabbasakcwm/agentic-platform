@@ -145,3 +145,66 @@ test("a sending failure is shown in the modal, and Esc closes it", async ({ page
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
 });
+
+// ------------------------------------------------------------------ Feature 3: CSV tables
+test("a CSV answer shows as a sortable table, with Raw and Copy", async ({ page }) => {
+  let dialogs = 0;
+  page.on("dialog", (d) => {
+    dialogs += 1;
+    d.dismiss();
+  });
+  await runRich(page);
+  const analyzer = card(page, "price_analyzer");
+  const table = analyzer.getByRole("table");
+  await expect(table).toBeVisible();
+  await expect(table.getByRole("columnheader")).toHaveText(["airline", "fare_inr", "notes"]);
+  await expect(analyzer.getByText("4 rows", { exact: true })).toBeVisible();
+  // Quoted commas and doubled quotes are one cell each; markup is shown as text.
+  await expect(table.getByRole("cell", { name: "Promotional, mornings only" })).toBeVisible();
+  await expect(table.getByRole("cell", { name: 'Full service, "premium"' })).toBeVisible();
+  await expect(table.getByRole("cell", { name: "<script>alert(1)</script>" })).toBeVisible();
+  expect(dialogs).toBe(0);
+  // The empty fare is "—"; numbers are right-aligned.
+  const fares = table.locator("tbody tr td:nth-child(2)");
+  await expect(fares.nth(2)).toHaveText(/—/);
+  await expect(fares.first()).toHaveCSS("text-align", "right");
+
+  // Sorting by fare: ascending, descending, then back to the original order.
+  const sortFare = table.getByRole("button", { name: "fare_inr" });
+  await sortFare.click();
+  await expect(table.getByRole("columnheader", { name: "fare_inr" })).toHaveAttribute("aria-sort", "ascending");
+  await expect(fares).toHaveText(["6899", "7004", "8249", /—/]);
+  await sortFare.click();
+  await expect(fares).toHaveText(["8249", "7004", "6899", /—/]);
+  await sortFare.click();
+  await expect(fares).toHaveText(["7004", "8249", /—/, "6899"]);
+
+  // Raw shows the text exactly as the agent wrote it.
+  await analyzer.getByRole("button", { name: "Raw" }).click();
+  await expect(analyzer.locator(".datatable__raw")).toContainText('Air India,,"Full service, ""premium"""');
+  await expect(table).toHaveCount(0);
+  await analyzer.getByRole("button", { name: "Table" }).click();
+  await expect(analyzer.getByRole("table")).toBeVisible();
+  await expect(analyzer.getByRole("button", { name: "Copy" }).last()).toBeVisible();
+  expect(await axeProblems(page, "csv table")).toEqual([]);
+});
+
+test("a long table is paged, and a broken one falls back to the raw text", async ({ page }) => {
+  await page.goto(RUN_URL);
+  await expect(page.locator(".flow-node")).toHaveCount(3);
+  await page.locator(".run-input").fill(JSON.stringify({ ...RICH, rows: 150 }));
+  await page.getByRole("button", { name: "Run graph" }).click();
+  const analyzer = card(page, "price_analyzer");
+  await expect(analyzer.getByText("150 rows · rows 1–100")).toBeVisible({ timeout: 20_000 });
+  await expect(analyzer.locator("tbody tr")).toHaveCount(100);
+  await analyzer.getByRole("button", { name: "Next" }).click();
+  await expect(analyzer.locator("tbody tr")).toHaveCount(50);
+  await expect(analyzer.getByText("Page 2 of 2")).toBeVisible();
+
+  await page.locator(".run-input").fill(JSON.stringify({ ...RICH, broken: true }));
+  await page.getByRole("button", { name: "Run graph" }).click();
+  await expect(card(page, "price_analyzer").getByRole("note")).toContainText("couldn't be read as one", { timeout: 20_000 });
+  await expect(card(page, "price_analyzer").locator(".datatable__raw")).toContainText('"Akasa Air,7004');
+  // The other outputs still render.
+  await expect(card(page, "flight_searcher")).toContainText("Flights found");
+});

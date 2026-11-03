@@ -570,3 +570,139 @@
   margin: 0;
   color: var(--success);
 }
+
+/* ================================================================ table answers (DataTable)
+   CSV, JSON-array and Markdown-table outputs: sticky header, zebra rows, horizontal
+   scroll, numbers right-aligned, Table / Raw and Copy above. */
+.datatable {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  min-width: 0;
+}
+
+.datatable__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-xs) var(--space-sm);
+}
+
+.datatable__count {
+  margin-right: auto;
+  color: var(--text-muted);
+  font-size: var(--text-caption);
+  font-variant-numeric: tabular-nums;
+}
+
+.segmented--sm .segmented__item {
+  padding: var(--space-xxs) var(--space-btn-y);
+  font-size: var(--text-caption);
+}
+
+.datatable__scroll {
+  max-height: 480px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.datatable__table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: var(--text-caption);
+}
+
+.datatable__table th,
+.datatable__table td {
+  padding: var(--space-xs) var(--space-sm);
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  min-width: 80px;
+  max-width: 420px;
+}
+
+.datatable__table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 0;
+  background: var(--surface-sunken);
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.datatable__table tbody tr:nth-child(even) td {
+  background: var(--surface-sunken);
+}
+
+.datatable__table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.datatable__table .datatable__num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.datatable__sort {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xxs);
+  width: 100%;
+  padding: var(--space-xs) var(--space-sm);
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: inherit;
+  cursor: pointer;
+}
+
+.datatable__num .datatable__sort {
+  justify-content: flex-end;
+}
+
+.datatable__sort:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+
+.datatable__empty {
+  color: var(--text-muted);
+}
+
+.datatable__raw {
+  max-height: 480px;
+  margin: 0;
+  overflow: auto;
+  padding: var(--space-sm);
+  border-radius: var(--radius-md);
+  background: var(--code-bg);
+  color: var(--code-text);
+  font-family: var(--mono);
+  font-size: var(--text-code);
+  white-space: pre;
+}
+
+.datatable__pages {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-sm);
+  color: var(--text-muted);
+  font-size: var(--text-caption);
+}
+
+.datatable__notice {
+  margin: 0;
+  padding: var(--space-xs) var(--space-sm);
+  border-radius: var(--radius-md);
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-size: var(--text-caption);
+}

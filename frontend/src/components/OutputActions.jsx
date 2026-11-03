@@ -15,12 +15,22 @@ export function ExportMenu({ projectId, runId, agentId, label }) {
   const [busy, setBusy] = useState(null); // the format being made
   const [error, setError] = useState(null);
   const buttonRef = useRef(null);
+  const refocus = useRef(false);
   const what = label ?? (agentId ? `${agentId} output` : "run output");
+
+  // Back to the button once it's enabled again (it's disabled while the file is made).
+  useEffect(() => {
+    if (!busy && refocus.current) {
+      refocus.current = false;
+      buttonRef.current?.focus();
+    }
+  }, [busy]);
 
   async function download(format) {
     setOpen(false);
     setBusy(format);
     setError(null);
+    refocus.current = true;
     try {
       const { blob, filename } = await api.exportRun(projectId, runId, format, agentId);
       saveBlob(blob, filename);
@@ -28,8 +38,6 @@ export function ExportMenu({ projectId, runId, agentId, label }) {
       setError(e);
     } finally {
       setBusy(null);
-      // After the re-render that enables the button again.
-      requestAnimationFrame(() => buttonRef.current?.focus());
     }
   }
 
