@@ -12,6 +12,11 @@
    source are stripped (listed in `citations_invalid`). The Sources section is always
    rebuilt from the log, so it can only list sources the tools really returned.
 4. **Stored** with the output as structured data: `citations` (one dict per cited source).
+5. **Carried downstream.** An agent that works from other agents' answers inherits their
+   stored sources (`carry`): their [n] markers are renumbered into one sequence, so a
+   number copied from upstream still means the same source, and the agent's own searches
+   continue the numbering. An agent without searches of its own isn't made to cite, but
+   any inherited number it uses is linked and stored like any other citation.
 
 `REQUIRE_CITATIONS` (env, default true) turns 2–4 on. It's read when a run starts, so a
 deployed runtime follows its own environment.
@@ -36,8 +41,11 @@ their title and URL (web) or document name and page/section (documents).
   "[n] Title — URL" for web pages, "[n] Document name, p. X" for documents.
 - Cite only sources the tools returned to you in this task, by the number they came with.
   Never invent a source, a URL or a number.
+- Answers from other agents given to you may already cite sources as [n]. Those numbers
+  are valid for you too: keep a number next to any fact you take from that answer, and
+  list it in your Sources section.
 - If the searches found nothing relevant, say so plainly instead of citing.
-- If you used no search tool, don't add a Sources section."""
+- If you cite nothing, don't add a Sources section."""
 
 
 def require_citations() -> bool:
@@ -50,6 +58,23 @@ class CitationLog:
 
     sources: list[dict[str, Any]] = field(default_factory=list)
     _index: dict[tuple[str, ...], int] = field(default_factory=dict)
+    # How many of `sources` (the first ones) came from other agents' answers.
+    inherited: int = 0
+
+    @property
+    def own(self) -> list[dict[str, Any]]:
+        """The sources this agent's own searches returned."""
+        return self.sources[self.inherited:]
+
+    def inherit(self, citation: dict[str, Any]) -> int:
+        """A source cited in another agent's answer, before this agent searches. The
+        same source cited by two agents gets one number."""
+        if len(self.sources) != self.inherited:
+            raise RuntimeError("inherit sources before the agent's own searches")
+        entry = {k: v for k, v in citation.items() if k not in ("n", "source_id")}
+        n = self._add(source_key(citation), entry)
+        self.inherited = len(self.sources)
+        return n
 
     def _add(self, key: tuple[str, ...], entry: dict[str, Any]) -> int:
         if key in self._index:
@@ -78,6 +103,37 @@ class CitationLog:
 
     def get(self, n: int) -> dict[str, Any] | None:
         return self.sources[n - 1] if 1 <= n <= len(self.sources) else None
+
+
+def source_key(s: dict[str, Any]) -> tuple[str, ...]:
+    """What makes two citations the same source."""
+    if s.get("kind") == "web":
+        return ("web", str(s.get("url")))
+    return ("doc", s.get("chunk_id") or f"{s.get('document_id') or s.get('document_name')}:"
+                   f"{s.get('location')}:{str(s.get('snippet') or '')[:80]}")
+
+
+def renumber(text: str, mapping: dict[int, int]) -> str:
+    """[old] → [new] for every mapped marker (Sources lines included)."""
+    if not mapping:
+        return text
+    return MARKER.sub(lambda m: f"[{mapping[int(m.group(1))]}]" if int(m.group(1)) in mapping else m.group(0), text)
+
+
+def carry(upstream: list[tuple[str, dict[str, Any]]]) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    """The sources cited in these agents' answers, numbered 1..k in one sequence, and each
+    answer's text with its markers renumbered to match. Answers without stored citations
+    (or old outputs) pass through unchanged."""
+    log = CitationLog()
+    contents: dict[str, str] = {}
+    for agent_id, output in upstream:
+        content = str(output.get("content", output)) if isinstance(output, dict) else str(output)
+        mapping: dict[int, int] = {}
+        for c in (output.get("citations") or []) if isinstance(output, dict) else []:
+            if isinstance(c, dict) and isinstance(c.get("n"), int):
+                mapping[c["n"]] = log.inherit(c)
+        contents[agent_id] = renumber(content, mapping)
+    return log.sources, contents
 
 
 def _short(text: str, limit: int = 300) -> str:
@@ -163,7 +219,9 @@ def enforce(content: str, log: CitationLog, reask: Callable[[str], str | None]) 
         body = re.sub(r"[ \t]+([.,;:!?])", r"\1", body)  # "claim [9]." → "claim."
     cited = sorted(set(n for n in markers(body) if log.get(n)))
     auto = not cited
-    chosen = [log.get(n) for n in (range(1, len(log.sources) + 1) if auto else cited)]
+    # Appended: what this agent's own searches returned (inherited sources it didn't use
+    # aren't its sources).
+    chosen = (log.own or log.sources) if auto else [log.get(n) for n in cited]
     section = "## Sources\n" + "\n".join(source_line(s) for s in chosen)
     return CitationResult(
         content=f"{body.rstrip()}\n\n{section}",
@@ -172,3 +230,22 @@ def enforce(content: str, log: CitationLog, reask: Callable[[str], str | None]) 
         invalid=invalid,
         reprompted=reprompted,
     )
+
+
+def resolve(content: str, log: CitationLog) -> CitationResult | None:
+    """For an agent that only inherited sources: link the inherited numbers it cites (the
+    Sources section rebuilt to match) and drop numbers that match no source. Nothing is
+    demanded of it: None when it cites none, and its text is left as it is."""
+    body, _ = split_sources(content)
+    cited = sorted(set(n for n in markers(body) if log.get(n)))
+    if not cited:
+        return None
+    invalid = sorted({n for n in markers(body) if not log.get(n)})
+    if invalid:
+        bad = set(invalid)
+        body = MARKER.sub(lambda m: "" if int(m.group(1)) in bad else m.group(0), body)
+        body = re.sub(r"[ \t]+([.,;:!?])", r"\1", body)
+    chosen = [log.get(n) for n in cited]
+    section = "## Sources\n" + "\n".join(source_line(s) for s in chosen)
+    return CitationResult(content=f"{body.rstrip()}\n\n{section}", citations=[dict(s) for s in chosen],
+                          invalid=invalid)

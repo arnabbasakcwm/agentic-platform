@@ -251,3 +251,88 @@ def test_document_search_results_are_numbered_and_cited(monkeypatch):
 @pytest.mark.parametrize("source, label", [("page 4", "p. 4"), ("pages 3–5", "pp. 3–5"), ("rows 2–9", "rows 2–9")])
 def test_document_locations_read_naturally(source, label):
     assert cit.location_label(source) == label
+
+
+# ------------------------------------------------------------------ carried downstream
+WEB_A = {"n": 3, "kind": "web", "url": "https://rbi.org.in/a", "title": "RBI circular A", "domain": "rbi.org.in"}
+WEB_B = {"n": 7, "kind": "web", "url": "https://rbi.org.in/b", "title": "RBI circular B", "domain": "rbi.org.in"}
+WEB_C = {"n": 1, "kind": "web", "url": "https://sebi.gov.in/c", "title": "SEBI note", "domain": "sebi.gov.in"}
+
+
+def test_carry_renumbers_upstream_answers_into_one_sequence():
+    sources, contents = cit.carry([
+        ("researcher", {"content": "A [3] and B [7].\n\n## Sources\n[3] RBI circular A — https://rbi.org.in/a",
+                        "citations": [WEB_A, WEB_B]}),
+        # A second agent whose [1] is a different page, and whose [2] is the same as A.
+        ("scout", {"content": "C [1], A again [2].", "citations": [WEB_C, {**WEB_A, "n": 2}]}),
+        ("old", {"content": "No citations [4]."}),
+    ])
+    assert [(s["n"], s["url"]) for s in sources] == [
+        (1, "https://rbi.org.in/a"), (2, "https://rbi.org.in/b"), (3, "https://sebi.gov.in/c")]
+    assert contents["researcher"].startswith("A [1] and B [2].")
+    assert "[1] RBI circular A — https://rbi.org.in/a" in contents["researcher"]
+    assert contents["scout"] == "C [3], A again [1]."
+    assert contents["old"] == "No citations [4]."  # nothing stored, left alone
+
+
+def test_an_agent_without_searches_gets_its_inherited_numbers_linked():
+    log = cit.CitationLog()
+    for s in cit.carry([("r", {"content": "", "citations": [WEB_A, WEB_B]})])[0]:
+        log.inherit(s)
+    result = cit.resolve("Act on A [1]. Ignore [9].\n\n## Sources\n[1] whatever", log)
+    assert [c["url"] for c in result.citations] == ["https://rbi.org.in/a"]
+    assert result.invalid == [9] and "[9]" not in result.content
+    assert result.content.endswith("## Sources\n[1] RBI circular A — https://rbi.org.in/a")
+    assert result.auto_appended is False
+    assert cit.resolve("No markers at all.", log) is None
+
+
+def test_own_searches_continue_after_inherited_sources():
+    log = cit.CitationLog()
+    log.inherit(WEB_A)
+    assert log.add_web("https://example.com/new", "New") == 2
+    assert [s["n"] for s in log.own] == [2]
+    with pytest.raises(RuntimeError):
+        log.inherit(WEB_B)
+    # Auto-append lists the agent's own sources, not inherited ones it didn't use.
+    result = cit.enforce("Nothing cited.", log, lambda i: None)
+    assert [c["n"] for c in result.citations] == [2]
+
+
+def test_a_pipeline_links_citations_in_every_agent_that_uses_them(monkeypatch):
+    researcher = _SearchingLLM(
+        [{"name": "web_search", "args": {"query": "rbi"}, "id": "c1"}],
+        [AgentOutput(content="IndiGo runs 6 flights [1]. Akasa from ₹7,004 [2].")],
+    )
+    seen = {}
+
+    class Analyst:
+        def bind_tools(self, tools):
+            return self
+
+        def with_structured_output(self, schema):
+            class Structured:
+                def invoke(self, messages, config=None):
+                    seen["context"] = messages[1].content
+                    return AgentOutput(content="Cheapest is Akasa [2]; also [5].")
+
+            return Structured()
+
+    llms = {"m-research": researcher, "m-analyst": Analyst()}
+    monkeypatch.setattr(gb, "get_llm", lambda cfg: llms[cfg.model])
+    monkeypatch.setattr(gb, "get_tools", lambda names, *a, **k: [_web_tool()] if names else [])
+    plan = AgentPlan(agents=[
+        AgentSpec(id="researcher", role="r", system_prompt="Search.", tools=["web_search"],
+                  llm=LLMConfig(provider="google_genai", model="m-research")),
+        AgentSpec(id="analyst", role="r", system_prompt="Analyse.", depends_on=["researcher"],
+                  llm=LLMConfig(provider="google_genai", model="m-analyst")),
+    ], orchestration_pattern="sequential")
+    outputs = compile_graph(plan).invoke(initial_state({"q": "x"}))["outputs"]
+
+    # The analyst saw the researcher's answer with its Sources, numbered as stored.
+    assert "[2] Akasa fares — https://www.akasaair.com/fares" in seen["context"]
+    analyst = outputs["analyst"]
+    assert [(c["n"], c["url"]) for c in analyst["citations"]] == [(2, "https://www.akasaair.com/fares")]
+    assert analyst["citations_invalid"] == [5]
+    assert analyst["content"] == "Cheapest is Akasa [2]; also.\n\n## Sources\n[2] Akasa fares — https://www.akasaair.com/fares"
+    assert analyst["citations_auto_appended"] is False

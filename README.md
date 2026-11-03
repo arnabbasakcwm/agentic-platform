@@ -299,6 +299,10 @@ Agents that use `web_search` or `knowledge_search` must cite what they found
   built from the tool results and flags the output `citations_auto_appended`. Numbers
   that match no result are removed (`citations_invalid`). The Sources section is always
   rebuilt from the real results.
+- **Carried downstream.** An agent that works from another agent's answer inherits its
+  sources, renumbered into one sequence, so a number it copies still points at the real
+  source and is linked in its own output too. Agents without searches of their own aren't
+  made to cite; numbers that match nothing are removed.
 - **Stored** with the run output as `citations` (structured), shown on the Run tab as
   clickable [n] markers with a preview and a Sources panel, and carried into the Word /
   PDF Sources section, the CSV `sources` column and emails.

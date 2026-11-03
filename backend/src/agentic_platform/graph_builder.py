@@ -48,7 +48,7 @@ from .errors import (
     RunStoppedError,
     UnsupportedProviderError,
 )
-from .citations import CITATION_RULES, CitationLog, enforce, require_citations
+from .citations import CITATION_RULES, CitationLog, carry, enforce, require_citations, resolve
 from .tools import get_tools
 from .usage import UsageCallback, UsageCollector
 
@@ -269,22 +269,32 @@ def _text(content: Any) -> str:
     return str(content)
 
 
-def _build_context(
-    state: GraphState, spec: AgentSpec, include_all_outputs: bool = False
-) -> str:
-    parts = [f"TASK INPUT:\n{state['input']}"]
-    # Sequential/parallel agents see their declared dependencies; supervisor workers have
-    # no depends_on wiring, so they see everything produced so far instead.
+def _upstream(state: GraphState, spec: AgentSpec, include_all_outputs: bool = False) -> list[tuple[str, Any]]:
+    """The answers this agent works from. Sequential/parallel agents see their declared
+    dependencies; supervisor workers have no depends_on wiring, so they see everything
+    produced so far instead."""
     relevant = list(state["outputs"].keys()) if include_all_outputs else spec.depends_on
-    shown = [d for d in relevant if d in state["outputs"]]
+    return [(d, state["outputs"][d]) for d in relevant if d in state["outputs"]]
+
+
+def _build_context(
+    state: GraphState, spec: AgentSpec, include_all_outputs: bool = False,
+    contents: dict[str, str] | None = None,
+) -> str:
+    """`contents`: the upstream answers to show instead of the stored text (their citation
+    numbers renumbered into one sequence, see citations.carry)."""
+    parts = [f"TASK INPUT:\n{state['input']}"]
+    shown = _upstream(state, spec, include_all_outputs)
     if shown:
         header = "\nOUTPUT FROM PRIOR AGENTS:" if include_all_outputs else (
             "\nOUTPUT FROM AGENTS YOU DEPEND ON:"
         )
         parts.append(header)
-        for dep in shown:
-            dep_out = state["outputs"][dep]
-            parts.append(f"  [{dep}]: {dep_out.get('content', dep_out)}")
+        for dep, dep_out in shown:
+            text = (contents or {}).get(dep)
+            if text is None:
+                text = dep_out.get("content", dep_out) if isinstance(dep_out, dict) else dep_out
+            parts.append(f"  [{dep}]: {text}")
     return "\n".join(parts)
 
 
@@ -300,6 +310,7 @@ def _run_agent_once(
     json_answer: bool = False,
     stop: threading.Event | None = None,
     citations_out: dict[str, Any] | None = None,
+    inherited: list[dict[str, Any]] | None = None,
 ) -> AgentOutput:
     """One full attempt for an agent node: bounded tool loop, then structured output.
 
@@ -322,6 +333,8 @@ def _run_agent_once(
         else {}
     )
     citation_log = CitationLog()
+    for source in inherited or []:  # numbered first, as in the context the agent was shown
+        citation_log.inherit(source)
     tool_config: RunnableConfig = {
         "configurable": {"usage": usage, "agent_id": spec.id, "citations": citation_log}
     }
@@ -416,6 +429,13 @@ def _cited(
     """The answer with its citations checked (citations.py), if any were needed."""
     if citations_out is None or not log.sources or not require_citations():
         return output
+    if not log.own:
+        # Only inherited sources: link the ones it cites; nothing is demanded.
+        resolved = resolve(output.content, log)
+        if resolved is None:
+            return output
+        citations_out.update(resolved.meta())
+        return output.model_copy(update={"content": resolved.content})
 
     def reask(instruction: str) -> str | None:
         _check_stop(stop)
@@ -555,9 +575,13 @@ def _make_node(
         llm = get_llm(spec.llm)
         # The platform's citation rule goes to every agent, current and future.
         system = spec.system_prompt + (f"\n\n{CITATION_RULES}" if require_citations() else "")
+        # Sources cited upstream come along, renumbered into one sequence.
+        inherited, contents = (
+            carry(_upstream(state, spec, include_all_outputs)) if require_citations() else ([], None)
+        )
         base_messages: list[AnyMessage] = [
             SystemMessage(content=system),
-            HumanMessage(content=_build_context(state, spec, include_all_outputs)),
+            HumanMessage(content=_build_context(state, spec, include_all_outputs, contents)),
         ]
 
         last_error: str | None = None
@@ -577,7 +601,7 @@ def _make_node(
             try:
                 citations: dict[str, Any] = {}
                 output = _run_agent_once(llm, spec, attempt_messages, bounds, knowledge, usage, data, mcp,
-                                         json_answer, stop, citations)
+                                         json_answer, stop, citations, inherited)
                 # Structured citations travel with the output (and are stored with the run).
                 dumped = {**output.model_dump(), **citations}
                 emit("node_completed", node=spec.id, duration_ms=elapsed_ms(),

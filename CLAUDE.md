@@ -911,6 +911,11 @@ whenever a change departs from or extends the contract above — don't silently 
     (`citations_invalid`), and always rebuilds the Sources section from the log. The
     structured `citations` are stored with the output (no migration: outputs are free-form
     dicts). `REQUIRE_CITATIONS` (env, default true) — no per-user switch.
+  - **Carried downstream** (`citations.carry`): an agent inherits the stored citations of
+    the answers it works from, renumbered into one sequence (its context shows the
+    renumbered text); its own searches continue the numbering. Only an agent's own
+    searches trigger the re-prompt / auto-append; inherited numbers it cites are linked
+    and stored (`citations.resolve`), unknown ones removed.
 
 ## Working style — verify-and-retry, always
 
