@@ -9,6 +9,7 @@ import {
   useState,
 } from "react";
 import { AgentOutputCard } from "../../components/AgentOutputCard.jsx";
+import { OutputActions } from "../../components/OutputActions.jsx";
 import { Icon } from "../../components/icons.jsx";
 import { DiagramLegend } from "../../components/DiagramLegend.jsx";
 import { RunTimeline } from "../../components/RunTimeline.jsx";
@@ -287,6 +288,7 @@ function InputPanel({
 function ResultsPanel({
   project,
   run,
+  runId,
   clock,
   cardRefs,
   highlighted,
@@ -349,6 +351,15 @@ function ResultsPanel({
             label={runSummary(run, clock)}
           />
         )}
+        {/* The whole run's output, once every agent has finished. */}
+        {run.status !== "running" &&
+          run.order.some((id) => run.nodes[id]?.status === "completed") && (
+            <OutputActions
+              projectId={project.project_id}
+              runId={runId}
+              label="the whole run"
+            />
+          )}
       </header>
       {ranWith && (
         <div className="ranwith">
@@ -407,6 +418,8 @@ function ResultsPanel({
                   finals.has(id) && run.nodes[id]?.status === "completed"
                 }
                 highlighted={highlighted === id}
+                projectId={project.project_id}
+                runId={runId}
               />
             ))}
           </div>
@@ -546,6 +559,7 @@ export function RunStep({
         <ResultsPanel
           project={project}
           run={run}
+          runId={runId}
           clock={clock}
           cardRefs={cardRefs}
           highlighted={highlighted}

@@ -53,6 +53,36 @@ function trip(input) {
 }
 
 function outputs(input) {
+  const base = baseOutputs(input);
+  if (input.scenario !== "rich") return base;
+  // {"scenario": "rich"}: a CSV answer, a cited web/document answer, and an answer whose
+  // Sources the platform had to append (for the CSV table and citation checks).
+  return {
+    flight_searcher: {
+      ...base.flight_searcher,
+      content: "## Flights found\n\nIndiGo runs 6 daily departures [1]. The company fare sheet lists ₹7,004 as the lowest fare [2].\n\n## Sources\n[1] IndiGo schedule — https://www.goindigo.in/schedule\n[2] fares.pdf, p. 3",
+      citations: [
+        { n: 1, kind: "web", source_id: "1", title: "IndiGo schedule", url: "https://www.goindigo.in/schedule", domain: "www.goindigo.in", retrieved_at: "2026-11-03T09:30:00Z", snippet: "Six daily departures from Kolkata to Delhi." },
+        { n: 2, kind: "document", source_id: "2", document_id: "doc1", document_name: "fares.pdf", location: "p. 3", chunk_id: "c7", snippet: "Lowest fare: ₹7,004 (Akasa Air, mornings)." },
+      ],
+      citations_auto_appended: false,
+    },
+    price_analyzer: {
+      ...base.price_analyzer,
+      content: 'airline,fare_inr,notes\nAkasa Air,7004,"Promotional, mornings only"\nIndiGo,8249,Most flexible\nAir India,,"Full service, ""premium"""\nSpiceJet,6899,<script>alert(1)</script>',
+    },
+    travel_advisor: {
+      ...base.travel_advisor,
+      content: "Book Akasa Air early.\n\n## Sources\n[1] Akasa fares — https://www.akasaair.com/fares",
+      citations: [
+        { n: 1, kind: "web", source_id: "1", title: "Akasa fares", url: "https://www.akasaair.com/fares", domain: "www.akasaair.com", retrieved_at: "2026-11-03T09:31:00Z", snippet: "Morning promotional fares." },
+      ],
+      citations_auto_appended: true,
+    },
+  };
+}
+
+function baseOutputs(input) {
   const { from, to, month } = trip(input);
   return {
     flight_searcher: {
@@ -347,6 +377,7 @@ const me = () => admin.users.find((u) => u.id === "u1");
 const briefChats = { last: null };
 // The last change request the assistant sent (its chips' fields included).
 const revises = { last: null };
+const exports = { last: null };
 
 // Deploys: off ("AWS not set up") unless a test turns them on with POST /__deploy_available.
 const deploys = { available: false, current: null, count: 0 };
@@ -638,6 +669,7 @@ function reset() {
   admin.users = adminSeed();
   briefChats.last = null;
   revises.last = null;
+  exports.last = null;
 }
 
 // ---- knowledge library: files belong to the user and are attached to any number of
@@ -793,6 +825,7 @@ const server = http.createServer(async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+  res.setHeader("Access-Control-Expose-Headers", "Content-Disposition");
   if (req.method === "OPTIONS") return res.writeHead(204).end();
 
   const path = new URL(req.url, "http://x").pathname;
@@ -827,6 +860,24 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, { seeded: true });
   }
   if (path === "/__last_brief_chat") return send(res, 200, briefChats.last ?? {});
+  // Run exports: a small file of the right type and name (the real files are tested in
+  // the backend's test_export.py). format=csv&agent_id=fail answers like a failed export.
+  const exportMatch = path.match(/^\/projects\/([^/]+)\/runs\/([^/]+)\/export$/);
+  if (exportMatch && req.method === "GET") {
+    const q = new URL(req.url, "http://x").searchParams;
+    const format = q.get("format");
+    const agent = q.get("agent_id") ?? "all";
+    exports.last = { run: exportMatch[2], format, agent: q.get("agent_id") };
+    if (agent === "fail") {
+      return send(res, 409, { error_type: "ExportUnavailable", message: "this run has no finished output to export yet", details: null });
+    }
+    const types = { docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", pdf: "application/pdf", csv: "text/csv; charset=utf-8" };
+    if (!types[format]) return send(res, 422, { error_type: "ValidationError", message: "format must be docx, pdf or csv", details: null });
+    const name = `Travel-agent_${agent}_${exportMatch[2].slice(0, 8)}_20261103-0930.${format}`;
+    res.writeHead(200, { "Content-Type": types[format], "Content-Disposition": `attachment; filename="${name}"` });
+    return res.end(format === "pdf" ? "%PDF-1.4 mock" : "\ufeffrun_id,agent\r\nr1,a\r\n");
+  }
+  if (path === "/__last_export") return send(res, 200, exports.last ?? {});
   if (path === "/__reset" && req.method === "POST") {
     reset();
     return send(res, 200, { reset: true });

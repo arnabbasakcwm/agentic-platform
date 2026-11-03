@@ -18,6 +18,7 @@ import threading
 import time
 import uuid
 from datetime import date, datetime, timedelta, timezone
+from urllib.parse import quote
 from typing import Any, Callable, Literal
 
 from botocore.exceptions import BotoCoreError, ClientError
@@ -29,6 +30,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, EmailStr, Field, ValidationError
 
+from . import export as export_mod
 from . import knowledge as kb
 from . import usage as usage_mod
 from .agent_schema import AgentPlan, EmbeddingConfig, LLMConfig, RunBounds
@@ -158,6 +160,8 @@ app.add_middleware(
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
     allow_methods=["*"],
     allow_headers=["*"],
+    # Exports name their file here; the console reads it to save the download.
+    expose_headers=["Content-Disposition"],
 )
 
 _store, _users, _knowledge, _usage = make_stores()
@@ -906,6 +910,34 @@ def list_runs(
 def get_run(project_id: str, run_id: str, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
     """One saved run in full: input, events, outputs, errors and usage."""
     return {"run": _run_body(_get_run(project_id, run_id, user))}
+
+
+@app.get("/projects/{project_id}/runs/{run_id}/export")
+def export_run(
+    project_id: str,
+    run_id: str,
+    format: Literal["docx", "pdf", "csv"],
+    agent_id: str | None = None,
+    user: UserRecord = Depends(current_user),
+) -> Response:
+    """One agent's output (`agent_id`), or every finished agent's, as a Word, PDF or CSV
+    file with its sources. Owner-only like the run itself: someone else's project or run
+    is a 404."""
+    project = _get_project(project_id, user)
+    run = _get_run(project_id, run_id, user)
+    doc = export_mod.build_export(project, run, agent_id)
+    data = export_mod.render(doc, format)
+    return Response(
+        content=data,
+        media_type=export_mod.MEDIA_TYPES[format],
+        headers={"Content-Disposition": _attachment(export_mod.filename(doc, format)),
+                 "Cache-Control": "no-store"},
+    )
+
+
+def _attachment(name: str) -> str:
+    """A Content-Disposition for a download; the name is already ASCII-safe."""
+    return f'attachment; filename="{name}"; filename*=UTF-8\'\'{quote(name)}'
 
 
 @app.post("/projects/{project_id}/runs/{run_id}/stop")
@@ -3126,6 +3158,11 @@ def _handle_planner(_req: Request, exc: PlannerError):
 @app.exception_handler(ValidationError)
 def _handle_validation(_req: Request, exc: ValidationError):
     return _error_response(422, "ValidationError", "invalid plan or request", exc.errors())
+
+
+@app.exception_handler(export_mod.ExportUnavailable)
+def _handle_export_unavailable(_req: Request, exc: export_mod.ExportUnavailable):
+    return _error_response(exc.status, "ExportUnavailable", str(exc))
 
 
 @app.exception_handler(PlatformError)

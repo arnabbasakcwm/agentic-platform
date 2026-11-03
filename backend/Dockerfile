@@ -16,6 +16,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     UV_CACHE_DIR=/app/.deploy-cache/uv-cache \
     PATH="/app/.venv/bin:$PATH"
 
+# DejaVu: a Unicode TrueType font for PDF exports (export.py), so any script prints.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # Dependencies first, so code changes don't reinstall them.

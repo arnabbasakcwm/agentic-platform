@@ -61,8 +61,12 @@ PLATFORM_ONLY_PACKAGES = (
     "pypdf",
     "python-docx",
     "python-multipart",
+    # Run exports (PDF) are made on the platform, never by a runtime.
+    "reportlab",
 )
-PLATFORM_ONLY_MODULES = {"app.py", "auth.py", "stores.py", "agentcore.py", "deploy.py"}
+PLATFORM_ONLY_MODULES = {
+    "app.py", "auth.py", "stores.py", "agentcore.py", "deploy.py", "export.py", "mailer.py",
+}
 # AgentCore's limits for a direct-code package.
 MAX_ZIPPED_BYTES = 250 * 1024 * 1024
 MAX_UNZIPPED_BYTES = 750 * 1024 * 1024

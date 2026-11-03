@@ -29,6 +29,7 @@ dependencies = [
     "sqlglot>=30.21.0",
     "mcp>=2.3.0",
     "cryptography>=50.0.1",
+    "reportlab>=4.2",
 ]
 
 [build-system]

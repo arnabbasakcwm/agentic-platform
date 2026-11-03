@@ -103,6 +103,19 @@ async function failure(response) {
   });
 }
 
+/** A file from the API: its bytes and the name the server gave it (Content-Disposition). */
+async function download(path) {
+  const response = await send(path);
+  if (!response.ok) throw await failure(response);
+  const disposition = response.headers.get("Content-Disposition") ?? "";
+  const encoded = /filename\*=UTF-8''([^;]+)/i.exec(disposition);
+  const plain = /filename="([^"]+)"/i.exec(disposition);
+  const filename = encoded
+    ? decodeURIComponent(encoded[1])
+    : (plain?.[1] ?? "export");
+  return { blob: await response.blob(), filename };
+}
+
 async function request(path, options) {
   const response = await send(path, options);
   if (!response.ok) throw await failure(response);
@@ -328,6 +341,12 @@ export const api = {
       },
     }),
   compile: (id) => request(`/projects/${id}/compile`, { method: "POST" }),
+  // A run's output (one agent's, or every finished agent's) as docx | pdf | csv.
+  exportRun: (id, runId, format, agentId) =>
+    download(
+      `/projects/${id}/runs/${runId}/export?format=${format}` +
+        (agentId ? `&agent_id=${encodeURIComponent(agentId)}` : ""),
+    ),
   run: (id, input) =>
     request(`/projects/${id}/run`, { method: "POST", body: { input } }),
   // Same input as run(); onEvent receives { event, data } as each agent progresses.

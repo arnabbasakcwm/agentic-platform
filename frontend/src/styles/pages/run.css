@@ -441,3 +441,37 @@
   font-variant-numeric: tabular-nums;
 }
 
+
+/* ================================================================ output actions
+   Export ▾ and Send by email, on each finished output and on the Result header. */
+.outactions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-field);
+}
+
+.outactions__export {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-field);
+}
+
+.outactions__error {
+  color: var(--danger);
+  font-size: var(--text-caption);
+}
+
+.cpop--export {
+  width: 200px;
+}
+
+.cmenu__item--compact {
+  align-items: center;
+  gap: var(--space-xs);
+  padding: var(--space-xs) var(--space-btn-y);
+}
+
+.cmenu__item--compact .cmenu__d {
+  margin: 0 0 0 auto;
+}
