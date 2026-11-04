@@ -278,6 +278,13 @@ class TeamNotFoundError(PlatformError):
         super().__init__("not found")
 
 
+class TeamProtectedError(PlatformError):
+    """The Default team holds the backfill's state and the projects that predate teams."""
+
+    def __init__(self) -> None:
+        super().__init__("the Default team can be renamed but not deleted")
+
+
 class NotATeamMemberError(PlatformError):
     """Roles within a team go to its members; add the person to the team first."""
 

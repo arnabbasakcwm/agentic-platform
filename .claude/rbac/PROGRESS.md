@@ -1,6 +1,6 @@
 # RBAC Delegation — Progress
 STATUS: IN_PROGRESS
-Iteration: 9
+Iteration: 10
 Branch: feat/rbac-delegation
 Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint configured).
 
@@ -19,7 +19,7 @@ Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint con
 - [x] P2.1 `GET /projects` scoped via `policy.list_visible_projects` (own + team-shared; master `?scope=all` only; others ignored); `ProjectStore.list_for_teams` (memory+Mongo); summaries gain mine/team_id/team_access. Users/usage list scoping for Group Admins lands with P2.4 (team endpoints); `/usage` stays self-only, `/admin/*` stays admin-only; knowledge/data/MCP libraries are per-user (unchanged)
 - [x] P2.2 `_get_project(id, user, action)` now goes through `policy.can` (default `project.manage`, so every mutating/running route is owner/master/team-admin only; `GET /projects/{id}` uses `project.view` and strips chat/resources for view-only members); out-of-scope = 404; run lookups keyed by project owner's tenant; 15 API tests; 751 passed
 - [x] P2.3 `PUT/DELETE /teams/{id}/admins/{user}` (Super Admin or that team's group admin; revoke: master any, group admin self only; target must be a member -> 409; all else 404); `require_master` now uses `policy.can(role.grant_sub_admin)`; no-escalation tests (Sub Admin 403, master unassignable 422, org role untouched); 778 passed
-- [ ] P2.4 Team CRUD + membership APIs
+- [x] P2.4 Teams API: POST/GET/PATCH/DELETE /teams, GET /teams/{id}/members, PUT/DELETE /teams/{id}/members/{user}, GET /teams/{id}/usage (group-admin scoped, team-shared projects only, no briefs); Default team undeletable; deleting a team makes its projects personal; 802 passed
 - [ ] P2.5 Audit log store + writer; wire into P2.3/P2.4
 
 ## Phase 3 — Agent Sharing
@@ -64,3 +64,4 @@ Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint con
 - Iter 7: P2.1 done (744 tests). Next: P2.2 by-id scope.
 - Iter 8: P2.2 done. Next: P2.3 role APIs.
 - Iter 9: P2.3 done. Next: P2.4 team CRUD + membership.
+- Iter 10: P2.4 done. Next: P2.5 audit log.

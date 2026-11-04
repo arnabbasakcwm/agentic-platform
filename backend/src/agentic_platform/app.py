@@ -69,6 +69,7 @@ from .errors import (
     MasterAdminRequiredError,
     NotATeamMemberError,
     TeamNotFoundError,
+    TeamProtectedError,
     EmailTakenError,
     MissingProviderKeyError,
     DeployedRunError,
@@ -113,7 +114,7 @@ from .graph_builder import (
 )
 from .meta_planner_prompt import discuss_brief, plan_project, revise_plan
 from .policy import Actor, actor_for, can, list_visible_projects
-from .rbac_backfill import backfill as backfill_teams
+from .rbac_backfill import DEFAULT_TEAM_ID, backfill as backfill_teams
 from .stores import (
     ADMIN_ROLES,
     DataSource,
@@ -126,7 +127,9 @@ from .stores import (
     McpServer,
     McpTool,
     ProjectRecord,
+    TEAM_NAME_MAX,
     TeamMembership,
+    TeamRecord,
     UsageRecord,
     UserRecord,
     make_capability_store,
@@ -1902,6 +1905,175 @@ def admin_user_usage(
     return {"user": user, "projects": projects, **body}
 
 
+# ------------------------------------------------------------------------------ teams
+class TeamRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=TEAM_NAME_MAX)
+
+    @field_validator("name")
+    @classmethod
+    def _tidy(cls, v: str) -> str:
+        v = " ".join(v.split())
+        if not v:
+            raise ValueError("a team needs a name")
+        return v
+
+
+def _team_body(team: TeamRecord, actor: Actor) -> dict[str, Any]:
+    return {
+        "id": team.id,
+        "name": team.name,
+        "created_at": team.created_at,
+        "members": len(_teams.list_members(team.id)),
+        "my_role": actor.team_roles.get(team.id),
+    }
+
+
+def _visible_team(team_id: str, actor: Actor, action: str = "team.view") -> TeamRecord:
+    """A team the caller holds `action` on; anything else is the same 404."""
+    team = _teams.get_team(team_id)
+    if team is None or not can(actor, action, team_id):
+        raise TeamNotFoundError()
+    return team
+
+
+@app.post("/teams", status_code=201)
+def create_team(req: TeamRequest, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """Create a team (Super Admin only). Everyone else gets the same 404 as an unknown route."""
+    actor = _actor(user)
+    if not can(actor, "team.create"):
+        raise TeamNotFoundError()
+    team = TeamRecord(id=uuid.uuid4().hex, name=req.name, created_by=user.id)
+    _teams.create_team(team)
+    logger.info("user %s created team %s", user.id, team.id)
+    return {"team": _team_body(team, actor)}
+
+
+@app.get("/teams")
+def list_teams(user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """The Super Admin sees every team; anyone else only the teams they belong to."""
+    actor = _actor(user)
+    teams = _teams.list_teams() if actor.is_master else [
+        t for t in (_teams.get_team(tid) for tid in actor.team_roles) if t is not None
+    ]
+    return {"teams": [_team_body(t, actor) for t in teams]}
+
+
+@app.get("/teams/{team_id}")
+def get_team(team_id: str, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    actor = _actor(user)
+    return {"team": _team_body(_visible_team(team_id, actor), actor)}
+
+
+@app.patch("/teams/{team_id}")
+def rename_team(team_id: str, req: TeamRequest, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    actor = _actor(user)
+    _visible_team(team_id, actor, "team.manage_members")
+    team = _teams.rename_team(team_id, req.name)
+    if team is None:
+        raise TeamNotFoundError()
+    logger.info("user %s renamed team %s", user.id, team_id)
+    return {"team": _team_body(team, actor)}
+
+
+@app.delete("/teams/{team_id}")
+def delete_team(team_id: str, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """Delete a team (Super Admin only). Its projects go back to being personal and owner-only;
+    nothing else is deleted. The Default team cannot be deleted."""
+    actor = _actor(user)
+    _visible_team(team_id, actor, "team.delete")
+    if team_id == DEFAULT_TEAM_ID:
+        raise TeamProtectedError()
+    released = 0
+    for p in _store.list_all():
+        if p.team_id == team_id:
+            _store.set_team(p.id, None, False)
+            released += 1
+    _teams.delete_team(team_id)
+    logger.info("user %s deleted team %s (%d projects made personal)", user.id, team_id, released)
+    return {"deleted": team_id, "projects_made_personal": released}
+
+
+@app.get("/teams/{team_id}/members")
+def list_team_members(team_id: str, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """Who is in the team and their role (Super Admin and the team's group admins). A plain
+    member sees only the team itself, not their colleagues."""
+    actor = _actor(user)
+    _visible_team(team_id, actor, "team.manage_members")
+    by_id = {u.id: u for u in _users.list_all()}
+    members = []
+    for m in _teams.list_members(team_id):
+        u = by_id.get(m.user_id)
+        if u is not None:
+            members.append({"user_id": u.id, "email": u.email, "role": m.role, "added_at": m.added_at})
+    return {"members": members}
+
+
+@app.put("/teams/{team_id}/members/{user_id}")
+def add_team_member(team_id: str, user_id: str, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """Add a person to a team as a plain member (Super Admin only). A group admin role is
+    given separately, by `PUT /teams/{id}/admins/{user}`. Adding someone already in the team
+    changes nothing."""
+    actor = _actor(user)
+    _visible_team(team_id, actor, "team.add_member")
+    if _users.get(user_id) is None:
+        raise TeamNotFoundError()
+    existing = _teams.get_membership(team_id, user_id)
+    if existing is None:
+        existing = TeamMembership(team_id=team_id, user_id=user_id, role="member", added_by=user.id)
+        _teams.set_member(existing)
+        logger.info("user %s added %s to team %s", user.id, user_id, team_id)
+    return _membership_body(existing)
+
+
+@app.delete("/teams/{team_id}/members/{user_id}")
+def remove_team_member(team_id: str, user_id: str, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """Remove a person from a team (Super Admin, or the team's group admin). Taking out a
+    group admin needs the same right as removing their admin role: the Super Admin, or the
+    person leaving themselves. Their projects stay theirs; they just stop seeing the team's."""
+    actor = _actor(user)
+    _visible_team(team_id, actor, "team.manage_members")
+    membership = _teams.get_membership(team_id, user_id)
+    if membership is None:
+        raise TeamNotFoundError()
+    if membership.role == "group_admin" and not can(actor, "role.revoke_group_admin", (team_id, user_id)):
+        raise TeamNotFoundError()
+    _teams.remove_member(team_id, user_id)
+    logger.info("user %s removed %s from team %s", user.id, user_id, team_id)
+    return {"removed": user_id}
+
+
+@app.get("/teams/{team_id}/usage")
+def team_usage(team_id: str, days: int = 30, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """The team's usage (Super Admin and its group admins): only calls made for projects the
+    team shares (`team_access`), by anyone, with a per-person breakdown. Planner and personal
+    calls of the members, and owner-only projects, are not included."""
+    actor = _actor(user)
+    team = _visible_team(team_id, actor, "team.manage_members")
+    start, days, since = _range_start(days)
+    team_projects = {p.id: p for p in _store.list_for_teams([team_id])}
+    records = [r.model_dump() for r in _usage.list_all(since) if r.project_id in team_projects]
+    by_id = {u.id: u for u in _users.list_all()}
+    per_person = usage_mod.by_tenant(records)
+    members = []
+    for m in _teams.list_members(team_id):
+        u = by_id.get(m.user_id)
+        if u is None:
+            continue
+        totals = per_person.get(u.id) or {
+            "calls": 0, "input_tokens": 0, "output_tokens": 0, "cost": 0.0, "unpriced_tokens": 0,
+            "last_active": None, "runs": 0, "deployed_runs": 0,
+        }
+        members.append({"user_id": u.id, "email": u.email, "role": m.role, **totals})
+    # Given names only: an unnamed project's display name is its brief, which is the owner's content.
+    names = {pid: p.name or f"Untitled project · {pid[:6]}" for pid, p in team_projects.items()}
+    body = usage_mod.dashboard(
+        records, start=start, days=days, project_names=names, currency=usage_mod.prices().get("currency", "USD")
+    )
+    body["team"] = {"id": team.id, "name": team.name}
+    body["members"] = members
+    return body
+
+
 def _team_member_target(team_id: str, user_id: str, user: UserRecord, action: str, resource: Any) -> tuple[Actor, TeamMembership]:
     """Shared guard for changing someone's role in a team: the caller must hold `action` on
     the team (anything else, including a team they cannot see, is one 404), the person must
@@ -3276,6 +3448,11 @@ def _handle_master_required(_req: Request, exc: MasterAdminRequiredError):
 @app.exception_handler(TeamNotFoundError)
 def _handle_team_not_found(_req: Request, exc: TeamNotFoundError):
     return _error_response(404, "NotFound", str(exc))
+
+
+@app.exception_handler(TeamProtectedError)
+def _handle_team_protected(_req: Request, exc: TeamProtectedError):
+    return _error_response(409, "TeamProtected", str(exc))
 
 
 @app.exception_handler(NotATeamMemberError)

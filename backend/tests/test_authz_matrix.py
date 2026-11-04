@@ -59,6 +59,8 @@ MATRIX = {
     ("team.create", None): {"super"},
     ("team.view", "A"): {"super", "ga_a", "member_a"},
     ("team.view", "B"): {"super", "ga_a", "member_b"},
+    ("team.add_member", "A"): {"super"},  # choosing from all users needs org-wide sight
+    ("team.delete", "A"): {"super"},
     ("team.manage_members", "A"): {"super", "ga_a"},
     ("team.manage_members", "B"): {"super"},  # ga_a is only a member of B
     ("role.grant_sub_admin", None): {"super"},

@@ -159,6 +159,10 @@ _ACTIONS: dict[str, Callable[[Actor, Any], bool]] = {
     "team.create": lambda actor, _r: actor.is_master,
     "team.view": lambda actor, r: actor.is_master or actor.in_team(_team_id(r)),
     "team.manage_members": _manage_team_members,
+    # Adding people to a team means choosing from everyone on the platform. A group admin
+    # sees only their team, so only the Super Admin may (decision D9).
+    "team.add_member": lambda actor, _r: actor.is_master,
+    "team.delete": lambda actor, _r: actor.is_master,
     "role.grant_sub_admin": lambda actor, _r: actor.is_master,
     "role.grant_group_admin": _manage_team_members,  # master, or the team's own group admin
     "role.revoke_group_admin": _revoke_group_admin,
