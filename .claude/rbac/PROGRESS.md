@@ -1,6 +1,6 @@
 # RBAC Delegation — Progress
 STATUS: IN_PROGRESS
-Iteration: 5
+Iteration: 6
 Branch: feat/rbac-delegation
 Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint configured).
 
@@ -13,7 +13,7 @@ Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint con
 - [x] P1.2 `TeamRecord`, `TeamMembership`, `TeamStore` (in-memory + Mongo, one role per team+user via `_id`), `make_team_store`; 17 contract tests incl. live Mongo; 588 passed
 - [x] P1.3 `rbac_backfill.py` (+ `scripts/rbac_backfill.py up|down`), `ProjectRecord.team_id/team_access`, `ProjectStore.list_all/set_team`, run at app start; idempotent, completion-marked, reversible; 12 tests memory+Mongo. The Default-team 'member cannot see another user's pre-existing project' test moves to P1.4 (needs policy)
 - [x] P1.4 `policy.py`: `Actor`/`actor_for`, `Scope`/`scope_for`, `visible_projects`, `can()` (fail closed); 13 tests incl. the D6 Default-team test on memory+Mongo; 613 passed
-- [ ] P1.5 Authorization test matrix scaffold (roles × actions × in/out-of-scope)
+- [x] P1.5 `tests/test_authz_matrix.py`: 6 actors x 20 (action, resource) rows = 123 tests; guard fails if a policy action has no row. Later tasks extend MATRIX and add API-level 404 checks
 
 ## Phase 2 — Scoping & Roles
 - [ ] P2.1 Apply scope to list endpoints (projects, users, usage, runs/conversations)
@@ -60,3 +60,4 @@ Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint con
 - Iter 3: P1.2 done. Next: P1.3 backfill.
 - Iter 4: P1.3 done. Next: P1.4 policy.
 - Iter 5: P1.4 done. Next: P1.5 matrix scaffold.
+- Iter 6: Phase 1 complete. Next: P2.1 scope list endpoints.
