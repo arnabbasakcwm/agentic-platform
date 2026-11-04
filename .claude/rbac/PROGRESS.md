@@ -1,6 +1,6 @@
 # RBAC Delegation — Progress
 STATUS: IN_PROGRESS
-Iteration: 1
+Iteration: 2
 Branch: feat/rbac-delegation
 Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint configured).
 
@@ -8,10 +8,10 @@ Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint con
 - [x] P0 Discovery — see NOTES.md (stack, commands, admin checks, chokepoints, usage tracking)
 
 ## Phase 1 — Foundations
-- [ ] P1.1a Gateway wrapper around `get_llm()` (pass-through, same interface); parity tests
-- [ ] P1.1b Route planner/assistant (`meta_planner_prompt.py`) and capability probe through the gateway; supervisor + agent loops already via get_llm
+- [x] P1.1a Gateway wrapper around `get_llm()` — `model_gateway.py` (GatewayRunnable, before/after hooks, no-op); 570 passed
+- [x] P1.1b Planner, probe, supervisor, agent loops all already use get_llm → gated; test forbids constructing chat models elsewhere; stream/batch/ainvoke refused (fail closed)
 - [ ] P1.2 Stores + models: `TeamRecord`, `TeamMembership(role member|group_admin)`; in-memory + Mongo; contract tests
-- [ ] P1.3 Backfill/mapping (D1/D2/D6): lazy, idempotent, reversible helper script; tests
+- [ ] P1.3 Backfill/mapping (D1/D2/D6): lazy, idempotent, reversible helper; tests incl. Default-team member CANNOT see another user's pre-existing project (owner-only, team_access=false)
 - [ ] P1.4 Central policy module `policy.py`: `can(actor, action, resource)` + `scope_for(actor)`
 - [ ] P1.5 Authorization test matrix scaffold (roles × actions × in/out-of-scope)
 
@@ -31,7 +31,7 @@ Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint con
 ## Phase 4 — Model Privileges
 - [ ] P4.1 Org catalog + team/user allowlist store + `fallback_model`
 - [ ] P4.2 `effective_models(user)` = intersection; grant APIs with no-escalation
-- [ ] P4.3 Enforce in gateway (MODEL_NOT_PERMITTED / fallback) incl. sub-agents & tool loops
+- [ ] P4.3 Enforce in gateway (MODEL_NOT_PERMITTED / fallback) incl. sub-agents & tool loops; hard-limit + unpriced model → MODEL_NOT_PERMITTED(reason=unpriced) unless per-model override (D3) — test required
 
 ## Phase 5 — Budgets
 - [ ] P5.1 Budget schema (hierarchical, integer micro-USD, period, hard/soft) + append-only usage ledger
@@ -56,3 +56,4 @@ Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint con
 
 ## Log
 - Iter 1: Phase 0 done; plan written. Next: P1.1a.
+- Iter 2: decisions finalized (chore commit). P1.1a+b done: gateway in place. Next: P1.2.

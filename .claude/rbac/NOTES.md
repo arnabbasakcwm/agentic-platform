@@ -50,3 +50,9 @@ Plan: wrap the runnable returned by `get_llm()` in a thin gateway object (same i
 - **In-memory store:** same semantics under a `threading.Lock` (the existing InMemoryRunStore pattern), and the same contract tests run against both.
 - Lazy period reset is also a conditional update (`period_start < new_start` → set `remaining = limit`), so two resetters can't double-reset.
 - The primitive exists, so **not BLOCKED**.
+
+## Gateway (P1.1)
+- `model_gateway.py`: `gateway.before_call(ctx)` / `after_call(ctx, result)` are the enforcement points (assign callables). `get_llm()` wraps `_build_llm()`; `bind_tools`/`with_structured_output`/`bind` stay wrapped. Only `invoke` is supported; stream/batch/async raise (nothing uses them today).
+- `CallContext` has provider, model and the call's run config (callbacks/configurable) — the RBAC identity (user/team/agent/project) must be put into `config["configurable"]` by the runner for later tasks. Today `graph_builder` passes `call_config` with callbacks only: P4.3 must add the identity there.
+- Embeddings (`get_embeddings`) are NOT gated yet; they cost money too (knowledge indexing/search). Add a follow-up task in P5.3.
+- Test lesson: `type(get_llm(...))` is now `GatewayRunnable`; the real client is `._inner` (one assertion in test_bedrock updated).

@@ -115,7 +115,7 @@ def test_catalog_is_cached_and_survives_a_failed_refresh(monkeypatch):
 # ---------------------------------------------------------------------------- providers
 def test_get_llm_builds_a_converse_client_in_the_bedrock_region():
     llm = get_llm(LLMConfig(provider="bedrock", model="in.anthropic.claude-haiku-4-5-20251001-v1:0"))
-    assert type(llm).__name__ == "ChatBedrockConverse"
+    assert type(llm._inner).__name__ == "ChatBedrockConverse"  # get_llm wraps the client in the model gateway
     assert llm.model_id == "in.anthropic.claude-haiku-4-5-20251001-v1:0"
     assert llm.region_name == "ap-south-1"
 

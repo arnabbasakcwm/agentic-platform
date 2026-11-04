@@ -41,6 +41,7 @@ from .config import (
     PROVIDER_ENV_VARS,
     embedding_option,
 )
+from .model_gateway import GatewayRunnable
 from .errors import (
     ModelCannotCallToolsError,
     AgentExecutionError,
@@ -88,6 +89,12 @@ def _require_key(provider: str) -> str:
 
 
 def get_llm(config: LLMConfig) -> BaseChatModel:
+    """The only way to get a chat model. The result is wrapped by the model gateway
+    (model_gateway.py), so every call is gated in one place."""
+    return GatewayRunnable(_build_llm(config), config.provider, config.model)  # type: ignore[return-value]
+
+
+def _build_llm(config: LLMConfig) -> BaseChatModel:
     provider = config.provider
     # A per-request timeout, so a stalled call fails into the agent's retry loop instead
     # of hanging the run. extra_params can still override it.
