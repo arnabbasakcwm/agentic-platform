@@ -148,6 +148,11 @@ class ProjectRecord(BaseModel):
     # runnable only while this equals plan_version, so a plan edit invalidates it.
     compiled_version: int | None = None
     side_effect_tools_enabled: list[str] = Field(default_factory=list)
+    # Delegated administration. A project belongs to a team or is personal (None). Team
+    # members see it only when team_access is true; the owner always does. Projects that
+    # predate teams are placed in the Default team with team_access false (owner-only).
+    team_id: str | None = None
+    team_access: bool = False
     conversation: list[ChatMessage] = Field(default_factory=list)
     deployment: Deployment | None = None
     created_at: datetime = Field(default_factory=_now)
@@ -233,6 +238,16 @@ class ProjectStore(Protocol):
         version. None if the project is gone."""
         ...
 
+
+    def list_all(self) -> list[ProjectRecord]:
+        """Every project of every tenant. For platform jobs (backfill) and scoped queries
+        built on top of it; never returned to a caller without a scope check."""
+        ...
+
+    def set_team(self, project_id: str, team_id: str | None, team_access: bool) -> ProjectRecord | None:
+        """Place the project in a team (or None for personal) and set whether the team's
+        members may see it. Leaves updated_at alone. None if the project is gone."""
+        ...
 
     def delete(self, project_id: str) -> bool:
         """Remove the project. False if it didn't exist."""
@@ -352,6 +367,17 @@ class InMemoryProjectStore:
         record.updated_at = _now()
         return record.model_copy(deep=True)
 
+
+    def list_all(self) -> list[ProjectRecord]:
+        return [r.model_copy(deep=True) for r in self._records.values()]
+
+    def set_team(self, project_id: str, team_id: str | None, team_access: bool) -> ProjectRecord | None:
+        record = self._records.get(project_id)
+        if record is None:
+            return None
+        record.team_id = team_id
+        record.team_access = team_access
+        return record.model_copy(deep=True)
 
     def delete(self, project_id: str) -> bool:
         return self._records.pop(project_id, None) is not None
@@ -537,6 +563,22 @@ class MongoProjectStore:
             )
         return self._from_doc(doc) if doc else None
 
+
+    def list_all(self) -> list[ProjectRecord]:
+        with _mongo_errors():
+            docs = list(self._projects.find({}))
+        return [self._from_doc(doc) for doc in docs]
+
+    def set_team(self, project_id: str, team_id: str | None, team_access: bool) -> ProjectRecord | None:
+        from pymongo import ReturnDocument
+
+        with _mongo_errors():
+            doc = self._projects.find_one_and_update(
+                {"_id": project_id},
+                {"$set": {"team_id": team_id, "team_access": team_access}},
+                return_document=ReturnDocument.AFTER,
+            )
+        return self._from_doc(doc) if doc else None
 
     def delete(self, project_id: str) -> bool:
         with _mongo_errors():
@@ -1639,6 +1681,8 @@ class TeamRecord(BaseModel):
     org_id: str = "org"  # the single organisation today; kept so a second one is not a rewrite
     created_by: str | None = None
     created_at: datetime = Field(default_factory=_now)
+    # Set on the Default team when the one-time backfill has finished (see rbac_backfill.py).
+    backfill_done: bool = False
 
 
 class TeamMembership(BaseModel):

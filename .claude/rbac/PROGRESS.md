@@ -1,6 +1,6 @@
 # RBAC Delegation — Progress
 STATUS: IN_PROGRESS
-Iteration: 3
+Iteration: 4
 Branch: feat/rbac-delegation
 Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint configured).
 
@@ -11,8 +11,8 @@ Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint con
 - [x] P1.1a Gateway wrapper around `get_llm()` — `model_gateway.py` (GatewayRunnable, before/after hooks, no-op); 570 passed
 - [x] P1.1b Planner, probe, supervisor, agent loops all already use get_llm → gated; test forbids constructing chat models elsewhere; stream/batch/ainvoke refused (fail closed)
 - [x] P1.2 `TeamRecord`, `TeamMembership`, `TeamStore` (in-memory + Mongo, one role per team+user via `_id`), `make_team_store`; 17 contract tests incl. live Mongo; 588 passed
-- [ ] P1.3 Backfill/mapping (D1/D2/D6): lazy, idempotent, reversible helper; tests incl. Default-team member CANNOT see another user's pre-existing project (owner-only, team_access=false)
-- [ ] P1.4 Central policy module `policy.py`: `can(actor, action, resource)` + `scope_for(actor)`
+- [x] P1.3 `rbac_backfill.py` (+ `scripts/rbac_backfill.py up|down`), `ProjectRecord.team_id/team_access`, `ProjectStore.list_all/set_team`, run at app start; idempotent, completion-marked, reversible; 12 tests memory+Mongo. The Default-team 'member cannot see another user's pre-existing project' test moves to P1.4 (needs policy)
+- [ ] P1.4 Central policy module `policy.py`: `can(actor, action, resource)` + `scope_for(actor)`; MUST include the D6 test: Default-team member cannot see another user's pre-existing project (team_access=false), on memory + Mongo
 - [ ] P1.5 Authorization test matrix scaffold (roles × actions × in/out-of-scope)
 
 ## Phase 2 — Scoping & Roles
@@ -58,3 +58,4 @@ Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint con
 - Iter 1: Phase 0 done; plan written. Next: P1.1a.
 - Iter 2: decisions finalized (chore commit). P1.1a+b done: gateway in place. Next: P1.2.
 - Iter 3: P1.2 done. Next: P1.3 backfill.
+- Iter 4: P1.3 done. Next: P1.4 policy.

@@ -61,3 +61,8 @@ Plan: wrap the runnable returned by `get_llm()` in a thin gateway object (same i
 - `TeamStore` in stores.py; membership `_id` = `team:user` gives one role per team without a transaction. A membership for a missing team is silently not stored (callers must check the team first). Mongo is reachable locally in this environment, so contract tests exercise it (throwaway DB, dropped).
 - Tooling lesson: long Python/heredoc patches fail in Bash here; write scripts with the Write tool into the scratchpad.
 - Test lesson: build records after a sleep when ordering by `created_at` (ms precision).
+
+## Backfill (P1.3)
+- Bug caught by test: a cutoff-only backfill re-added a member an admin had removed on every restart. Fix: `TeamRecord.backfill_done` is set last; later runs no-op, interrupted runs resume.
+- Backfill runs at app import (best effort, logged). `ProjectStore.list_all()` is platform-internal: never return it to a caller without scope.
+- Rollback restores `team_id=None` for all projects in Default (drops any team_access an owner set since).

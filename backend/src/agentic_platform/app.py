@@ -110,6 +110,7 @@ from .graph_builder import (
     run_agent_events,
 )
 from .meta_planner_prompt import discuss_brief, plan_project, revise_plan
+from .rbac_backfill import backfill as backfill_teams
 from .stores import (
     ADMIN_ROLES,
     DataSource,
@@ -128,6 +129,7 @@ from .stores import (
     PROJECT_NAME_MAX,
     brief_title,
     make_run_store,
+    make_team_store,
     make_datasource_store,
     make_mcp_store,
     make_stores,
@@ -171,7 +173,13 @@ _datasources = make_datasource_store()
 _mcp = make_mcp_store()
 _capabilities = make_capability_store()
 _runs = make_run_store()
+_teams = make_team_store()
 logger = logging.getLogger(__name__)
+
+try:  # existing installations move onto teams once; idempotent and never blocks start-up
+    backfill_teams(_users, _store, _teams)
+except Exception:  # noqa: BLE001 - an unreachable store surfaces on the first request instead
+    logger.exception("rbac backfill failed; will retry on next start")
 
 
 def _make_cloud():
