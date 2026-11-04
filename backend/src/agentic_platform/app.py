@@ -113,6 +113,7 @@ from .graph_builder import (
     run_agent_events,
 )
 from .meta_planner_prompt import discuss_brief, plan_project, revise_plan
+from . import audit as audit_log
 from .policy import Actor, actor_for, can, list_visible_projects
 from .rbac_backfill import DEFAULT_TEAM_ID, backfill as backfill_teams
 from .stores import (
@@ -136,6 +137,7 @@ from .stores import (
     PROJECT_NAME_MAX,
     brief_title,
     make_run_store,
+    make_audit_store,
     make_team_store,
     make_datasource_store,
     make_mcp_store,
@@ -181,6 +183,7 @@ _mcp = make_mcp_store()
 _capabilities = make_capability_store()
 _runs = make_run_store()
 _teams = make_team_store()
+_audit = make_audit_store()
 logger = logging.getLogger(__name__)
 
 try:  # existing installations move onto teams once; idempotent and never blocks start-up
@@ -1945,6 +1948,7 @@ def create_team(req: TeamRequest, user: UserRecord = Depends(current_user)) -> d
     team = TeamRecord(id=uuid.uuid4().hex, name=req.name, created_by=user.id)
     _teams.create_team(team)
     logger.info("user %s created team %s", user.id, team.id)
+    audit_log.record(_audit, user.id, "team.created", "team", team.id, team_id=team.id, after={"name": team.name})
     return {"team": _team_body(team, actor)}
 
 
@@ -1967,11 +1971,16 @@ def get_team(team_id: str, user: UserRecord = Depends(current_user)) -> dict[str
 @app.patch("/teams/{team_id}")
 def rename_team(team_id: str, req: TeamRequest, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
     actor = _actor(user)
-    _visible_team(team_id, actor, "team.manage_members")
+    old = _visible_team(team_id, actor, "team.manage_members")
     team = _teams.rename_team(team_id, req.name)
     if team is None:
         raise TeamNotFoundError()
     logger.info("user %s renamed team %s", user.id, team_id)
+    if old.name != team.name:
+        audit_log.record(
+            _audit, user.id, "team.renamed", "team", team_id, team_id=team_id,
+            before={"name": old.name}, after={"name": team.name},
+        )
     return {"team": _team_body(team, actor)}
 
 
@@ -1980,7 +1989,7 @@ def delete_team(team_id: str, user: UserRecord = Depends(current_user)) -> dict[
     """Delete a team (Super Admin only). Its projects go back to being personal and owner-only;
     nothing else is deleted. The Default team cannot be deleted."""
     actor = _actor(user)
-    _visible_team(team_id, actor, "team.delete")
+    doomed = _visible_team(team_id, actor, "team.delete")
     if team_id == DEFAULT_TEAM_ID:
         raise TeamProtectedError()
     released = 0
@@ -1990,6 +1999,10 @@ def delete_team(team_id: str, user: UserRecord = Depends(current_user)) -> dict[
             released += 1
     _teams.delete_team(team_id)
     logger.info("user %s deleted team %s (%d projects made personal)", user.id, team_id, released)
+    audit_log.record(
+        _audit, user.id, "team.deleted", "team", team_id, team_id=team_id,
+        before={"name": doomed.name}, details={"projects_made_personal": released},
+    )
     return {"deleted": team_id, "projects_made_personal": released}
 
 
@@ -2022,6 +2035,9 @@ def add_team_member(team_id: str, user_id: str, user: UserRecord = Depends(curre
         existing = TeamMembership(team_id=team_id, user_id=user_id, role="member", added_by=user.id)
         _teams.set_member(existing)
         logger.info("user %s added %s to team %s", user.id, user_id, team_id)
+        audit_log.record(
+            _audit, user.id, "team.member_added", "membership", user_id, team_id=team_id, after={"role": "member"}
+        )
     return _membership_body(existing)
 
 
@@ -2039,7 +2055,36 @@ def remove_team_member(team_id: str, user_id: str, user: UserRecord = Depends(cu
         raise TeamNotFoundError()
     _teams.remove_member(team_id, user_id)
     logger.info("user %s removed %s from team %s", user.id, user_id, team_id)
+    audit_log.record(
+        _audit, user.id, "team.member_removed", "membership", user_id, team_id=team_id, before={"role": membership.role}
+    )
     return {"removed": user_id}
+
+
+@app.get("/audit")
+def read_audit(
+    team_id: str | None = None,
+    action: str | None = None,
+    before: datetime | None = None,
+    limit: int = 100,
+    user: UserRecord = Depends(current_user),
+) -> dict[str, Any]:
+    """The audit log, newest first. The Super and Sub Admin read it org-wide (optionally for one
+    team); a group admin only the entries of the teams they administer. Anyone else gets
+    the same 404 as an unknown route."""
+    actor = _actor(user)
+    limit = min(max(limit, 1), 500)
+    if actor.is_master or actor.is_sub_admin:
+        entries = _audit.list(team_id=team_id, action=action, before=before, limit=limit)
+    elif actor.admined_teams:
+        if team_id is not None and not can(actor, "audit.view", team_id):
+            raise TeamNotFoundError()
+        entries = _audit.list(
+            team_ids=[team_id] if team_id else sorted(actor.admined_teams), action=action, before=before, limit=limit
+        )
+    else:
+        raise TeamNotFoundError()
+    return {"entries": [e.model_dump() for e in entries]}
 
 
 @app.get("/teams/{team_id}/usage")
@@ -2102,6 +2147,10 @@ def grant_group_admin(team_id: str, user_id: str, user: UserRecord = Depends(cur
         membership = membership.model_copy(update={"role": "group_admin", "added_by": actor.user_id})
         _teams.set_member(membership)
         logger.info("user %s made %s a group admin of team %s", actor.user_id, user_id, team_id)
+        audit_log.record(
+            _audit, actor.user_id, "team.group_admin_granted", "membership", user_id,
+            team_id=team_id, before={"role": "member"}, after={"role": "group_admin"},
+        )
     return _membership_body(membership)
 
 
@@ -2116,6 +2165,10 @@ def revoke_group_admin(team_id: str, user_id: str, user: UserRecord = Depends(cu
         membership = membership.model_copy(update={"role": "member", "added_by": actor.user_id})
         _teams.set_member(membership)
         logger.info("user %s removed %s as group admin of team %s", actor.user_id, user_id, team_id)
+        audit_log.record(
+            _audit, actor.user_id, "team.group_admin_revoked", "membership", user_id,
+            team_id=team_id, before={"role": "group_admin"}, after={"role": "member"},
+        )
     return _membership_body(membership)
 
 
@@ -2135,6 +2188,11 @@ def admin_set_role(
     if updated is None:
         raise AdminNotFoundError()
     logger.info("admin %s set role of user %s to %s", admin.id, user_id, req.role)
+    if target.role != updated.role:
+        audit_log.record(
+            _audit, admin.id, "user.role_changed", "user", user_id,
+            before={"role": target.role}, after={"role": updated.role},
+        )
     return {"user": {**_public_user(updated), "role_changed_at": updated.role_changed_at}}
 
 

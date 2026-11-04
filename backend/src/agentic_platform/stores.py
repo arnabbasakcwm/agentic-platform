@@ -1871,6 +1871,109 @@ class MongoTeamStore:
         return sorted((self._member(d) for d in docs), key=lambda m: (m.added_at, m.team_id))
 
 
+# ------------------------------------------------------------------------------ audit log
+# Delegated administration is only as trustworthy as its record. The audit log is
+# append-only: the store has no update and no delete, and entries hold ids and small
+# before/after values, never secrets, passwords, prompts or project contents.
+class AuditEntry(BaseModel):
+    id: str
+    at: datetime = Field(default_factory=_now)
+    actor_id: str  # the user who did it ("system" for the platform itself)
+    action: str  # e.g. "team.group_admin_granted"
+    target_type: str  # "user" | "team" | "membership" | "agent_grant" | "budget" | ...
+    target_id: str
+    # The team the action belongs to, or None for an org-level action. A group admin reads
+    # only entries of the teams they administer.
+    team_id: str | None = None
+    before: dict[str, Any] | None = None
+    after: dict[str, Any] | None = None
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
+class AuditStore(Protocol):
+    def append(self, entry: AuditEntry) -> None:
+        """Add an entry. There is deliberately no way to change or remove one."""
+
+    def list(
+        self,
+        *,
+        team_ids: list[str] | None = None,
+        team_id: str | None = None,
+        action: str | None = None,
+        before: datetime | None = None,
+        limit: int = 100,
+    ) -> list[AuditEntry]:
+        """Newest first. `team_ids` limits to entries of those teams (a group admin's view);
+        `team_id` to one team; None for both means everything (org-wide view)."""
+
+
+def _audit_match(e: AuditEntry, team_ids: list[str] | None, team_id: str | None, action: str | None, before: datetime | None) -> bool:
+    if team_ids is not None and e.team_id not in team_ids:
+        return False
+    if team_id is not None and e.team_id != team_id:
+        return False
+    if action is not None and e.action != action:
+        return False
+    return before is None or e.at < before
+
+
+class InMemoryAuditStore:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._entries: list[AuditEntry] = []
+
+    def append(self, entry: AuditEntry) -> None:
+        with self._lock:
+            self._entries.append(entry.model_copy(deep=True))
+
+    def list(self, *, team_ids=None, team_id=None, action=None, before=None, limit=100) -> list[AuditEntry]:
+        with self._lock:
+            found = [e for e in self._entries if _audit_match(e, team_ids, team_id, action, before)]
+        found.reverse()  # appended in time order
+        found.sort(key=lambda e: e.at, reverse=True)
+        return [e.model_copy(deep=True) for e in found[: max(limit, 0)]]
+
+
+class MongoAuditStore:
+    """`audit_log`: insert-only (no update or delete is ever issued by the platform)."""
+
+    def __init__(self, db: "Database"):
+        self._log = db["audit_log"]
+        with _mongo_errors():
+            self._log.create_index([("at", -1)])
+            self._log.create_index([("team_id", 1), ("at", -1)])
+
+    def append(self, entry: AuditEntry) -> None:
+        body = entry.model_dump()
+        body["_id"] = body.pop("id")
+        with _mongo_errors():
+            self._log.insert_one(body)
+
+    def list(self, *, team_ids=None, team_id=None, action=None, before=None, limit=100) -> list[AuditEntry]:
+        query: dict[str, Any] = {}
+        if team_ids is not None:
+            query["team_id"] = {"$in": list(team_ids)}
+        if team_id is not None:
+            query["team_id"] = team_id
+        if action is not None:
+            query["action"] = action
+        if before is not None:
+            query["at"] = {"$lt": before}
+        with _mongo_errors():
+            docs = list(self._log.find(query).sort("at", -1).limit(max(limit, 0)))
+        out = []
+        for d in docs:
+            d["id"] = d.pop("_id")
+            out.append(AuditEntry.model_validate(d))
+        return out
+
+
+def make_audit_store() -> AuditStore:
+    if MONGODB_URI:
+        return MongoAuditStore(mongo_database(MONGODB_URI, MONGODB_DB))
+    return InMemoryAuditStore()
+
+
 def make_team_store() -> TeamStore:
     if MONGODB_URI:
         return MongoTeamStore(mongo_database(MONGODB_URI, MONGODB_DB))

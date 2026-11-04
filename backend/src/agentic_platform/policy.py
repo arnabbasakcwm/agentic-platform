@@ -163,6 +163,9 @@ _ACTIONS: dict[str, Callable[[Actor, Any], bool]] = {
     # sees only their team, so only the Super Admin may (decision D9).
     "team.add_member": lambda actor, _r: actor.is_master,
     "team.delete": lambda actor, _r: actor.is_master,
+    # Audit log: the Super and Sub Admin read it org-wide; a group admin only for a team they
+    # administer (resource = that team id; None asks for "my teams" and is decided by the route).
+    "audit.view": lambda actor, r: actor.is_master or actor.is_sub_admin or (r is not None and actor.admins_team(r)),
     "role.grant_sub_admin": lambda actor, _r: actor.is_master,
     "role.grant_group_admin": _manage_team_members,  # master, or the team's own group admin
     "role.revoke_group_admin": _revoke_group_admin,

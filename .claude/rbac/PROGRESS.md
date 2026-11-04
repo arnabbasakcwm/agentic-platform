@@ -1,6 +1,6 @@
 # RBAC Delegation — Progress
 STATUS: IN_PROGRESS
-Iteration: 10
+Iteration: 11
 Branch: feat/rbac-delegation
 Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint configured).
 
@@ -20,7 +20,7 @@ Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint con
 - [x] P2.2 `_get_project(id, user, action)` now goes through `policy.can` (default `project.manage`, so every mutating/running route is owner/master/team-admin only; `GET /projects/{id}` uses `project.view` and strips chat/resources for view-only members); out-of-scope = 404; run lookups keyed by project owner's tenant; 15 API tests; 751 passed
 - [x] P2.3 `PUT/DELETE /teams/{id}/admins/{user}` (Super Admin or that team's group admin; revoke: master any, group admin self only; target must be a member -> 409; all else 404); `require_master` now uses `policy.can(role.grant_sub_admin)`; no-escalation tests (Sub Admin 403, master unassignable 422, org role untouched); 778 passed
 - [x] P2.4 Teams API: POST/GET/PATCH/DELETE /teams, GET /teams/{id}/members, PUT/DELETE /teams/{id}/members/{user}, GET /teams/{id}/usage (group-admin scoped, team-shared projects only, no briefs); Default team undeletable; deleting a team makes its projects personal; 802 passed
-- [ ] P2.5 Audit log store + writer; wire into P2.3/P2.4
+- [x] P2.5 Append-only audit log: AuditEntry/AuditStore (memory+Mongo, no update/delete, insert-only), audit.record (write after success, failure logged not fatal), wired into role/team/membership/group-admin actions (no entry on no-ops or refusals), GET /audit (master+sub org-wide, group admin own teams); 12 tests. Phase 2 complete
 
 ## Phase 3 — Agent Sharing
 - [ ] P3.1 `agent_grants` model/store (project_id, agent_id|"*", grantee user|team, level, granted_by)
@@ -65,3 +65,4 @@ Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint con
 - Iter 8: P2.2 done. Next: P2.3 role APIs.
 - Iter 9: P2.3 done. Next: P2.4 team CRUD + membership.
 - Iter 10: P2.4 done. Next: P2.5 audit log.
+- Iter 11: P2.5 done; Phase 2 complete. Next: P3.1 agent grants.
