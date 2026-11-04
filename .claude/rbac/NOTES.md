@@ -40,3 +40,13 @@ Plan: wrap the runnable returned by `get_llm()` in a thin gateway object (same i
 - Routes never import a DB driver; every store has in-memory + Mongo impl passing the same contract tests.
 - Non-found/out-of-scope → 404 (never 403) — matches the spec. `require_master` currently returns 403 for admins: keep (documented behaviour, tested).
 - Uncommitted frontend work from the earlier redesign session sits in the working tree; RBAC commits must `git add` only their own paths.
+
+## P5.3 atomic check-and-debit primitive (decided in iteration 1)
+**Primitive: single-document conditional atomic update** — Mongo `find_one_and_update(filter, {"$inc": ...}, return_document=AFTER)` where the *filter* carries the condition. The store already uses this pattern (`find_one_and_update` with `$inc` on `plan_version`, stores.py ~466/514), and it is plain CRUD, so it runs on local Mongo, Atlas and DocumentDB. Never read-modify-write.
+- Each budget node (user, team, sub-admin pool, org) is one document holding `remaining` (integer micro-USD, decremented on reservation) and `limit`/`period_start`.
+- **Reserve** the estimated cost: `find_one_and_update({_id, remaining: {"$gte": est}}, {"$inc": {"remaining": -est, "reserved": est}})`. The `$gte` filter and the `$inc` happen atomically in one document; N parallel calls against the last credit → exactly one matches. A `None` result = limit hit → `BUDGET_EXCEEDED` with that scope.
+- **Chain (user + team [+ pools])** spans several documents, which has no atomic multi-doc op without transactions (not available on standalone Mongo). So: reserve levels in a fixed order (user → team → pool → org); if any level refuses, **release** the ones already taken with a compensating `$inc` (+est). Releases are idempotent per reservation id recorded in the ledger. This can briefly under-report remaining budget (conservative), never over-spend.
+- **Settle** after the call: `$inc` by (est − actual) to refund or charge the difference, then append the ledger row (append-only insert).
+- **In-memory store:** same semantics under a `threading.Lock` (the existing InMemoryRunStore pattern), and the same contract tests run against both.
+- Lazy period reset is also a conditional update (`period_start < new_start` → set `remaining = limit`), so two resetters can't double-reset.
+- The primitive exists, so **not BLOCKED**.
