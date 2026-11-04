@@ -1,0 +1,11 @@
+# RBAC — Decisions & assumptions
+
+Tag `[REVIEW]` = the human should confirm.
+
+- D1 [REVIEW] **Role mapping.** Existing `master` → Super Admin (org owner, unique). Existing `admin` → Sub Admin? No: today's admins only read usage. To avoid silently widening anyone's power, existing `admin` stays a *usage-read-only admin* mapped to Sub Admin with an **empty grant set** (no budget pool, no models, no sharing until the Super Admin grants). Existing `user` → Member. Reason: fail closed, "no escalation".
+- D2 [REVIEW] **Roles stay on `UserRecord.role`** (`user|admin|master`, kept for compatibility and the console) and the new delegated roles are derived: Super Admin = `master`; Sub Admin = `admin`; Group Admin = a `team_memberships` row with role `group_admin` (per team, not global); Member = everyone else. Reason: keeps the single-admin flow working and avoids a data rewrite. Multiple Super Admins are not added (spec says Super Admin = "existing admin"; platform keeps exactly one master).
+- D3 **Money is integer micro-USD** (1 USD = 1,000,000 units) computed from the price table at debit time; no floats stored in budgets/ledger. Unpriced models debit 0 cost but are still token-counted and logged (`unpriced`). [REVIEW] Hard-limit budgets cannot meter unpriced models; an admin can set a per-model `max_tokens` instead.
+- D4 **Agents have no table**, so a share is a grant on `(project_id, agent_id)`; a whole-project share uses `agent_id = "*"`.
+- D5 **No migration tool exists** (document store). "Migrations" = idempotent, lazy backfill on first read (like the knowledge migration already in the repo); a reversible `scripts/` helper will be written for P1.3/P7.3. Absent team/role records read as the safest value (personal project, plain member).
+- D6 [REVIEW] **Existing projects stay personal** (owner only; `team_id = None`) rather than being dumped in a default team.
+- D7 **Typecheck/lint:** none configured for the backend; verification gate is the full pytest suite (+ frontend lint/tests when frontend is touched). Not adding a new tool.
