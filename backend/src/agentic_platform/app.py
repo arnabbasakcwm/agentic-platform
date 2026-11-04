@@ -67,6 +67,8 @@ from .errors import (
     AuthenticationError,
     MasterAdminLockedError,
     MasterAdminRequiredError,
+    NotATeamMemberError,
+    TeamNotFoundError,
     EmailTakenError,
     MissingProviderKeyError,
     DeployedRunError,
@@ -124,6 +126,7 @@ from .stores import (
     McpServer,
     McpTool,
     ProjectRecord,
+    TeamMembership,
     UsageRecord,
     UserRecord,
     make_capability_store,
@@ -1806,7 +1809,7 @@ def require_admin(user: UserRecord = Depends(current_user)) -> UserRecord:
 def require_master(user: UserRecord = Depends(require_admin)) -> UserRecord:
     """The signed-in user, if the master admin. Other admins know the admin area exists,
     so they get a plain 403; non-admins still get the 404."""
-    if user.role != "master":
+    if not can(_actor(user), "role.grant_sub_admin"):
         raise MasterAdminRequiredError()
     return user
 
@@ -1897,6 +1900,51 @@ def admin_user_usage(
     }
     projects = [{"project_id": pid, "name": name} for pid, name in names.items()]
     return {"user": user, "projects": projects, **body}
+
+
+def _team_member_target(team_id: str, user_id: str, user: UserRecord, action: str, resource: Any) -> tuple[Actor, TeamMembership]:
+    """Shared guard for changing someone's role in a team: the caller must hold `action` on
+    the team (anything else, including a team they cannot see, is one 404), the person must
+    exist, and must already be a member."""
+    actor = _actor(user)
+    if _teams.get_team(team_id) is None or not can(actor, action, resource):
+        raise TeamNotFoundError()
+    if _users.get(user_id) is None:
+        raise TeamNotFoundError()
+    membership = _teams.get_membership(team_id, user_id)
+    if membership is None:
+        raise NotATeamMemberError()
+    return actor, membership
+
+
+def _membership_body(m: TeamMembership) -> dict[str, Any]:
+    return {"membership": {"team_id": m.team_id, "user_id": m.user_id, "role": m.role}}
+
+
+@app.put("/teams/{team_id}/admins/{user_id}")
+def grant_group_admin(team_id: str, user_id: str, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """Make a member of the team its group admin (Super Admin, or a group admin of that team).
+    Never reaches beyond the team, and cannot grant org-level roles."""
+    actor, membership = _team_member_target(team_id, user_id, user, "role.grant_group_admin", team_id)
+    if membership.role != "group_admin":
+        membership = membership.model_copy(update={"role": "group_admin", "added_by": actor.user_id})
+        _teams.set_member(membership)
+        logger.info("user %s made %s a group admin of team %s", actor.user_id, user_id, team_id)
+    return _membership_body(membership)
+
+
+@app.delete("/teams/{team_id}/admins/{user_id}")
+def revoke_group_admin(team_id: str, user_id: str, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """Make a group admin an ordinary member again. The Super Admin may do this for anyone;
+    a group admin only for themselves."""
+    actor, membership = _team_member_target(
+        team_id, user_id, user, "role.revoke_group_admin", (team_id, user_id)
+    )
+    if membership.role == "group_admin":
+        membership = membership.model_copy(update={"role": "member", "added_by": actor.user_id})
+        _teams.set_member(membership)
+        logger.info("user %s removed %s as group admin of team %s", actor.user_id, user_id, team_id)
+    return _membership_body(membership)
 
 
 @app.put("/admin/users/{user_id}/role")
@@ -3223,6 +3271,16 @@ def _handle_admin_not_found(_req: Request, exc: AdminNotFoundError):
 @app.exception_handler(MasterAdminRequiredError)
 def _handle_master_required(_req: Request, exc: MasterAdminRequiredError):
     return _error_response(403, "MasterAdminRequired", str(exc))
+
+
+@app.exception_handler(TeamNotFoundError)
+def _handle_team_not_found(_req: Request, exc: TeamNotFoundError):
+    return _error_response(404, "NotFound", str(exc))
+
+
+@app.exception_handler(NotATeamMemberError)
+def _handle_not_team_member(_req: Request, exc: NotATeamMemberError):
+    return _error_response(409, "NotATeamMember", str(exc))
 
 
 @app.exception_handler(MasterAdminLockedError)

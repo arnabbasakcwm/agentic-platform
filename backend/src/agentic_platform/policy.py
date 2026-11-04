@@ -133,6 +133,15 @@ def _manage_team_members(actor: Actor, team: Any) -> bool:
     return team_id is not None and (actor.is_master or actor.admins_team(team_id))
 
 
+def _revoke_group_admin(actor: Actor, resource: Any) -> bool:
+    """resource = (team_id, target_user_id). The Super Admin may remove any group admin; a
+    group admin may only step down themselves, so peers cannot lock each other out."""
+    team_id, target_id = resource
+    if actor.is_master:
+        return True
+    return actor.admins_team(team_id) and target_id == actor.user_id
+
+
 def _see_user(actor: Actor, target: Any) -> bool:
     """Usage/profile of another user: everyone org-wide for the Super and Sub Admin, a group
     admin only for members of a team they administer, anyone for themselves."""
@@ -152,6 +161,7 @@ _ACTIONS: dict[str, Callable[[Actor, Any], bool]] = {
     "team.manage_members": _manage_team_members,
     "role.grant_sub_admin": lambda actor, _r: actor.is_master,
     "role.grant_group_admin": _manage_team_members,  # master, or the team's own group admin
+    "role.revoke_group_admin": _revoke_group_admin,
     "user.view": _see_user,
 }
 

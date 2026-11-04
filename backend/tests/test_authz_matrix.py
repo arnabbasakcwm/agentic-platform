@@ -64,6 +64,9 @@ MATRIX = {
     ("role.grant_sub_admin", None): {"super"},
     ("role.grant_group_admin", "A"): {"super", "ga_a"},
     ("role.grant_group_admin", "B"): {"super"},
+    ("role.revoke_group_admin", ("A", "ga")): {"super", "ga_a"},  # stepping down yourself
+    ("role.revoke_group_admin", ("A", "ma")): {"super"},  # a peer cannot remove another admin
+    ("role.revoke_group_admin", ("B", "ga")): {"super"},  # ga_a is only a member of B
     # user.view is org-level only; a group admin seeing their team's users goes through
     # policy.can_see_user_in_teams (needs memberships) and is covered in test_policy.py.
     ("user.view", "ma"): {"super", "sub", "member_a"},

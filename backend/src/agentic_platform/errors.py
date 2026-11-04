@@ -270,6 +270,21 @@ class MasterAdminLockedError(PlatformError):
         )
 
 
+class TeamNotFoundError(PlatformError):
+    """A team (or a person in it) that doesn't exist or is out of the caller's scope: one
+    404, so teams can't be probed."""
+
+    def __init__(self) -> None:
+        super().__init__("not found")
+
+
+class NotATeamMemberError(PlatformError):
+    """Roles within a team go to its members; add the person to the team first."""
+
+    def __init__(self) -> None:
+        super().__init__("that person is not a member of this team; add them to the team first")
+
+
 class RunNotFoundError(PlatformError):
     def __init__(self, run_id: str):
         super().__init__(f"run not found: {run_id}")
