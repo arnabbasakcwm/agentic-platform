@@ -110,7 +110,7 @@ from .graph_builder import (
     run_agent_events,
 )
 from .meta_planner_prompt import discuss_brief, plan_project, revise_plan
-from .policy import Actor, actor_for, list_visible_projects
+from .policy import Actor, actor_for, can, list_visible_projects
 from .rbac_backfill import backfill as backfill_teams
 from .stores import (
     ADMIN_ROLES,
@@ -423,11 +423,14 @@ def _actor(user: UserRecord) -> Actor:
     return actor_for(user, _teams)
 
 
-def _get_project(project_id: str, user: UserRecord) -> ProjectRecord:
+def _get_project(project_id: str, user: UserRecord, action: str = "project.manage") -> ProjectRecord:
+    """Load a project the caller may act on. `action` is a policy action: the default,
+    `project.manage`, is for anything that changes or runs the project (its owner, the
+    Super Admin, or a Group Admin of the team that shares it); `project.view` is for
+    read-only access. A project outside the caller's scope is reported exactly like a
+    missing one (404), so ids can't be probed for existence."""
     project = _store.get(project_id)
-    # Someone else's project is reported exactly like a missing one, so ids can't be
-    # probed for existence.
-    if project is None or project.tenant_id != user.id:
+    if project is None or not can(_actor(user), action, project):
         raise ProjectNotFoundError(project_id)
     return project
 
@@ -894,8 +897,8 @@ def _in_background(target: Callable[[], Any], name: str) -> None:
 
 
 def _get_run(project_id: str, run_id: str, user: UserRecord) -> RunRecord:
-    _get_project(project_id, user)
-    run = _runs.get(user.id, project_id, run_id)
+    project = _get_project(project_id, user)
+    run = _runs.get(project.tenant_id, project_id, run_id)
     if run is None:
         raise RunNotFoundError(run_id)
     return run.effective()
@@ -946,8 +949,8 @@ def list_runs(
     project_id: str, kind: Literal["local", "deployed"] = "local", user: UserRecord = Depends(current_user)
 ) -> dict[str, Any]:
     """The project's last saved runs of one kind (local or deployed), newest first."""
-    _get_project(project_id, user)
-    return {"runs": [r.summary() for r in _runs.list(user.id, project_id, kind)]}
+    project = _get_project(project_id, user)
+    return {"runs": [r.summary() for r in _runs.list(project.tenant_id, project_id, kind)]}
 
 
 @app.get("/projects/{project_id}/runs/{run_id}")
@@ -1055,7 +1058,7 @@ def stop_run(project_id: str, run_id: str, user: UserRecord = Depends(current_us
         return {"run": _run_body(run)}
     if run.kind == "deployed":
         raise RunNotStoppableError(run_id)
-    _runs.update(user.id, run_id, stop_requested=True)
+    _runs.update(_get_project(project_id, user).tenant_id, run_id, stop_requested=True)
     flag = _STOP_FLAGS.get(run_id)
     if flag is not None:  # running in this process: stop at once rather than at the next poll
         flag.set()
@@ -1070,12 +1073,13 @@ def stream_saved_run(
     followed live until the run ends. Reconnect with the number of events received to
     resume. Same events as /run/stream."""
     _get_run(project_id, run_id, user)  # 404 before streaming
+    owner_id = _store.get(project_id).tenant_id
 
     def stream():
         index = max(after, 0)
         idle = 0.0
         while True:
-            run = _runs.get(user.id, project_id, run_id)
+            run = _runs.get(owner_id, project_id, run_id)
             if run is None:
                 return
             run = run.effective()
@@ -2208,7 +2212,13 @@ def list_projects(scope: str | None = None, user: UserRecord = Depends(current_u
 
 @app.get("/projects/{project_id}")
 def get_project(project_id: str, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
-    return _project_body(_get_project(project_id, user))
+    project = _get_project(project_id, user, "project.view")
+    body = _project_body(project)
+    manage = can(_actor(user), "project.manage", project)
+    body["can_manage"] = manage
+    if not manage:  # a view-only member sees the brief and plan, not the owner's chat or resources
+        body.update(conversation=[], knowledge=None, data_sources=None, mcp=None, deployment=None)
+    return body
 
 
 class RenameProjectRequest(BaseModel):
@@ -2252,7 +2262,7 @@ def delete_project(project_id: str, user: UserRecord = Depends(current_user)) ->
     detached = _knowledge.detach_project(user.id, project_id)
     _datasources.detach_project(user.id, project_id)
     _mcp.detach_project(user.id, project_id)
-    _runs.delete_for_project(user.id, project_id)
+    _runs.delete_for_project(project.tenant_id, project_id)
     return {"deleted": project_id, "knowledge_documents_detached": detached}
 
 

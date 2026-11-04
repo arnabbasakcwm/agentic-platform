@@ -1,6 +1,6 @@
 # RBAC Delegation — Progress
 STATUS: IN_PROGRESS
-Iteration: 7
+Iteration: 8
 Branch: feat/rbac-delegation
 Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint configured).
 
@@ -17,7 +17,7 @@ Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint con
 
 ## Phase 2 — Scoping & Roles
 - [x] P2.1 `GET /projects` scoped via `policy.list_visible_projects` (own + team-shared; master `?scope=all` only; others ignored); `ProjectStore.list_for_teams` (memory+Mongo); summaries gain mine/team_id/team_access. Users/usage list scoping for Group Admins lands with P2.4 (team endpoints); `/usage` stays self-only, `/admin/*` stays admin-only; knowledge/data/MCP libraries are per-user (unchanged)
-- [ ] P2.2 Apply scope to by-id endpoints (404 out of scope)
+- [x] P2.2 `_get_project(id, user, action)` now goes through `policy.can` (default `project.manage`, so every mutating/running route is owner/master/team-admin only; `GET /projects/{id}` uses `project.view` and strips chat/resources for view-only members); out-of-scope = 404; run lookups keyed by project owner's tenant; 15 API tests
 - [ ] P2.3 Role APIs (grant/revoke sub_admin, group_admin) with no-escalation checks
 - [ ] P2.4 Team CRUD + membership APIs
 - [ ] P2.5 Audit log store + writer; wire into P2.3/P2.4
@@ -62,3 +62,4 @@ Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint con
 - Iter 5: P1.4 done. Next: P1.5 matrix scaffold.
 - Iter 6: Phase 1 complete. Next: P2.1 scope list endpoints.
 - Iter 7: P2.1 done (744 tests). Next: P2.2 by-id scope.
+- Iter 8: P2.2 done. Next: P2.3 role APIs.

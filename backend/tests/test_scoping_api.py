@@ -17,6 +17,7 @@ from agentic_platform.stores import (
     MongoProjectStore,
     MongoTeamStore,
     ProjectRecord,
+    RunRecord,
     TeamMembership,
     TeamRecord,
 )
@@ -149,3 +150,101 @@ def test_list_for_teams_returns_only_team_visible_projects(backend):  # noqa: F8
     assert {p.id for p in store.list_for_teams(["A", "B"])} == {a_shared, b_shared}
     assert store.list_for_teams([]) == []
     assert a_private not in {p.id for p in store.list_for_teams(["A", "B"])} and personal not in {p.id for p in store.list_for_teams(["A"])}
+
+
+# ------------------------------------------------------------------- by-id access (P2.2)
+def _setup_team_project(api):
+    """ada owns a project shared with team A; ga administers A; mem is a plain member of A;
+    out is in no team. Returns headers and ids."""
+    ada_h, ada = api.login("ada@example.com")
+    ga_h, ga = api.login("ga@example.com")
+    mem_h, mem = api.login("mem@example.com")
+    out_h, out = api.login("out@example.com")
+    _join(ada, "A")
+    _join(ga, "A", "group_admin")
+    _join(mem, "A")
+    pid = api.make(ada_h, "the team's project")
+    app_module._store.set_team(pid, "A", True)
+    return dict(ada=ada_h, ga=ga_h, mem=mem_h, out=out_h, ada_id=ada), pid
+
+
+def test_outsiders_get_404_never_403_on_every_kind_of_by_id_route(api):
+    h, pid = _setup_team_project(api)
+    for call in (
+        lambda: api.get(f"/projects/{pid}", headers=h["out"]),
+        lambda: api.get(f"/projects/{pid}/runs", headers=h["out"]),
+        lambda: api.get(f"/projects/{pid}/runs/nope", headers=h["out"]),
+        lambda: api.get(f"/projects/{pid}/deployment", headers=h["out"]),
+        lambda: api.patch(f"/projects/{pid}", json={"name": "x"}, headers=h["out"]),
+        lambda: api.delete(f"/projects/{pid}", headers=h["out"]),
+        lambda: api.post(f"/projects/{pid}/compile", headers=h["out"]),
+    ):
+        r = call()
+        assert r.status_code == 404, r.text
+    assert api.get(f"/projects/{pid}").status_code == 401  # no token at all
+    # and a real project looks exactly like a missing one
+    real = api.get(f"/projects/{pid}", headers=h["out"])
+    missing = api.get("/projects/does-not-exist", headers=h["out"])
+    assert real.status_code == missing.status_code == 404
+    assert real.json().keys() == missing.json().keys() and real.json()["error_type"] == missing.json()["error_type"]
+
+
+def test_a_plain_team_member_can_view_the_config_but_not_act(api):
+    h, pid = _setup_team_project(api)
+    body = api.get(f"/projects/{pid}", headers=h["mem"]).json()
+    assert body["brief"] == "the team's project" and body["can_manage"] is False
+    assert body["conversation"] == [] and body["knowledge"] is None and body["deployment"] is None
+    assert api.patch(f"/projects/{pid}", json={"name": "x"}, headers=h["mem"]).status_code == 404
+    assert api.post(f"/projects/{pid}/compile", headers=h["mem"]).status_code == 404
+    assert api.delete(f"/projects/{pid}", headers=h["mem"]).status_code == 404
+    assert api.get(f"/projects/{pid}/runs", headers=h["mem"]).status_code == 404
+    assert api.get(f"/projects/{pid}", headers=h["ada"]).json()["can_manage"] is True
+
+
+def test_an_owner_only_project_is_invisible_to_its_teammates(api):
+    h, pid = _setup_team_project(api)
+    app_module._store.set_team(pid, "A", False)
+    for who in ("mem", "ga", "out"):
+        assert api.get(f"/projects/{pid}", headers=h[who]).status_code == 404, who
+    assert api.get(f"/projects/{pid}", headers=h["ada"]).status_code == 200
+
+
+def test_group_admin_manages_their_teams_project_including_its_runs(api):
+    h, pid = _setup_team_project(api)
+    app_module._runs.create(RunRecord(id="run1", tenant_id=h["ada_id"], project_id=pid, status="completed"))
+    assert api.get(f"/projects/{pid}", headers=h["ga"]).json()["can_manage"] is True
+    assert [r["id"] for r in api.get(f"/projects/{pid}/runs", headers=h["ga"]).json()["runs"]] == ["run1"]
+    assert api.get(f"/projects/{pid}/runs/run1", headers=h["ga"]).json()["run"]["id"] == "run1"
+    assert api.patch(f"/projects/{pid}", json={"name": "renamed"}, headers=h["ga"]).status_code == 200
+    assert api.get(f"/projects/{pid}/runs", headers=h["out"]).status_code == 404
+
+
+def test_group_admin_of_a_has_no_management_power_in_team_b(api):
+    h, _ = _setup_team_project(api)
+    bob_h, bob = api.login("bob@example.com")
+    _join(bob, "B")
+    _join(app_module._users.get_by_email("ga@example.com").id, "B", "member")  # ga: plain member of B
+    in_b = api.make(bob_h, "team B's project")
+    app_module._store.set_team(in_b, "B", True)
+    assert api.get(f"/projects/{in_b}", headers=h["ga"]).json()["can_manage"] is False
+    assert api.patch(f"/projects/{in_b}", json={"name": "x"}, headers=h["ga"]).status_code == 404
+    assert api.get(f"/projects/{in_b}/runs", headers=h["ga"]).status_code == 404
+
+
+def test_super_admin_reaches_any_project_a_sub_admin_does_not(api):
+    h, pid = _setup_team_project(api)
+    root_h, root = api.login("root@example.com")
+    sub_h, sub = api.login("sub@example.com")
+    app_module._users.set_role(root, "master", by="t")
+    app_module._users.set_role(sub, "admin", by="t")
+    assert api.get(f"/projects/{pid}", headers=root_h).json()["can_manage"] is True
+    assert api.get(f"/projects/{pid}", headers=sub_h).status_code == 404
+    assert api.patch(f"/projects/{pid}", json={"name": "x"}, headers=sub_h).status_code == 404
+
+
+def test_removing_someone_from_the_team_takes_effect_on_their_next_request(api):
+    h, pid = _setup_team_project(api)
+    assert api.get(f"/projects/{pid}", headers=h["mem"]).status_code == 200
+    mem_id = app_module._users.get_by_email("mem@example.com").id
+    app_module._teams.remove_member("A", mem_id)
+    assert api.get(f"/projects/{pid}", headers=h["mem"]).status_code == 404

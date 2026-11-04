@@ -66,3 +66,7 @@ Plan: wrap the runnable returned by `get_llm()` in a thin gateway object (same i
 - Bug caught by test: a cutoff-only backfill re-added a member an admin had removed on every restart. Fix: `TeamRecord.backfill_done` is set last; later runs no-op, interrupted runs resume.
 - Backfill runs at app import (best effort, logged). `ProjectStore.list_all()` is platform-internal: never return it to a caller without scope.
 - Rollback restores `team_id=None` for all projects in Default (drops any team_access an owner set since).
+
+## By-id scope (P2.2)
+- `_get_project` is the single by-id chokepoint (35 call sites). Mutating routes keep the default `project.manage`. Only `GET /projects/{id}` uses `project.view`.
+- Known limits to resolve later: (1) routes that act on the *caller's* libraries (knowledge, data sources, MCP attach) still key on `user.id`, so a Group Admin/master managing someone else's project gets 404 there (fail closed). (2) Usage for a run started by a non-owner is still recorded by the existing code paths; Phase 5 must charge the runner. (3) Runs by a non-owner (after sharing, Phase 3) need run lookups by project, not owner tenant. (4) P7.2 must sweep all 72 routes.
