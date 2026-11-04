@@ -17,7 +17,7 @@ Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint con
 
 ## Phase 2 — Scoping & Roles
 - [x] P2.1 `GET /projects` scoped via `policy.list_visible_projects` (own + team-shared; master `?scope=all` only; others ignored); `ProjectStore.list_for_teams` (memory+Mongo); summaries gain mine/team_id/team_access. Users/usage list scoping for Group Admins lands with P2.4 (team endpoints); `/usage` stays self-only, `/admin/*` stays admin-only; knowledge/data/MCP libraries are per-user (unchanged)
-- [x] P2.2 `_get_project(id, user, action)` now goes through `policy.can` (default `project.manage`, so every mutating/running route is owner/master/team-admin only; `GET /projects/{id}` uses `project.view` and strips chat/resources for view-only members); out-of-scope = 404; run lookups keyed by project owner's tenant; 15 API tests
+- [x] P2.2 `_get_project(id, user, action)` now goes through `policy.can` (default `project.manage`, so every mutating/running route is owner/master/team-admin only; `GET /projects/{id}` uses `project.view` and strips chat/resources for view-only members); out-of-scope = 404; run lookups keyed by project owner's tenant; 15 API tests; 751 passed
 - [ ] P2.3 Role APIs (grant/revoke sub_admin, group_admin) with no-escalation checks
 - [ ] P2.4 Team CRUD + membership APIs
 - [ ] P2.5 Audit log store + writer; wire into P2.3/P2.4

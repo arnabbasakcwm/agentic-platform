@@ -375,8 +375,11 @@ def _deployment_body(project: ProjectRecord) -> dict[str, Any] | None:
     }
 
 
-def _project_body(project: ProjectRecord) -> dict[str, Any]:
+def _project_body(project: ProjectRecord, can_manage: bool = True) -> dict[str, Any]:
+    # Every route that returns this body already required manage access; only the
+    # view-only GET passes False.
     return {
+        "can_manage": can_manage,
         "project_id": project.id,
         "name": project.display_name,
         "named": project.name is not None,
@@ -2213,9 +2216,8 @@ def list_projects(scope: str | None = None, user: UserRecord = Depends(current_u
 @app.get("/projects/{project_id}")
 def get_project(project_id: str, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
     project = _get_project(project_id, user, "project.view")
-    body = _project_body(project)
     manage = can(_actor(user), "project.manage", project)
-    body["can_manage"] = manage
+    body = _project_body(project, manage)
     if not manage:  # a view-only member sees the brief and plan, not the owner's chat or resources
         body.update(conversation=[], knowledge=None, data_sources=None, mcp=None, deployment=None)
     return body
