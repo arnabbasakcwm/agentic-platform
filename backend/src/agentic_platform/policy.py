@@ -22,7 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from .stores import ProjectRecord, TeamMembership, TeamStore, UserRecord
+from .stores import ProjectRecord, ProjectStore, TeamMembership, TeamStore, UserRecord
 
 MASTER = "master"
 ADMIN = "admin"
@@ -91,6 +91,22 @@ def visible_projects(projects: list[ProjectRecord], actor: Actor) -> list[Projec
     """Filter a project list to what the actor may see."""
     scope = scope_for(actor)
     return [p for p in projects if scope.includes_project(p)]
+
+
+def list_visible_projects(store: ProjectStore, actor: Actor, *, everything: bool = False) -> list[ProjectRecord]:
+    """The projects an actor may list, newest first: their own, plus those their teams
+    share. `everything=True` (honoured for the Super Admin only) adds every project.
+    Two indexed queries, never one per row; the scope filter runs again on the result as a
+    second line of defence."""
+    if everything and actor.is_master:
+        found = store.list_all()
+    else:
+        found = store.list_for_tenant(actor.user_id) + store.list_for_teams(list(actor.team_roles))
+    unique = {p.id: p for p in found}
+    scope = scope_for(actor)
+    visible = [p for p in unique.values() if scope.includes_project(p)]
+    visible.sort(key=lambda p: p.updated_at, reverse=True)
+    return visible
 
 
 # ------------------------------------------------------------------------------ can()

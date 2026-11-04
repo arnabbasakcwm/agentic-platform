@@ -110,6 +110,7 @@ from .graph_builder import (
     run_agent_events,
 )
 from .meta_planner_prompt import discuss_brief, plan_project, revise_plan
+from .policy import Actor, actor_for, list_visible_projects
 from .rbac_backfill import backfill as backfill_teams
 from .stores import (
     ADMIN_ROLES,
@@ -415,6 +416,11 @@ def _mcp_summary(project: ProjectRecord) -> dict[str, Any]:
 def _data_summary(project: ProjectRecord) -> dict[str, Any]:
     sources = _datasources.list(project.tenant_id, project.id)
     return {"sources": len(sources), "tables": sum(len(s.tables) for s in sources)}
+
+
+def _actor(user: UserRecord) -> Actor:
+    """Who is asking, with their team roles (read per request, so changes apply at once)."""
+    return actor_for(user, _teams)
 
 
 def _get_project(project_id: str, user: UserRecord) -> ProjectRecord:
@@ -2173,9 +2179,12 @@ def create_project(
 
 
 @app.get("/projects")
-def list_projects(user: UserRecord = Depends(current_user)) -> dict[str, Any]:
-    """The signed-in user's projects, most recently updated first — summaries only; fetch
-    one by id for its full plan."""
+def list_projects(scope: str | None = None, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """The projects the signed-in user may see, most recently updated first: their own plus
+    those their teams share with them (`team_access`) - summaries only; fetch one by id
+    for its full plan. The Super Admin can pass `scope=all` to list every project; for
+    anyone else the parameter changes nothing."""
+    actor = _actor(user)
     return {
         "projects": [
             {
@@ -2188,8 +2197,11 @@ def list_projects(user: UserRecord = Depends(current_user)) -> dict[str, Any]:
                 "compiled": p.is_compiled,
                 "created_at": p.created_at,
                 "updated_at": p.updated_at,
+                "mine": p.tenant_id == user.id,
+                "team_id": p.team_id,
+                "team_access": p.team_access,
             }
-            for p in _store.list_for_tenant(user.id)
+            for p in list_visible_projects(_store, actor, everything=scope == "all")
         ]
     }
 

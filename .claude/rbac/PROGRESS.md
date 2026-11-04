@@ -1,6 +1,6 @@
 # RBAC Delegation — Progress
 STATUS: IN_PROGRESS
-Iteration: 6
+Iteration: 7
 Branch: feat/rbac-delegation
 Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint configured).
 
@@ -16,7 +16,7 @@ Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint con
 - [x] P1.5 `tests/test_authz_matrix.py`: 6 actors x 20 (action, resource) rows = 123 tests; guard fails if a policy action has no row. Later tasks extend MATRIX and add API-level 404 checks
 
 ## Phase 2 — Scoping & Roles
-- [ ] P2.1 Apply scope to list endpoints (projects, users, usage, runs/conversations)
+- [x] P2.1 `GET /projects` scoped via `policy.list_visible_projects` (own + team-shared; master `?scope=all` only; others ignored); `ProjectStore.list_for_teams` (memory+Mongo); summaries gain mine/team_id/team_access. Users/usage list scoping for Group Admins lands with P2.4 (team endpoints); `/usage` stays self-only, `/admin/*` stays admin-only; knowledge/data/MCP libraries are per-user (unchanged)
 - [ ] P2.2 Apply scope to by-id endpoints (404 out of scope)
 - [ ] P2.3 Role APIs (grant/revoke sub_admin, group_admin) with no-escalation checks
 - [ ] P2.4 Team CRUD + membership APIs
@@ -61,3 +61,4 @@ Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint con
 - Iter 4: P1.3 done. Next: P1.4 policy.
 - Iter 5: P1.4 done. Next: P1.5 matrix scaffold.
 - Iter 6: Phase 1 complete. Next: P2.1 scope list endpoints.
+- Iter 7: P2.1 done (744 tests). Next: P2.2 by-id scope.

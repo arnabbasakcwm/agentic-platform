@@ -244,6 +244,11 @@ class ProjectStore(Protocol):
         built on top of it; never returned to a caller without a scope check."""
         ...
 
+    def list_for_teams(self, team_ids: list[str]) -> list[ProjectRecord]:
+        """Projects of these teams that the team may see (`team_access`), any owner. Owner-only
+        projects of a team are never returned."""
+        ...
+
     def set_team(self, project_id: str, team_id: str | None, team_access: bool) -> ProjectRecord | None:
         """Place the project in a team (or None for personal) and set whether the team's
         members may see it. Leaves updated_at alone. None if the project is gone."""
@@ -370,6 +375,12 @@ class InMemoryProjectStore:
 
     def list_all(self) -> list[ProjectRecord]:
         return [r.model_copy(deep=True) for r in self._records.values()]
+
+    def list_for_teams(self, team_ids: list[str]) -> list[ProjectRecord]:
+        wanted = set(team_ids)
+        found = [r for r in self._records.values() if r.team_access and r.team_id in wanted]
+        found.sort(key=lambda r: r.updated_at, reverse=True)
+        return [r.model_copy(deep=True) for r in found]
 
     def set_team(self, project_id: str, team_id: str | None, team_access: bool) -> ProjectRecord | None:
         record = self._records.get(project_id)
@@ -567,6 +578,15 @@ class MongoProjectStore:
     def list_all(self) -> list[ProjectRecord]:
         with _mongo_errors():
             docs = list(self._projects.find({}))
+        return [self._from_doc(doc) for doc in docs]
+
+    def list_for_teams(self, team_ids: list[str]) -> list[ProjectRecord]:
+        if not team_ids:
+            return []
+        with _mongo_errors():
+            docs = list(
+                self._projects.find({"team_id": {"$in": list(team_ids)}, "team_access": True}).sort("updated_at", -1)
+            )
         return [self._from_doc(doc) for doc in docs]
 
     def set_team(self, project_id: str, team_id: str | None, team_access: bool) -> ProjectRecord | None:

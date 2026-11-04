@@ -193,6 +193,10 @@ def test_list_projects_is_newest_first_and_summarised(monkeypatch):
         "compiled": True,
         "created_at": projects[0]["created_at"],
         "updated_at": projects[0]["updated_at"],
+            # delegated administration (additive): whose it is and which team shares it
+            "mine": True,
+            "team_id": None,
+            "team_access": False,
     }
     assert projects[1]["compiled"] is False
     assert "plan" not in projects[0]
