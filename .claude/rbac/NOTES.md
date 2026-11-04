@@ -56,3 +56,8 @@ Plan: wrap the runnable returned by `get_llm()` in a thin gateway object (same i
 - `CallContext` has provider, model and the call's run config (callbacks/configurable) — the RBAC identity (user/team/agent/project) must be put into `config["configurable"]` by the runner for later tasks. Today `graph_builder` passes `call_config` with callbacks only: P4.3 must add the identity there.
 - Embeddings (`get_embeddings`) are NOT gated yet; they cost money too (knowledge indexing/search). Add a follow-up task in P5.3.
 - Test lesson: `type(get_llm(...))` is now `GatewayRunnable`; the real client is `._inner` (one assertion in test_bedrock updated).
+
+## Teams store (P1.2)
+- `TeamStore` in stores.py; membership `_id` = `team:user` gives one role per team without a transaction. A membership for a missing team is silently not stored (callers must check the team first). Mongo is reachable locally in this environment, so contract tests exercise it (throwaway DB, dropped).
+- Tooling lesson: long Python/heredoc patches fail in Bash here; write scripts with the Write tool into the scratchpad.
+- Test lesson: build records after a sleep when ordering by `created_at` (ms precision).

@@ -1625,6 +1625,194 @@ class MongoModelCapabilityStore:
         return out
 
 
+# ------------------------------------------------------------------------------ teams
+# Delegated administration: a team has members and group admins. A user can be in several
+# teams with a different role in each, so the role belongs to the membership, never to the
+# user (UserRecord.role keeps only the org-level master/admin/user).
+TEAM_ROLES = ("member", "group_admin")
+TEAM_NAME_MAX = 100
+
+
+class TeamRecord(BaseModel):
+    id: str
+    name: str = Field(min_length=1, max_length=TEAM_NAME_MAX)
+    org_id: str = "org"  # the single organisation today; kept so a second one is not a rewrite
+    created_by: str | None = None
+    created_at: datetime = Field(default_factory=_now)
+
+
+class TeamMembership(BaseModel):
+    team_id: str
+    user_id: str
+    role: Literal["member", "group_admin"] = "member"
+    added_by: str | None = None
+    added_at: datetime = Field(default_factory=_now)
+
+
+class TeamStore(Protocol):
+    def create_team(self, team: TeamRecord) -> None: ...
+
+    def get_team(self, team_id: str) -> TeamRecord | None: ...
+
+    def list_teams(self) -> list[TeamRecord]: ...
+
+    def rename_team(self, team_id: str, name: str) -> TeamRecord | None: ...
+
+    def delete_team(self, team_id: str) -> bool:
+        """Remove the team and all its memberships."""
+
+    def set_member(self, membership: TeamMembership) -> None:
+        """Add the user to the team, or change their role there (one row per team and user)."""
+
+    def remove_member(self, team_id: str, user_id: str) -> bool: ...
+
+    def get_membership(self, team_id: str, user_id: str) -> TeamMembership | None: ...
+
+    def list_members(self, team_id: str) -> list[TeamMembership]: ...
+
+    def memberships_of(self, user_id: str) -> list[TeamMembership]:
+        """Every team the user belongs to, with their role in each."""
+
+
+class InMemoryTeamStore:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._teams: dict[str, TeamRecord] = {}
+        self._members: dict[tuple[str, str], TeamMembership] = {}
+
+    def create_team(self, team: TeamRecord) -> None:
+        with self._lock:
+            self._teams[team.id] = team.model_copy()
+
+    def get_team(self, team_id: str) -> TeamRecord | None:
+        t = self._teams.get(team_id)
+        return t.model_copy() if t else None
+
+    def list_teams(self) -> list[TeamRecord]:
+        return sorted((t.model_copy() for t in self._teams.values()), key=lambda t: (t.created_at, t.id))
+
+    def rename_team(self, team_id: str, name: str) -> TeamRecord | None:
+        name = TeamRecord(id=team_id, name=name).name  # same validation as the model
+        with self._lock:
+            t = self._teams.get(team_id)
+            if t is None:
+                return None
+            self._teams[team_id] = t = t.model_copy(update={"name": name})
+            return t.model_copy()
+
+    def delete_team(self, team_id: str) -> bool:
+        with self._lock:
+            existed = self._teams.pop(team_id, None) is not None
+            for key in [k for k in self._members if k[0] == team_id]:
+                del self._members[key]
+            return existed
+
+    def set_member(self, membership: TeamMembership) -> None:
+        with self._lock:
+            if membership.team_id not in self._teams:
+                return  # a membership never outlives (or precedes) its team
+            self._members[(membership.team_id, membership.user_id)] = membership.model_copy()
+
+    def remove_member(self, team_id: str, user_id: str) -> bool:
+        with self._lock:
+            return self._members.pop((team_id, user_id), None) is not None
+
+    def get_membership(self, team_id: str, user_id: str) -> TeamMembership | None:
+        m = self._members.get((team_id, user_id))
+        return m.model_copy() if m else None
+
+    def list_members(self, team_id: str) -> list[TeamMembership]:
+        found = (m.model_copy() for k, m in self._members.items() if k[0] == team_id)
+        return sorted(found, key=lambda m: (m.added_at, m.user_id))
+
+    def memberships_of(self, user_id: str) -> list[TeamMembership]:
+        found = (m.model_copy() for k, m in self._members.items() if k[1] == user_id)
+        return sorted(found, key=lambda m: (m.added_at, m.team_id))
+
+
+class MongoTeamStore:
+    """`teams` (one document per team) and `team_memberships` (`_id` = "team:user", so a
+    user has at most one role per team without a transaction)."""
+
+    def __init__(self, db: "Database"):
+        self._teams = db["teams"]
+        self._members = db["team_memberships"]
+        with _mongo_errors():
+            self._members.create_index("user_id")
+            self._members.create_index("team_id")
+
+    @staticmethod
+    def _team(doc: dict[str, Any]) -> TeamRecord:
+        doc = dict(doc)
+        doc["id"] = doc.pop("_id")
+        return TeamRecord.model_validate(doc)
+
+    @staticmethod
+    def _member(doc: dict[str, Any]) -> TeamMembership:
+        return TeamMembership.model_validate({k: v for k, v in doc.items() if k != "_id"})
+
+    def create_team(self, team: TeamRecord) -> None:
+        body = team.model_dump()
+        body["_id"] = body.pop("id")
+        with _mongo_errors():
+            self._teams.replace_one({"_id": body["_id"]}, body, upsert=True)
+
+    def get_team(self, team_id: str) -> TeamRecord | None:
+        with _mongo_errors():
+            doc = self._teams.find_one({"_id": team_id})
+        return self._team(doc) if doc else None
+
+    def list_teams(self) -> list[TeamRecord]:
+        with _mongo_errors():
+            docs = list(self._teams.find({}))
+        return sorted((self._team(d) for d in docs), key=lambda t: (t.created_at, t.id))
+
+    def rename_team(self, team_id: str, name: str) -> TeamRecord | None:
+        name = TeamRecord(id=team_id, name=name).name  # same validation as the model
+        with _mongo_errors():
+            doc = self._teams.find_one_and_update({"_id": team_id}, {"$set": {"name": name}}, return_document=True)
+        return self._team(doc) if doc else None
+
+    def delete_team(self, team_id: str) -> bool:
+        with _mongo_errors():
+            result = self._teams.delete_one({"_id": team_id})
+            self._members.delete_many({"team_id": team_id})
+        return result.deleted_count > 0
+
+    def set_member(self, membership: TeamMembership) -> None:
+        if self.get_team(membership.team_id) is None:
+            return
+        with _mongo_errors():
+            self._members.replace_one(
+                {"_id": f"{membership.team_id}:{membership.user_id}"}, membership.model_dump(), upsert=True
+            )
+
+    def remove_member(self, team_id: str, user_id: str) -> bool:
+        with _mongo_errors():
+            return self._members.delete_one({"_id": f"{team_id}:{user_id}"}).deleted_count > 0
+
+    def get_membership(self, team_id: str, user_id: str) -> TeamMembership | None:
+        with _mongo_errors():
+            doc = self._members.find_one({"_id": f"{team_id}:{user_id}"})
+        return self._member(doc) if doc else None
+
+    def list_members(self, team_id: str) -> list[TeamMembership]:
+        with _mongo_errors():
+            docs = list(self._members.find({"team_id": team_id}))
+        return sorted((self._member(d) for d in docs), key=lambda m: (m.added_at, m.user_id))
+
+    def memberships_of(self, user_id: str) -> list[TeamMembership]:
+        with _mongo_errors():
+            docs = list(self._members.find({"user_id": user_id}))
+        return sorted((self._member(d) for d in docs), key=lambda m: (m.added_at, m.team_id))
+
+
+def make_team_store() -> TeamStore:
+    if MONGODB_URI:
+        return MongoTeamStore(mongo_database(MONGODB_URI, MONGODB_DB))
+    return InMemoryTeamStore()
+
+
 def make_capability_store() -> ModelCapabilityStore:
     if MONGODB_URI:
         return MongoModelCapabilityStore(mongo_database(MONGODB_URI, MONGODB_DB))

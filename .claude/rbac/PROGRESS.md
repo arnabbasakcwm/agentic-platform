@@ -1,6 +1,6 @@
 # RBAC Delegation — Progress
 STATUS: IN_PROGRESS
-Iteration: 2
+Iteration: 3
 Branch: feat/rbac-delegation
 Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint configured).
 
@@ -10,7 +10,7 @@ Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint con
 ## Phase 1 — Foundations
 - [x] P1.1a Gateway wrapper around `get_llm()` — `model_gateway.py` (GatewayRunnable, before/after hooks, no-op); 570 passed
 - [x] P1.1b Planner, probe, supervisor, agent loops all already use get_llm → gated; test forbids constructing chat models elsewhere; stream/batch/ainvoke refused (fail closed)
-- [ ] P1.2 Stores + models: `TeamRecord`, `TeamMembership(role member|group_admin)`; in-memory + Mongo; contract tests
+- [x] P1.2 `TeamRecord`, `TeamMembership`, `TeamStore` (in-memory + Mongo, one role per team+user via `_id`), `make_team_store`; 17 contract tests incl. live Mongo; 588 passed
 - [ ] P1.3 Backfill/mapping (D1/D2/D6): lazy, idempotent, reversible helper; tests incl. Default-team member CANNOT see another user's pre-existing project (owner-only, team_access=false)
 - [ ] P1.4 Central policy module `policy.py`: `can(actor, action, resource)` + `scope_for(actor)`
 - [ ] P1.5 Authorization test matrix scaffold (roles × actions × in/out-of-scope)
@@ -57,3 +57,4 @@ Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint con
 ## Log
 - Iter 1: Phase 0 done; plan written. Next: P1.1a.
 - Iter 2: decisions finalized (chore commit). P1.1a+b done: gateway in place. Next: P1.2.
+- Iter 3: P1.2 done. Next: P1.3 backfill.
