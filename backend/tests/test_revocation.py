@@ -64,7 +64,7 @@ def env(monkeypatch):
     app_module._store.create(project)
     app_module._grants.upsert(AgentGrant(id=AgentGrant.make_id("p1", "*", "user", "runner"), project_id="p1",
                                          grantee_type="user", grantee_id="runner", level="use", granted_by="owner"))
-    monkeypatch.setattr(gb.time, "sleep", lambda s: None)
+    monkeypatch.setattr(gb, "_NODE_BACKOFF_S", 0)
 
     def install(a, b):
         by = {"m-a": a, "m-b": b}

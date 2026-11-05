@@ -1,8 +1,20 @@
 """Suite-wide fixtures. The suite is offline: nothing here may reach a real cloud service."""
 
+import os
+
+# Before anything imports the app: .env points at the developer's REAL MongoDB, and the app builds
+# its stores from it when imported (and runs the teams backfill on them). The suite must never touch
+# it, so it gets no URI (in-memory stores) and a throwaway database name should one ever be used.
+# The Mongo contract tests choose their own throwaway database and server explicitly.
+os.environ["MONGODB_URI"] = ""
+os.environ["MONGODB_DB"] = "agentic_platform_pytest_never_real"
+
 import pytest
 
 import agentic_platform.bedrock_catalog as bedrock_catalog
+from agentic_platform import config as _config
+
+assert _config.MONGODB_URI is None, "the offline suite must not be configured with a real database"
 
 
 @pytest.fixture(autouse=True)
@@ -40,6 +52,20 @@ def _runs_in_memory(monkeypatch):
     from agentic_platform.stores import InMemoryRunStore
 
     monkeypatch.setattr(app_module, "_runs", InMemoryRunStore())
+
+
+@pytest.fixture(autouse=True)
+def _fresh_rbac_stores(monkeypatch):
+    """Teams, grants, model limits, budgets, the ledger and the audit log are module-level stores
+    in the app: every test starts with empty in-memory ones, so nothing leaks between tests (or
+    anywhere else)."""
+    import agentic_platform.app as app_module
+    import agentic_platform.stores as st
+
+    for name, cls in [("_teams", st.InMemoryTeamStore), ("_audit", st.InMemoryAuditStore),
+                      ("_grants", st.InMemoryAgentGrantStore), ("_models", st.InMemoryModelPolicyStore),
+                      ("_budgets", st.InMemoryBudgetStore), ("_ledger", st.InMemoryLedgerStore)]:
+        monkeypatch.setattr(app_module, name, cls())
 
 
 @pytest.fixture(autouse=True)

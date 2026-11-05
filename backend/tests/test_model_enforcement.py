@@ -66,7 +66,7 @@ def env(monkeypatch):
     for uid, role in (("owner", "user"), ("runner", "user"), ("root", "master")):
         app_module._users.create(UserRecord(id=uid, email=f"{uid}@example.com", password_hash="x", role=role))
     app_module._teams.create_team(TeamRecord(id="T", name="T"))
-    monkeypatch.setattr(gb.time, "sleep", lambda s: None)
+    monkeypatch.setattr(gb, "_NODE_BACKOFF_S", 0)
 
     class E:
         structured: dict[str, Structured] = {}

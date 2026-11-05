@@ -1,6 +1,6 @@
 # RBAC Delegation — Progress
 STATUS: IN_PROGRESS
-Iteration: 22
+Iteration: 23
 Branch: feat/rbac-delegation
 Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint configured).
 
@@ -38,7 +38,7 @@ Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint con
 - [x] P5.2 budget allocation APIs: `PUT|DELETE /budgets/{scope}/{id}`, `GET /budgets`, `GET /me/budget`; allocate only from a parent you hold (Super Admin any, Sub Admin own pool+below, Group Admin own team to its members), children never exceed parent (atomic), no shrink below spent/handed-on, fixed parent, audited; `budget_policy`; 16 tests
 - [x] P5.3 gateway charges every run call to the budget chain (user, project team, parents, always the org pool): atomic pre-call reservation, settle to provider-reported cost (integer micro-USD, `usage.cost_micro`), append-only ledger, BUDGET_EXCEEDED (402, names the scope, never retried), soft limits warn only, failed calls refunded; D3: unpriced model under a hard budget -> MODEL_NOT_PERMITTED(unpriced) unless an org override; fallbacks priced as the model that ran; lazy period reset on first use; 21 tests incl. 20 parallel calls on the last credit -> 1 provider call
 - [x] P5.4 periods + thresholds: lazy reset on first use (monthly/weekly Monday/one_time never), injectable clock, Mongo reset guarded by amount; threshold warnings (80/100 by default) announced once per budget per period as `budget.threshold` audit entries by system, team-scoped, even under 20 parallel calls; /me/budget shows percent_used + thresholds_reached; 10 tests
-- [ ] P5.5 BUDGET_EXCEEDED graceful stop in agent runtime
+- [x] P5.5 BUDGET_EXCEEDED graceful stop proven end to end: the run keeps finished agents' answers, ends run_failed BUDGET_EXCEEDED naming the scope, never retried, nothing left reserved; same typed error as 402 on /run, /invoke and the SSE stream; one person's empty budget does not stop a sharer who pays from their own; 7 tests. ALSO test isolation fix: conftest now forces an in-memory, throwaway-named database before the app is imported and gives every test fresh RBAC stores (the suite had been writing into the real MongoDB)
 
 ## Phase 6 — UI
 - [ ] P6.1 Admin console: users & roles, teams
@@ -77,3 +77,4 @@ Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint con
 - Iter 20: P5.2 done.
 - Iter 21: P5.3 done.
 - Iter 22: P5.4 done.
+- Iter 23: P5.5 done.
