@@ -24,6 +24,7 @@ let state;
 export function resetAccess() {
   state = {
     orgRole: "user",
+    projectLevel: "owner",
     teams: [
       { id: "A", name: "Growth", created_at: "2026-10-01T00:00:00Z" },
       { id: "B", name: "Support", created_at: "2026-10-02T00:00:00Z" },
@@ -59,6 +60,9 @@ function node(scope, id, parent, amount, spent) {
   };
 }
 resetAccess();
+
+/** The access fields of the project body for the signed-in e2e user (default: the owner). */
+export const projectAccess = () => ({ access_level: state.projectLevel, can_manage: state.projectLevel === "owner" });
 
 const notFound = { error_type: "NotFound", message: "not found", details: null };
 const myRole = (team) => state.members[team]?.u1 ?? null;
@@ -119,6 +123,7 @@ export async function handleAccess({ req, res, path, readBody, send, orgRole, se
   if (path === "/__access_as" && method === "POST") {
     const body = await readBody(req);
     state.orgRole = body.orgRole ?? "user";
+    if (body.projectLevel) state.projectLevel = body.projectLevel;
     setOrgRole(state.orgRole);
     for (const [team, role] of Object.entries(body.teams ?? {})) {
       state.members[team] ??= {};
@@ -336,10 +341,9 @@ export async function handleAccess({ req, res, path, readBody, send, orgRole, se
   const g = path.match(/^\/projects\/([^/]+)\/(grants|share-targets)(?:\/(.+))?$/);
   if (g && g[1] === PROJECT_ID) {
     if (g[2] === "share-targets") {
-      const taken = new Set(state.grants.map((x) => `${x.grantee_type}:${x.grantee_id}`));
       return send(res, 200, {
-        teams: state.teams.filter((x) => myRole(x.id) && !taken.has(`team:${x.id}`)).map((x) => ({ id: x.id, name: x.name })),
-        users: people.filter((p) => p.id !== "u1" && !taken.has(`user:${p.id}`)).map((p) => ({ id: p.id, email: p.email })),
+        teams: state.teams.filter((x) => myRole(x.id)).map((x) => ({ id: x.id, name: x.name })),
+        users: people.filter((p) => p.id !== "u1").map((p) => ({ id: p.id, email: p.email })),
       });
     }
     if (!g[3] && method === "GET") return send(res, 200, { grants: state.grants });

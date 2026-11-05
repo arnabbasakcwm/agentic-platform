@@ -11,7 +11,7 @@
 // else completes.
 
 import http from "node:http";
-import { handleAccess, resetAccess } from "./mock-access.js";
+import { handleAccess, projectAccess, resetAccess } from "./mock-access.js";
 
 const PORT = Number(process.argv[2] ?? process.env.MOCK_API_PORT ?? 8765);
 const PROJECT_ID = "e2e0travel0project";
@@ -1174,7 +1174,7 @@ const server = http.createServer(async (req, res) => {
   }
   if (path === p) {
     knowledgeBody();
-    return send(res, 200, project);
+    return send(res, 200, { ...project, ...projectAccess() });
   }
   // Library
   if (path === "/models/check" && req.method === "POST") {

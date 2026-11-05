@@ -78,3 +78,46 @@
 .access__tree {
   padding-left: var(--space-lg);
 }
+
+/* The Share dialog: a native <dialog>, so focus is trapped and Escape closes it. */
+.sharedialog {
+  width: min(48rem, calc(100vw - var(--space-xl)));
+  max-height: calc(100vh - var(--space-xl));
+  padding: 0;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--bg-card);
+  color: var(--text-body);
+}
+
+.sharedialog::backdrop {
+  background: color-mix(in srgb, var(--text-strong) 45%, transparent);
+}
+
+.sharedialog__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: var(--space-lg);
+  border-bottom: 1px solid var(--border-hairline);
+}
+
+.sharedialog__title {
+  margin: 0;
+  font-size: var(--text-h3);
+  color: var(--text-strong);
+}
+
+.sharedialog__body {
+  display: grid;
+  gap: var(--space-lg);
+  padding: var(--space-lg);
+}
+
+.sharedialog__sub {
+  margin: 0;
+  font-size: var(--text-card-title);
+  color: var(--text-strong);
+}

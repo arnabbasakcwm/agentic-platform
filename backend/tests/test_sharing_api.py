@@ -227,3 +227,26 @@ def test_refused_shares_write_no_audit_entry(world):
     share(w, "ann", "mem", agent="nope")
     share(w, "ann", "ann")
     assert actions() == []
+
+
+def test_share_targets_are_the_teams_and_people_in_the_sharers_scope(world):
+    w = world
+    got = w.c.get(f"/projects/{w.pid}/share-targets", headers=w.h["ann"]).json()
+    assert [t["id"] for t in got["teams"]] == ["A"]  # ann is only in team A
+    emails = [u["email"] for u in got["users"]]
+    assert emails == sorted(["ga@example.com", "mem@example.com", "mem2@example.com"])  # not ann, not bob (team B), not out
+    # a group admin works within the teams they administer; the Super Admin sees everyone
+    assert [t["id"] for t in w.c.get(f"/projects/{w.pid}/share-targets", headers=w.h["ga"]).json()["teams"]] == ["A"]
+    everyone = w.c.get(f"/projects/{w.pid}/share-targets", headers=w.h["root"]).json()
+    assert {t["id"] for t in everyone["teams"]} == {"A", "B"}
+    assert "bob@example.com" in [u["email"] for u in everyone["users"]] and "ann@example.com" not in [u["email"] for u in everyone["users"]]
+
+
+def test_share_targets_are_not_shown_to_those_who_cannot_share(world):
+    w = world
+    share(w, "ann", "mem", "use")
+    share(w, "ann", "mem2", "manage")
+    for who in ("mem", "out", "sub"):
+        assert w.c.get(f"/projects/{w.pid}/share-targets", headers=w.h[who]).status_code == 404, who
+    assert w.c.get(f"/projects/{w.pid}/share-targets", headers=w.h["mem2"]).status_code == 200  # a manage-level grantee may
+    assert w.c.get(f"/projects/{w.pid}/share-targets").status_code == 401

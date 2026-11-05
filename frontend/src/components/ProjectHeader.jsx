@@ -1,6 +1,8 @@
 import { useId, useState } from "react";
+import { canShareProject } from "../lib/access.js";
 import { Icon } from "./icons.jsx";
 import { ProjectName } from "./ProjectName.jsx";
+import { ShareDialog } from "./ShareDialog.jsx";
 import { Pill } from "./ui.jsx";
 
 /** The Assistant sparkle, painted with the primary gradient. */
@@ -54,6 +56,9 @@ function CopyId({ id }) {
  * Assistant button. Nothing else, so it is identical on Brief through Deploy.
  */
 export function ProjectHeader({ project, onRenamed, assistant }) {
+  const [sharing, setSharing] = useState(false);
+  // Offered only to people who can share it; the API checks again on every request.
+  const canShare = canShareProject(project);
   return (
     <header className="pagehead projhead">
       <div className="projhead__text">
@@ -80,6 +85,14 @@ export function ProjectHeader({ project, onRenamed, assistant }) {
           <CopyId id={project.project_id} />
         </div>
       </div>
+      {canShare && (
+        <>
+          <button type="button" className="btn btn--outline projhead__share" onClick={() => setSharing(true)}>
+            Share
+          </button>
+          <ShareDialog project={project} open={sharing} onClose={() => setSharing(false)} />
+        </>
+      )}
       {assistant && (
         <button
           type="button"

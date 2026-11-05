@@ -2704,6 +2704,29 @@ def list_grants(project_id: str, user: UserRecord = Depends(current_user)) -> di
     return {"grants": [_grant_body(g) for g in grants]}
 
 
+@app.get("/projects/{project_id}/share-targets")
+def share_targets(project_id: str, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """Who the project can be shared with, for the Share dialog: the teams and people within the
+    caller's sharing scope (the Super Admin: everyone). Only for people who can share it, so a
+    teammate's address is shown to someone choosing whom to share with, never to a plain member."""
+    actor, project, grants = _shareable_project(project_id, user)
+    if access_rank(actor, project, WHOLE_PROJECT, grants) < level_rank("manage"):
+        raise ProjectNotFoundError(project_id)
+    scope = sharing_teams(actor, project)
+    teams = [t for t in _teams.list_teams() if scope is None or t.id in scope]
+    if scope is None:
+        people = _users.list_all()
+    else:
+        ids = {m.user_id for t in teams for m in _teams.list_members(t.id)}
+        by_id = {u.id: u for u in _users.list_all()}
+        people = [by_id[i] for i in sorted(ids) if i in by_id]
+    skip = {actor.user_id, project.tenant_id}
+    return {
+        "teams": [{"id": t.id, "name": t.name} for t in teams],
+        "users": [{"id": u.id, "email": u.email} for u in sorted(people, key=lambda u: u.email) if u.id not in skip],
+    }
+
+
 @app.delete("/projects/{project_id}/grants/{grant_id}")
 def revoke_grant(project_id: str, grant_id: str, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
     """Take a share away. It applies to the very next check: a run in progress stops at its
