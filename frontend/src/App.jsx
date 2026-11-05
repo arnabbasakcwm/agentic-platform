@@ -18,6 +18,8 @@ import { ProjectsPage } from "./pages/ProjectsPage.jsx";
 import { UsagePage } from "./pages/UsagePage.jsx";
 import { AdminPage } from "./pages/AdminPage.jsx";
 import { AdminUserPage } from "./pages/AdminUserPage.jsx";
+import { TeamPage } from "./pages/TeamPage.jsx";
+import { TeamsPage } from "./pages/TeamsPage.jsx";
 import { isAdminRole } from "./lib/admin.js";
 import { ErrorBoundary } from "./components/ErrorBoundary.jsx";
 import { Empty } from "./components/ui.jsx";
@@ -50,6 +52,9 @@ function crumbsFor(route, projects) {
   if (route.page === "mcp") return [{ label: "MCP servers" }];
   if (route.page === "usage") return [{ label: "Usage" }];
   if (route.page === "admin") return [{ label: "Admin" }];
+  if (route.page === "teams") return [{ label: "Teams" }];
+  if (route.page === "team") return [{ label: "Teams", href: paths.teams }, { label: "Team" }];
+  if (route.page === "budgets") return [{ label: "Budgets" }];
   if (route.page === "adminUser") {
     return [{ label: "Admin", href: paths.admin }, { label: "User" }];
   }
@@ -86,6 +91,9 @@ function Console() {
   const [collapsed, setCollapsed] = useState(readCollapsed);
   // Files across all projects, for the sidebar count; null = not loaded yet.
   const [knowledgeCount, setKnowledgeCount] = useState(null);
+  // The teams you belong to (the Super Admin: all of them); null = not loaded yet. Decides whether the
+  // sidebar offers Teams and Budgets.
+  const [teams, setTeams] = useState(null);
 
   useEffect(() => {
     api
@@ -133,14 +141,22 @@ function Console() {
       .catch(() => {});
   }, []);
 
+  const refreshTeams = useCallback(() => {
+    api
+      .teams()
+      .then((r) => setTeams(r.teams))
+      .catch(() => setTeams([]));
+  }, []);
+
   const userId = user?.id;
   // Load the signed-in user's projects (sign-out clears them, in signOut below).
   useEffect(() => {
     if (userId) {
       refreshProjects();
       refreshKnowledgeCount();
+      refreshTeams();
     }
-  }, [userId, refreshProjects, refreshKnowledgeCount]);
+  }, [userId, refreshProjects, refreshKnowledgeCount, refreshTeams]);
 
   async function authenticate(action, credentials) {
     const result = await auth.run(() => action(credentials));
@@ -158,6 +174,7 @@ function Console() {
     setProjects(null);
     setProjectsError(null);
     setKnowledgeCount(null);
+    setTeams(null);
     setAuthNotice(null);
     navigate(paths.newProject);
   }
@@ -211,6 +228,7 @@ function Console() {
         route={route}
         projects={projects}
         knowledgeCount={knowledgeCount}
+        teamCount={teams?.length ?? 0}
         user={user}
         collapsed={collapsed}
         onToggle={toggleSidebar}
@@ -262,6 +280,10 @@ function Console() {
                   </Empty>
                 </div>
               ))}
+            {route.page === "teams" && <TeamsPage me={user} onChanged={refreshTeams} />}
+            {route.page === "team" && (
+              <TeamPage key={route.id} teamId={route.id} me={user} onChanged={refreshTeams} />
+            )}
             {route.page === "new" && (
               <NewProjectPage
                 tools={tools}

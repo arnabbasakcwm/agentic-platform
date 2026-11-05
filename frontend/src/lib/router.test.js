@@ -54,3 +54,13 @@ describe("project routes", () => {
     expect(paths.project("p1", "run")).toBe("#/projects/p1/run");
   });
 });
+
+describe("team and budget routes", () => {
+  it("opens the team list, one team, and the budgets", () => {
+    expect(parseRoute("#/teams")).toEqual({ page: "teams" });
+    expect(parseRoute("#/teams/t1")).toEqual({ page: "team", id: "t1" });
+    expect(parseRoute("#/budgets")).toEqual({ page: "budgets" });
+    expect(paths.team("a b")).toBe("#/teams/a%20b");
+    expect(paths.teams).toBe("#/teams");
+  });
+});

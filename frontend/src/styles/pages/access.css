@@ -1,0 +1,80 @@
+/* Teams, sharing, budgets and model limits (tokens only; see styles/tokens.css). */
+
+.access__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-md);
+}
+
+.access__row .field {
+  min-width: 16rem;
+  flex: 1 1 16rem;
+}
+
+.access__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-sm);
+}
+
+.access__confirm {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.access__danger {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  margin-top: var(--space-lg);
+  padding-top: var(--space-md);
+  border-top: 1px solid var(--border-hairline);
+  color: var(--text-body);
+}
+
+.access__grid {
+  display: grid;
+  gap: var(--space-md);
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+}
+
+.access__check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+/* A budget's fill: green while there is room, amber from 80%, red when it is used up. */
+.meter {
+  height: var(--space-sm);
+  min-width: 6rem;
+  overflow: hidden;
+  border-radius: var(--radius-full);
+  background: var(--bg-subtle);
+}
+
+.meter__fill {
+  display: block;
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: var(--success);
+}
+
+.meter--warn .meter__fill {
+  background: var(--warn);
+}
+
+.meter--danger .meter__fill {
+  background: var(--danger);
+}
+
+.access__tree {
+  padding-left: var(--space-lg);
+}

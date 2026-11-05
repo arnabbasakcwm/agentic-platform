@@ -229,6 +229,64 @@ export const api = {
       method: "PUT",
       body: { role },
     }),
+  // ---- teams, roles and delegated administration. Anything out of your scope is a 404.
+  teams: () => request("/teams"),
+  team: (id) => request(`/teams/${encodeURIComponent(id)}`),
+  createTeam: (name) => request("/teams", { method: "POST", body: { name } }),
+  renameTeam: (id, name) =>
+    request(`/teams/${encodeURIComponent(id)}`, { method: "PATCH", body: { name } }),
+  deleteTeam: (id) => request(`/teams/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  teamMembers: (id) => request(`/teams/${encodeURIComponent(id)}/members`),
+  addTeamMember: (id, userId) =>
+    request(`/teams/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`, { method: "PUT" }),
+  removeTeamMember: (id, userId) =>
+    request(`/teams/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`, { method: "DELETE" }),
+  makeGroupAdmin: (id, userId) =>
+    request(`/teams/${encodeURIComponent(id)}/admins/${encodeURIComponent(userId)}`, { method: "PUT" }),
+  removeGroupAdmin: (id, userId) =>
+    request(`/teams/${encodeURIComponent(id)}/admins/${encodeURIComponent(userId)}`, { method: "DELETE" }),
+  teamUsage: (id, days = 30) => request(`/teams/${encodeURIComponent(id)}/usage?days=${days}`),
+  audit: ({ teamId, action, limit = 100 } = {}) =>
+    request(
+      `/audit?limit=${limit}${teamId ? `&team_id=${encodeURIComponent(teamId)}` : ""}${action ? `&action=${encodeURIComponent(action)}` : ""}`,
+    ),
+  // ---- sharing: grants on a project or one of its agents
+  grants: (projectId) => request(`/projects/${projectId}/grants`),
+  shareTargets: (projectId) => request(`/projects/${projectId}/share-targets`),
+  share: (projectId, { agentId, granteeType, granteeId, level }) =>
+    request(`/projects/${projectId}/grants`, {
+      method: "PUT",
+      body: { agent_id: agentId || "*", grantee_type: granteeType, grantee_id: granteeId, level },
+    }),
+  revokeGrant: (projectId, grantId) =>
+    request(`/projects/${projectId}/grants/${encodeURIComponent(grantId)}`, { method: "DELETE" }),
+  // ---- budgets (integer micro-USD)
+  budgets: () => request("/budgets"),
+  myBudget: (projectId) =>
+    request(`/me/budget${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ""}`),
+  setBudget: (scopeType, scopeId, body) =>
+    request(`/budgets/${scopeType}/${encodeURIComponent(scopeId)}`, { method: "PUT", body }),
+  deleteBudget: (scopeType, scopeId) =>
+    request(`/budgets/${scopeType}/${encodeURIComponent(scopeId)}`, { method: "DELETE" }),
+  // ---- model privileges
+  adminModels: () => request("/admin/models"),
+  setOrgModels: (body) => request("/admin/models/org", { method: "PUT", body }),
+  teamModels: (id) => request(`/teams/${encodeURIComponent(id)}/models`),
+  setTeamModels: (id, models) =>
+    request(`/teams/${encodeURIComponent(id)}/models`, { method: "PUT", body: { models } }),
+  clearTeamModels: (id) => request(`/teams/${encodeURIComponent(id)}/models`, { method: "DELETE" }),
+  setMemberModels: (id, userId, models) =>
+    request(`/teams/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}/models`, {
+      method: "PUT",
+      body: { models },
+    }),
+  clearMemberModels: (id, userId) =>
+    request(`/teams/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}/models`, { method: "DELETE" }),
+  setUserModels: (userId, models) =>
+    request(`/users/${encodeURIComponent(userId)}/models`, { method: "PUT", body: { models } }),
+  clearUserModels: (userId) => request(`/users/${encodeURIComponent(userId)}/models`, { method: "DELETE" }),
+  myModels: (projectId) =>
+    request(`/me/models${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ""}`),
   usage: (days = 30, projectId) =>
     request(
       `/usage?days=${days}${projectId ? `&project_id=${encodeURIComponent(projectId)}` : ""}`,

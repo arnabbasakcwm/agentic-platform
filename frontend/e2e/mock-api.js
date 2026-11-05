@@ -11,6 +11,7 @@
 // else completes.
 
 import http from "node:http";
+import { handleAccess, resetAccess } from "./mock-access.js";
 
 const PORT = Number(process.argv[2] ?? process.env.MOCK_API_PORT ?? 8765);
 const PROJECT_ID = "e2e0travel0project";
@@ -60,7 +61,7 @@ function outputs(input) {
   return {
     flight_searcher: {
       ...base.flight_searcher,
-      content: "## Flights found\n\nIndiGo runs 6 daily departures [1]. The company fare sheet lists ₹7,004 as the lowest fare [2].\n\n## Sources\n[1] IndiGo schedule — https://www.goindigo.in/schedule\n[2] fares.pdf, p. 3",
+      content: "## Flights found\n\nIndiGo runs 6 daily departures [1]. The company fare sheet lists ₹7,004 as the lowest fare [2].\n\n| Airline | Fare |\n|---|---:|\n| IndiGo | ₹8,249 |\n| Akasa Air | ₹7,004 |\n\n## Sources\n[1] IndiGo schedule — https://www.goindigo.in/schedule\n[2] fares.pdf, p. 3",
       citations: [
         { n: 1, kind: "web", source_id: "1", title: "IndiGo schedule", url: "https://www.goindigo.in/schedule", domain: "www.goindigo.in", retrieved_at: "2026-11-03T09:30:00Z", snippet: "Six daily departures from Kolkata to Delhi." },
         { n: 2, kind: "document", source_id: "2", document_id: "doc1", document_name: "fares.pdf", location: "p. 3", chunk_id: "c7", snippet: "Lowest fare: ₹7,004 (Akasa Air, mornings)." },
@@ -221,8 +222,16 @@ function finish(run, changes) {
   Object.assign(run, { finished_at: nowIso(), updated_at: nowIso() }, changes);
 }
 
+// {"scenario": "manual"}: the run only moves when a test posts the next event to
+// /__emit (a replayed recording), so a check can look at the page between any two events.
+let manualRun = null;
+
 // The same scripted run as /run/stream, saved instead of streamed.
 async function simulateRun(run, input) {
+  if (input.scenario === "manual") {
+    manualRun = run;
+    return;
+  }
   const out = outputs(input);
   const step = Number(input.step_ms ?? 400);
   const t0 = Date.now();
@@ -681,6 +690,7 @@ function reset() {
   revises.last = null;
   exports.last = null;
   emails.last = null;
+  resetAccess();
 }
 
 // ---- knowledge library: files belong to the user and are attached to any number of
@@ -843,6 +853,9 @@ const server = http.createServer(async (req, res) => {
   const p = `/projects/${PROJECT_ID}`;
 
   if (path === "/health") return send(res, 200, { status: "ok" });
+  // Teams, sharing, budgets, model limits and the audit log live in mock-access.js.
+  const access = await handleAccess({ req, res, path, readBody, send, orgRole: me().role, setOrgRole: (r) => { me().role = r; } });
+  if (access !== false) return;
   // New-project composer checks: a ready library file, a data source with tables and an
   // MCP server with approved tools, all with fixed ids so recorded requests compare.
   if (path === "/__seed_composer" && req.method === "POST") {
@@ -905,8 +918,24 @@ const server = http.createServer(async (req, res) => {
       attachments: (body.formats ?? []).map((f) => `Travel-agent_${agent}_${emailMatch[2].slice(0, 8)}_20261103-0930.${f}`),
     });
   }
+  if (path === "/__emit" && req.method === "POST") {
+    const { event, data = {} } = await readBody(req);
+    const run = manualRun;
+    if (!run) return send(res, 409, { error: "no manual run" });
+    const out = outputs(run.input);
+    if (event === "node_completed") record(run, event, { ...data, output: out[data.node] });
+    else if (event === "run_completed") {
+      record(run, event, { ...data, outputs: out, usage: RUN_USAGE, errors: [], halted: false });
+      finish(run, { status: "completed", usage: RUN_USAGE });
+    } else {
+      record(run, event, data);
+      if (event === "run_failed") finish(run, { status: "failed", error: data });
+    }
+    return send(res, 200, { ok: true });
+  }
   if (path === "/__last_email") return send(res, 200, emails.last ?? {});
   if (path === "/__reset" && req.method === "POST") {
+    manualRun = null;
     reset();
     return send(res, 200, { reset: true });
   }

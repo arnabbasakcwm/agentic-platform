@@ -9,6 +9,9 @@
 //   #/usage/<tab>              models, tokens and cost: models | activity | projects | runs
 //   #/admin                    every user's usage and cost (admins only)
 //   #/admin/users/<id>         one user's full usage dashboard (admins only)
+//   #/teams                    the teams you belong to (every team for the Super Admin)
+//   #/teams/<id>               one team: members, budget, models, activity
+//   #/budgets                  the budgets you can see and allocate from
 //   #/projects/<id>/<step>     one project, at a step of its workflow
 //   #/projects/<id>/resources/<tab>   the Resources step's documents | databases | tools
 
@@ -44,6 +47,8 @@ export function parseRoute(hash) {
   if (first === "usage") {
     return { page: "usage", tab: USAGE_TABS.includes(id) ? id : USAGE_TABS[0] };
   }
+  if (first === "teams") return id ? { page: "team", id } : { page: "teams" };
+  if (first === "budgets") return { page: "budgets" };
   if (first === "admin") {
     return id === "users" && step
       ? { page: "adminUser", id: step }
@@ -95,6 +100,9 @@ export const paths = {
   usage: "#/usage",
   usageTab: (tab) => `#/usage/${tab}`,
   admin: "#/admin",
+  teams: "#/teams",
+  team: (id) => `#/teams/${encodeURIComponent(id)}`,
+  budgets: "#/budgets",
   adminUser: (id) => `#/admin/users/${encodeURIComponent(id)}`,
   project: (id, step = "plan", tab = null) =>
     tab ? `#/projects/${id}/${step}/${tab}` : `#/projects/${id}/${step}`,

@@ -1,6 +1,6 @@
 # RBAC Delegation — Progress
 STATUS: IN_PROGRESS
-Iteration: 23
+Iteration: 24
 Branch: feat/rbac-delegation
 Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint configured).
 
@@ -41,7 +41,7 @@ Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint con
 - [x] P5.5 BUDGET_EXCEEDED graceful stop proven end to end: the run keeps finished agents' answers, ends run_failed BUDGET_EXCEEDED naming the scope, never retried, nothing left reserved; same typed error as 402 on /run, /invoke and the SSE stream; one person's empty budget does not stop a sharer who pays from their own; 7 tests. ALSO test isolation fix: conftest now forces an in-memory, throwaway-named database before the app is imported and gives every test fresh RBAC stores (the suite had been writing into the real MongoDB)
 
 ## Phase 6 — UI
-- [ ] P6.1 Admin console: users & roles, teams
+- [x] P6.1 Teams in the console: `#/teams` (list; Super Admin creates), `#/teams/<id>` (members with roles, appoint/step down group admin, add (Super Admin) / remove, rename, delete (not Default)); sidebar Teams for admins and team members; `lib/access.js` helpers + tests; mock-access.js; e2e teams.spec.js (7 tests incl. axe light/dark)
 - [ ] P6.2 Agent share dialog
 - [ ] P6.3 Budget allocation + scoped usage views
 - [ ] P6.4 Model privilege editor
@@ -78,3 +78,4 @@ Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint con
 - Iter 21: P5.3 done.
 - Iter 22: P5.4 done.
 - Iter 23: P5.5 done.
+- Iter 24: P6.1 done.

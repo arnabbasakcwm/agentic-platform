@@ -43,6 +43,7 @@ export function Sidebar({
   route,
   projects,
   knowledgeCount,
+  teamCount = 0,
   user,
   collapsed,
   onToggle,
@@ -136,6 +137,16 @@ export function Sidebar({
           tone="pink"
           active={route.page === "usage"}
         />
+        {(isAdminRole(user?.role) || teamCount > 0) && (
+          <NavItem
+            href={paths.teams}
+            icon="folder"
+            label="Teams"
+            tone="teal"
+            active={route.page === "teams" || route.page === "team"}
+            trail={teamCount > 0 ? <span className="navitem__count">{teamCount}</span> : null}
+          />
+        )}
         {isAdminRole(user?.role) && (
           <NavItem
             href={paths.admin}
