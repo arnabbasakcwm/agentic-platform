@@ -68,6 +68,7 @@ from .errors import (
     MasterAdminLockedError,
     MasterAdminRequiredError,
     NotATeamMemberError,
+    ShareError,
     TeamNotFoundError,
     TeamProtectedError,
     EmailTakenError,
@@ -114,7 +115,17 @@ from .graph_builder import (
 )
 from .meta_planner_prompt import discuss_brief, plan_project, revise_plan
 from . import audit as audit_log
-from .policy import Actor, actor_for, can, list_visible_projects
+from .policy import (
+    Actor,
+    access_rank,
+    actor_for,
+    any_access,
+    can,
+    has_full_rank,
+    list_visible_projects,
+    may_share,
+    sharing_teams,
+)
 from .rbac_backfill import DEFAULT_TEAM_ID, backfill as backfill_teams
 from .stores import (
     ADMIN_ROLES,
@@ -128,6 +139,9 @@ from .stores import (
     McpServer,
     McpTool,
     ProjectRecord,
+    WHOLE_PROJECT,
+    AgentGrant,
+    level_rank,
     TEAM_NAME_MAX,
     TeamMembership,
     TeamRecord,
@@ -138,6 +152,7 @@ from .stores import (
     brief_title,
     make_run_store,
     make_audit_store,
+    make_grant_store,
     make_team_store,
     make_datasource_store,
     make_mcp_store,
@@ -184,6 +199,7 @@ _capabilities = make_capability_store()
 _runs = make_run_store()
 _teams = make_team_store()
 _audit = make_audit_store()
+_grants = make_grant_store()
 logger = logging.getLogger(__name__)
 
 try:  # existing installations move onto teams once; idempotent and never blocks start-up
@@ -1908,6 +1924,114 @@ def admin_user_usage(
     return {"user": user, "projects": projects, **body}
 
 
+# ------------------------------------------------------------------------------ sharing
+class ShareRequest(BaseModel):
+    agent_id: str = Field(default=WHOLE_PROJECT, min_length=1, max_length=100)  # "*" = every agent
+    grantee_type: Literal["user", "team"]
+    grantee_id: str = Field(min_length=1, max_length=100)
+    level: Literal["view", "use", "edit", "manage"]
+
+
+def _shareable_project(project_id: str, user: UserRecord) -> tuple[Actor, ProjectRecord, list[AgentGrant]]:
+    """The project, if the caller can see it at all (owner, admin, team member, or someone it is
+    shared with); everything else is the usual 404."""
+    actor = _actor(user)
+    project = _store.get(project_id)
+    grants = _grants.list_for_project(project_id) if project is not None else []
+    if project is None or not any_access(actor, project, grants):
+        raise ProjectNotFoundError(project_id)
+    return actor, project, grants
+
+
+def _grant_body(g: AgentGrant) -> dict[str, Any]:
+    return g.model_dump()
+
+
+def _check_grantee(actor: Actor, project: ProjectRecord, req: ShareRequest) -> None:
+    """The grantee must exist and be inside the sharer's scope; otherwise it is one 404, so the
+    API cannot be used to find out which users or teams exist."""
+    scope = sharing_teams(actor, project)
+    if req.grantee_type == "team":
+        if _teams.get_team(req.grantee_id) is None or (scope is not None and req.grantee_id not in scope):
+            raise TeamNotFoundError()
+        return
+    if req.grantee_id == actor.user_id or req.grantee_id == project.tenant_id:
+        raise ShareError("a project is already fully available to its owner and to you")
+    if _users.get(req.grantee_id) is None:
+        raise TeamNotFoundError()
+    if scope is not None and not any(_teams.get_membership(t, req.grantee_id) is not None for t in scope):
+        raise TeamNotFoundError()
+
+
+@app.put("/projects/{project_id}/grants")
+def share_project(project_id: str, req: ShareRequest, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """Share a project (or one of its agents) with a user or a team, at a level. Sharing makes a
+    grant, never a copy. You need `manage` on it, can hand out at most your own level, and can
+    share only with people and teams in your scope. Sharing again at another level changes the
+    grant; a manage-level grantee can change only the grants they made themselves."""
+    actor, project, grants = _shareable_project(project_id, user)
+    if req.agent_id != WHOLE_PROJECT and req.agent_id not in {a.id for a in project.plan.agents}:
+        raise ShareError(f"this project has no agent {req.agent_id!r}")
+    if not may_share(actor, project, req.agent_id, "view", grants):
+        raise ProjectNotFoundError(project_id)  # can see it, cannot share it
+    if not may_share(actor, project, req.agent_id, req.level, grants):
+        raise ShareError("you cannot share at a level above your own", status=403, error_type="LevelAboveYourOwn")
+    _check_grantee(actor, project, req)
+    gid = AgentGrant.make_id(project_id, req.agent_id, req.grantee_type, req.grantee_id)
+    existing = _grants.get(gid)
+    if existing is not None and not has_full_rank(actor, project) and existing.granted_by != actor.user_id:
+        raise ProjectNotFoundError(project_id)  # someone else's grant is not yours to change
+    if existing is not None and existing.level == req.level:
+        return {"grant": _grant_body(existing)}
+    grant = AgentGrant(
+        id=gid, project_id=project_id, agent_id=req.agent_id, grantee_type=req.grantee_type,
+        grantee_id=req.grantee_id, level=req.level, granted_by=actor.user_id,
+    )
+    _grants.upsert(grant)
+    logger.info("user %s shared %s/%s with %s %s at %s", actor.user_id, project_id, req.agent_id,
+                req.grantee_type, req.grantee_id, req.level)
+    audit_log.record(
+        _audit, actor.user_id, "agent.shared", "agent_grant", gid, team_id=project.team_id,
+        before={"level": existing.level} if existing else None, after={"level": req.level},
+        details={"project_id": project_id, "agent_id": req.agent_id,
+                 "grantee_type": req.grantee_type, "grantee_id": req.grantee_id},
+    )
+    return {"grant": _grant_body(grant)}
+
+
+@app.get("/projects/{project_id}/grants")
+def list_grants(project_id: str, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """Who the project is shared with. For people who can manage it (and share it onward)."""
+    actor, project, grants = _shareable_project(project_id, user)
+    if access_rank(actor, project, WHOLE_PROJECT, grants) < level_rank("manage"):
+        raise ProjectNotFoundError(project_id)
+    return {"grants": [_grant_body(g) for g in grants]}
+
+
+@app.delete("/projects/{project_id}/grants/{grant_id}")
+def revoke_grant(project_id: str, grant_id: str, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """Take a share away. It applies to the very next check: a run in progress stops at its
+    next model call. The owner, the Super Admin and the team's group admin may revoke any
+    share; a manage-level grantee only the shares they made."""
+    actor, project, grants = _shareable_project(project_id, user)
+    grant = _grants.get(grant_id)
+    if grant is None or grant.project_id != project_id:
+        raise ProjectNotFoundError(project_id)
+    if not may_share(actor, project, grant.agent_id, "view", grants):
+        raise ProjectNotFoundError(project_id)
+    if not has_full_rank(actor, project) and grant.granted_by != actor.user_id:
+        raise ProjectNotFoundError(project_id)
+    _grants.revoke(grant_id)
+    logger.info("user %s revoked grant %s", actor.user_id, grant_id)
+    audit_log.record(
+        _audit, actor.user_id, "agent.share_revoked", "agent_grant", grant_id, team_id=project.team_id,
+        before={"level": grant.level}, after=None,
+        details={"project_id": project_id, "agent_id": grant.agent_id,
+                 "grantee_type": grant.grantee_type, "grantee_id": grant.grantee_id},
+    )
+    return {"revoked": grant_id}
+
+
 # ------------------------------------------------------------------------------ teams
 class TeamRequest(BaseModel):
     name: str = Field(min_length=1, max_length=TEAM_NAME_MAX)
@@ -1998,6 +2122,7 @@ def delete_team(team_id: str, user: UserRecord = Depends(current_user)) -> dict[
             _store.set_team(p.id, None, False)
             released += 1
     _teams.delete_team(team_id)
+    _grants.delete_for_grantee("team", team_id)
     logger.info("user %s deleted team %s (%d projects made personal)", user.id, team_id, released)
     audit_log.record(
         _audit, user.id, "team.deleted", "team", team_id, team_id=team_id,
@@ -2543,6 +2668,7 @@ def delete_project(project_id: str, user: UserRecord = Depends(current_user)) ->
     _datasources.detach_project(user.id, project_id)
     _mcp.detach_project(user.id, project_id)
     _runs.delete_for_project(project.tenant_id, project_id)
+    _grants.delete_for_project(project_id)
     return {"deleted": project_id, "knowledge_documents_detached": detached}
 
 
@@ -3506,6 +3632,11 @@ def _handle_master_required(_req: Request, exc: MasterAdminRequiredError):
 @app.exception_handler(TeamNotFoundError)
 def _handle_team_not_found(_req: Request, exc: TeamNotFoundError):
     return _error_response(404, "NotFound", str(exc))
+
+
+@app.exception_handler(ShareError)
+def _handle_share(_req: Request, exc: ShareError):
+    return _error_response(exc.status, exc.error_type, str(exc))
 
 
 @app.exception_handler(TeamProtectedError)

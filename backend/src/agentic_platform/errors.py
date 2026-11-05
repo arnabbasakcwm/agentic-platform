@@ -278,6 +278,15 @@ class TeamNotFoundError(PlatformError):
         super().__init__("not found")
 
 
+class ShareError(PlatformError):
+    """A share that is not allowed or not valid. `status`/`error_type` are the API's response."""
+
+    def __init__(self, message: str, status: int = 422, error_type: str = "ShareRefused"):
+        self.status = status
+        self.error_type = error_type
+        super().__init__(message)
+
+
 class TeamProtectedError(PlatformError):
     """The Default team holds the backfill's state and the projects that predate teams."""
 

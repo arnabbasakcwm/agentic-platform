@@ -22,7 +22,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from .stores import ProjectRecord, ProjectStore, TeamMembership, TeamStore, UserRecord
+from .stores import (
+    WHOLE_PROJECT,
+    AgentGrant,
+    ProjectRecord,
+    ProjectStore,
+    TeamMembership,
+    TeamStore,
+    UserRecord,
+    level_rank,
+)
 
 MASTER = "master"
 ADMIN = "admin"
@@ -191,3 +200,71 @@ def can_see_user_in_teams(actor: Actor, target_memberships: list[TeamMembership]
     """A group admin may see a user who is a member of any team the admin administers."""
     admined = actor.admined_teams
     return any(m.team_id in admined for m in target_memberships)
+
+
+# ------------------------------------------------------------------------------ sharing
+# What a person may do with one project or agent: the owner, the Super Admin and a group admin
+# of the team that shares it hold full ("owner") rank; everyone else holds the highest level
+# among the grants that reach them (made to them, or to a team they are in) - and team
+# members of a team-shared project can at least view it.
+OWNER_RANK = level_rank("manage") + 1
+
+
+def _grant_reaches(actor: Actor, g: AgentGrant) -> bool:
+    if g.grantee_type == "user":
+        return g.grantee_id == actor.user_id
+    return g.grantee_type == "team" and g.grantee_id in actor.team_roles
+
+
+def has_full_rank(actor: Actor, project: ProjectRecord) -> bool:
+    """Owner, Super Admin, or group admin of the project's team (when the team can see it)."""
+    return (
+        actor.is_master
+        or project.tenant_id == actor.user_id
+        or bool(project.team_access and actor.admins_team(project.team_id))
+    )
+
+
+def access_rank(actor: Actor | None, project: ProjectRecord | None, agent_id: str | None, grants: list[AgentGrant]) -> int:
+    """0 = no access. `agent_id=None` asks about the whole project: only a whole-project grant
+    counts. Otherwise a grant on that agent or on the whole project counts. Unknown actor or
+    project is 0."""
+    if actor is None or project is None:
+        return 0
+    if has_full_rank(actor, project):
+        return OWNER_RANK
+    best = level_rank("view") if project.team_access and actor.in_team(project.team_id) else 0
+    for g in grants:
+        if g.project_id != project.id or not _grant_reaches(actor, g):
+            continue
+        if g.agent_id == WHOLE_PROJECT or (agent_id is not None and g.agent_id == agent_id):
+            best = max(best, level_rank(g.level))
+    return best
+
+
+def any_access(actor: Actor | None, project: ProjectRecord | None, grants: list[AgentGrant]) -> bool:
+    """Whether the person can see the project at all: view rank on the project, or a grant on
+    any one of its agents."""
+    if access_rank(actor, project, None, grants) > 0:
+        return True
+    return bool(
+        actor and project and any(g.project_id == project.id and _grant_reaches(actor, g) for g in grants)
+    )
+
+
+def may_share(actor: Actor | None, project: ProjectRecord | None, agent_id: str, level: str, grants: list[AgentGrant]) -> bool:
+    """To share (or change/revoke a share) you need `manage`, and can hand out at most the
+    level you hold yourself - so nobody can raise anyone above their own power."""
+    rank = access_rank(actor, project, agent_id, grants)
+    return rank >= level_rank("manage") and rank >= level_rank(level) and level_rank(level) > 0
+
+
+def sharing_teams(actor: Actor, project: ProjectRecord) -> frozenset[str] | None:
+    """The teams whose people and which teams the sharer may share with. None = everyone
+    (Super Admin). A group admin acting through their admin role stays within the teams they
+    administer; an owner or a manage-level grantee within the teams they belong to."""
+    if actor.is_master:
+        return None
+    if project.tenant_id != actor.user_id and project.team_access and actor.admins_team(project.team_id):
+        return actor.admined_teams
+    return frozenset(actor.team_roles)
