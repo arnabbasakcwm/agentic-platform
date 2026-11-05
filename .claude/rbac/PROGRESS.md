@@ -1,6 +1,6 @@
 # RBAC Delegation — Progress
 STATUS: IN_PROGRESS
-Iteration: 18
+Iteration: 19
 Branch: feat/rbac-delegation
 Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint configured).
 
@@ -34,7 +34,7 @@ Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint con
 - [x] P4.3 gateway enforces model privileges on every run call (agents, tool loops, supervisor): MODEL_NOT_PERMITTED (never retried, audited), org/agent fallback via Redirect replay + usage relabel, per-agent fallback API; 16 tests. D3 unpriced rule moved into P5.3
 
 ## Phase 5 — Budgets
-- [ ] P5.1 Budget schema (hierarchical, integer micro-USD, period, hard/soft) + append-only usage ledger
+- [x] P5.1 budget tree + ledger stores: `BudgetNode` (integer micro-USD, org>pool>team>user, remaining/unallocated counters, period, hard/soft, thresholds), `BudgetStore` with single-document conditional atomic reserve/settle/release/resize/create/delete/reset/mark_notified (+ compensation across levels), append-only `LedgerStore`; 40 tests incl. parallel last-credit on memory and Mongo
 - [ ] P5.2 Allocation APIs; reject child sum > parent; no-escalation
 - [ ] P5.3 Pre-call check + post-call debit in gateway, atomic; concurrency test; ALSO the D3 rule: hard-limit budget + unpriced model -> MODEL_NOT_PERMITTED(reason=unpriced) unless an admin per-model override (test required); and gate embeddings
 - [ ] P5.4 Period reset (lazy) + soft-threshold events
@@ -73,3 +73,4 @@ Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint con
 - Iter 16: P4.1 done.
 - Iter 17: P4.2 done.
 - Iter 18: P4.3 done.
+- Iter 19: P5.1 done.

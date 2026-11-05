@@ -12,7 +12,9 @@ its own memory.
 from __future__ import annotations
 
 import threading
+import uuid
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Iterator, Literal, Protocol
 
@@ -2387,6 +2389,540 @@ def make_model_policy_store() -> ModelPolicyStore:
     if MONGODB_URI:
         return MongoModelPolicyStore(mongo_database(MONGODB_URI, MONGODB_DB))
     return InMemoryModelPolicyStore()
+
+
+# --------------------------------------------------------------------------------- budgets
+# Money is integer micro-USD (1 USD = 1,000,000), never a float. Budgets form a tree -
+# org -> Sub Admin pool -> team -> user - and what a node hands to its children is capped by
+# its own amount. Every counter that must not be raced is changed with ONE conditional atomic
+# update on ONE document (the condition sits in the filter, the change is an $inc), so two
+# parallel callers can never both take the last credit; a change that spans several documents
+# is a fixed-order series of those, undone by compensating $inc when a later step refuses.
+BUDGET_PERIODS = ("monthly", "weekly", "one_time")
+BUDGET_SCOPES = ("org", "pool", "team", "user")
+DEFAULT_THRESHOLDS = [80, 100]
+
+
+class BudgetAllocationError(Exception):
+    """An allocation the tree forbids: more than the parent has unallocated, a shrink below what
+    is already spent or handed on, deleting a node that still has children, or a missing parent."""
+
+    def __init__(self, message: str, reason: str = "allocation"):
+        self.reason = reason
+        super().__init__(message)
+
+
+def period_start_for(period: str, now: datetime) -> datetime:
+    """The start of the period that contains `now` (UTC): the first of the month, the Monday of the
+    week, or (one_time) `now` itself."""
+    now = now.astimezone(timezone.utc)
+    if period == "monthly":
+        return datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+    if period == "weekly":
+        day = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+        return day - timedelta(days=day.weekday())
+    return now
+
+
+def period_end_for(period: str, start: datetime) -> datetime | None:
+    """When the period that began at `start` ends; None for a one-time budget (it never resets)."""
+    if period == "monthly":
+        year, month = (start.year + 1, 1) if start.month == 12 else (start.year, start.month + 1)
+        return datetime(year, month, 1, tzinfo=timezone.utc)
+    if period == "weekly":
+        return start + timedelta(days=7)
+    return None
+
+
+class BudgetNode(BaseModel):
+    id: str  # "org" | "pool:<user>" | "team:<id>" | "user:<id>"
+    scope_type: Literal["org", "pool", "team", "user"]
+    scope_id: str
+    parent_id: str | None = None  # None only for the org
+    amount: int = Field(ge=0)  # micro-USD per period
+    remaining: int = 0  # amount - spent this period; below 0 after a call overshoots its estimate
+    unallocated: int = 0  # amount - the sum of the children's amounts
+    period: Literal["monthly", "weekly", "one_time"] = "monthly"
+    period_start: datetime = Field(default_factory=_now)
+    hard_limit: bool = True  # False: warn only, never block
+    thresholds: list[int] = Field(default_factory=lambda: list(DEFAULT_THRESHOLDS))
+    notified: list[int] = Field(default_factory=list)  # thresholds already announced this period
+    updated_by: str | None = None
+    updated_at: datetime = Field(default_factory=_now)
+
+    @model_validator(mode="after")
+    def _check(self) -> "BudgetNode":
+        if self.id != ("org" if self.scope_type == "org" else f"{self.scope_type}:{self.scope_id}"):
+            raise ValueError("budget id must be org, or scope_type:scope_id")
+        if (self.scope_type == "org") != (self.parent_id is None):
+            raise ValueError("only the org budget has no parent")
+        if any(t < 1 or t > 1000 for t in self.thresholds):
+            raise ValueError("thresholds are percentages (1-1000)")
+        self.thresholds = sorted(set(self.thresholds))
+        return self
+
+    @staticmethod
+    def make_id(scope_type: str, scope_id: str) -> str:
+        return "org" if scope_type == "org" else f"{scope_type}:{scope_id}"
+
+    @property
+    def spent(self) -> int:
+        return self.amount - self.remaining
+
+
+@dataclass
+class Reservation:
+    """Credit set aside for one model call, on every budget of its chain."""
+
+    id: str
+    estimate: int
+    nodes: list[str]
+
+
+class BudgetBlock(Exception):
+    """A hard budget refused a reservation; `node_id` is the scope that ran out."""
+
+    def __init__(self, node_id: str, remaining: int, needed: int):
+        self.node_id, self.remaining, self.needed = node_id, remaining, needed
+        super().__init__(f"the {node_id} budget has {remaining} left, this call needs about {needed}")
+
+
+class LedgerEntry(BaseModel):
+    """One model call's cost. Append-only: the ledger is never edited."""
+
+    id: str
+    at: datetime = Field(default_factory=_now)
+    user_id: str
+    team_id: str | None = None
+    project_id: str | None = None
+    agent_id: str | None = None
+    run_id: str | None = None
+    provider: str
+    model: str
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_micro: int = 0  # what was debited
+    estimate_micro: int = 0  # what was reserved
+    unpriced: bool = False  # the model has no price: tokens counted, cost 0
+    estimated: bool = False  # the provider reported no tokens: the estimate was charged
+    outcome: Literal["ok", "failed"] = "ok"
+    nodes: list[str] = Field(default_factory=list)  # the budgets charged
+
+
+class BudgetStore(Protocol):
+    def get(self, node_id: str) -> BudgetNode | None: ...
+
+    def list_children(self, parent_id: str) -> list[BudgetNode]: ...
+
+    def list_all(self) -> list[BudgetNode]: ...
+
+    def create(self, node: BudgetNode) -> BudgetNode:
+        """Add a node with its full amount unspent and unallocated, taking `amount` out of the
+        parent's unallocated in the same atomic step. BudgetAllocationError when the parent is
+        missing, the node exists, or the parent has less unallocated."""
+
+    def resize(self, node_id: str, amount: int, by: str | None = None) -> BudgetNode:
+        """Change a node's amount. Growing needs the parent to have the difference unallocated;
+        shrinking cannot go below what is spent or handed on. BudgetAllocationError otherwise."""
+
+    def update_settings(self, node_id: str, *, hard_limit: bool | None = None, thresholds: list[int] | None = None,
+                        period: str | None = None, by: str | None = None) -> BudgetNode | None: ...
+
+    def delete(self, node_id: str) -> None:
+        """Remove a childless node and give its amount back to the parent. BudgetAllocationError if
+        it has children or does not exist."""
+
+    def reserve(self, node_ids: list[str], estimate: int) -> Reservation:
+        """Set `estimate` aside on each node, in the order given. A hard node with less remaining
+        refuses with BudgetBlock, and everything taken so far is given back. Nodes that do not
+        exist are skipped (no budget at that level = no limit)."""
+
+    def settle(self, reservation: Reservation, actual: int) -> None:
+        """Replace the estimate with the actual cost on every node of the reservation."""
+
+    def release(self, reservation: Reservation) -> None:
+        """Give a whole reservation back (the call failed before costing anything)."""
+
+    def reset_if_due(self, node_id: str, now: datetime) -> bool:
+        """Start a new period if the current one has ended: remaining back to amount, notifications
+        cleared. Only one of several racing callers does it. True if this call reset it."""
+
+    def mark_notified(self, node_id: str, threshold: int) -> bool:
+        """Record that a threshold was announced this period; True only for the first caller."""
+
+
+class LedgerStore(Protocol):
+    def append(self, entry: LedgerEntry) -> None: ...
+
+    def list(self, *, user_id: str | None = None, team_id: str | None = None, project_id: str | None = None,
+             since: datetime | None = None, limit: int = 100) -> list[LedgerEntry]:
+        """Newest first."""
+
+
+def _due(node: BudgetNode, now: datetime) -> datetime | None:
+    """The start of the new period if `node`'s current one has ended at `now`, else None."""
+    end = period_end_for(node.period, node.period_start if node.period_start.tzinfo else node.period_start.replace(tzinfo=timezone.utc))
+    if end is None or now < end:
+        return None
+    return period_start_for(node.period, now)
+
+
+class InMemoryBudgetStore:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._nodes: dict[str, BudgetNode] = {}
+
+    def get(self, node_id: str) -> BudgetNode | None:
+        n = self._nodes.get(node_id)
+        return n.model_copy(deep=True) if n else None
+
+    def list_children(self, parent_id: str) -> list[BudgetNode]:
+        with self._lock:
+            found = [n.model_copy(deep=True) for n in self._nodes.values() if n.parent_id == parent_id]
+        return sorted(found, key=lambda n: n.id)
+
+    def list_all(self) -> list[BudgetNode]:
+        with self._lock:
+            return sorted((n.model_copy(deep=True) for n in self._nodes.values()), key=lambda n: n.id)
+
+    def create(self, node: BudgetNode) -> BudgetNode:
+        with self._lock:
+            if node.id in self._nodes:
+                raise BudgetAllocationError("that budget already exists", "exists")
+            if node.parent_id is not None:
+                parent = self._nodes.get(node.parent_id)
+                if parent is None:
+                    raise BudgetAllocationError("the parent budget does not exist", "no_parent")
+                if parent.unallocated < node.amount:
+                    raise BudgetAllocationError(
+                        f"the parent has only {parent.unallocated} left to allocate", "over_parent")
+                parent.unallocated -= node.amount
+            fresh = node.model_copy(update={"remaining": node.amount, "unallocated": node.amount, "notified": []})
+            self._nodes[node.id] = fresh
+            return fresh.model_copy(deep=True)
+
+    def resize(self, node_id: str, amount: int, by: str | None = None) -> BudgetNode:
+        with self._lock:
+            node = self._nodes.get(node_id)
+            if node is None:
+                raise BudgetAllocationError("no such budget", "missing")
+            delta = amount - node.amount
+            parent = self._nodes.get(node.parent_id) if node.parent_id else None
+            if delta > 0 and parent is not None and parent.unallocated < delta:
+                raise BudgetAllocationError(f"the parent has only {parent.unallocated} left to allocate", "over_parent")
+            if delta < 0 and (node.remaining + delta < 0 or node.unallocated + delta < 0):
+                raise BudgetAllocationError("the budget cannot go below what is spent or handed on", "below_used")
+            if parent is not None:
+                parent.unallocated -= delta
+            node.amount += delta
+            node.remaining += delta
+            node.unallocated += delta
+            node.updated_by, node.updated_at = by, _now()
+            return node.model_copy(deep=True)
+
+    def update_settings(self, node_id, *, hard_limit=None, thresholds=None, period=None, by=None):
+        with self._lock:
+            node = self._nodes.get(node_id)
+            if node is None:
+                return None
+            data = node.model_dump()
+            if hard_limit is not None:
+                data["hard_limit"] = hard_limit
+            if thresholds is not None:
+                data["thresholds"] = thresholds
+            if period is not None:
+                data["period"] = period
+                data["period_start"] = period_start_for(period, _now())
+            data.update(updated_by=by, updated_at=_now())
+            self._nodes[node_id] = BudgetNode.model_validate(data)
+            return self._nodes[node_id].model_copy(deep=True)
+
+    def delete(self, node_id: str) -> None:
+        with self._lock:
+            node = self._nodes.get(node_id)
+            if node is None:
+                raise BudgetAllocationError("no such budget", "missing")
+            if any(n.parent_id == node_id for n in self._nodes.values()):
+                raise BudgetAllocationError("remove the budgets allocated from this one first", "has_children")
+            if node.parent_id in self._nodes:
+                self._nodes[node.parent_id].unallocated += node.amount
+            del self._nodes[node_id]
+
+    def reserve(self, node_ids: list[str], estimate: int) -> Reservation:
+        taken: list[str] = []
+        with self._lock:  # one lock = every step is atomic; the Mongo store does the same stepwise
+            for nid in node_ids:
+                node = self._nodes.get(nid)
+                if node is None:
+                    continue
+                if node.hard_limit and node.remaining < estimate:
+                    for t in taken:
+                        self._nodes[t].remaining += estimate
+                    raise BudgetBlock(nid, node.remaining, estimate)
+                node.remaining -= estimate
+                taken.append(nid)
+        return Reservation(id=uuid.uuid4().hex, estimate=estimate, nodes=taken)
+
+    def settle(self, reservation: Reservation, actual: int) -> None:
+        with self._lock:
+            for nid in reservation.nodes:
+                if nid in self._nodes:
+                    self._nodes[nid].remaining += reservation.estimate - actual
+
+    def release(self, reservation: Reservation) -> None:
+        self.settle(reservation, 0)
+
+    def reset_if_due(self, node_id: str, now: datetime) -> bool:
+        with self._lock:
+            node = self._nodes.get(node_id)
+            if node is None:
+                return False
+            start = _due(node, now)
+            if start is None:
+                return False
+            node.period_start, node.remaining, node.notified = start, node.amount, []
+            return True
+
+    def mark_notified(self, node_id: str, threshold: int) -> bool:
+        with self._lock:
+            node = self._nodes.get(node_id)
+            if node is None or threshold in node.notified:
+                return False
+            node.notified.append(threshold)
+            return True
+
+
+class MongoBudgetStore:
+    """`budgets`, one document per node. Every guard is in the filter of a single-document
+    `find_one_and_update`/`update_one`, so it is atomic on MongoDB, Atlas and DocumentDB."""
+
+    def __init__(self, db: "Database"):
+        self._nodes = db["budgets"]
+        with _mongo_errors():
+            self._nodes.create_index("parent_id")
+
+    @staticmethod
+    def _out(doc: dict[str, Any] | None) -> BudgetNode | None:
+        if not doc:
+            return None
+        doc = dict(doc)
+        doc["id"] = doc.pop("_id")
+        return BudgetNode.model_validate(doc)
+
+    def _inc(self, node_id: str, flt: dict[str, Any], inc: dict[str, int]) -> bool:
+        with _mongo_errors():
+            return self._nodes.find_one_and_update({"_id": node_id, **flt}, {"$inc": inc}) is not None
+
+    def get(self, node_id: str) -> BudgetNode | None:
+        with _mongo_errors():
+            return self._out(self._nodes.find_one({"_id": node_id}))
+
+    def list_children(self, parent_id: str) -> list[BudgetNode]:
+        with _mongo_errors():
+            docs = list(self._nodes.find({"parent_id": parent_id}))
+        return sorted((self._out(d) for d in docs), key=lambda n: n.id)  # type: ignore[arg-type,return-value]
+
+    def list_all(self) -> list[BudgetNode]:
+        with _mongo_errors():
+            docs = list(self._nodes.find({}))
+        return sorted((self._out(d) for d in docs), key=lambda n: n.id)  # type: ignore[arg-type,return-value]
+
+    def create(self, node: BudgetNode) -> BudgetNode:
+        from pymongo.errors import DuplicateKeyError
+
+        if node.parent_id is not None:
+            if self.get(node.parent_id) is None:
+                raise BudgetAllocationError("the parent budget does not exist", "no_parent")
+            if not self._inc(node.parent_id, {"unallocated": {"$gte": node.amount}}, {"unallocated": -node.amount}):
+                have = self.get(node.parent_id)
+                raise BudgetAllocationError(
+                    f"the parent has only {have.unallocated if have else 0} left to allocate", "over_parent")
+        fresh = node.model_copy(update={"remaining": node.amount, "unallocated": node.amount, "notified": []})
+        body = fresh.model_dump()
+        body["_id"] = body.pop("id")
+        duplicate = False
+        try:
+            with _mongo_errors():
+                try:
+                    self._nodes.insert_one(body)
+                except DuplicateKeyError:  # caught inside, before _mongo_errors turns it into "unavailable"
+                    duplicate = True
+        except Exception:
+            if node.parent_id is not None:
+                self._inc(node.parent_id, {}, {"unallocated": node.amount})
+            raise
+        if duplicate:
+            if node.parent_id is not None:  # give the parent its credit back
+                self._inc(node.parent_id, {}, {"unallocated": node.amount})
+            raise BudgetAllocationError("that budget already exists", "exists")
+        return fresh
+
+    def resize(self, node_id: str, amount: int, by: str | None = None) -> BudgetNode:
+        node = self.get(node_id)
+        if node is None:
+            raise BudgetAllocationError("no such budget", "missing")
+        delta = amount - node.amount
+        if delta == 0:
+            return node
+        if delta > 0 and node.parent_id is not None:  # take it from the parent first
+            if not self._inc(node.parent_id, {"unallocated": {"$gte": delta}}, {"unallocated": -delta}):
+                raise BudgetAllocationError("the parent does not have that much left to allocate", "over_parent")
+        # the node itself: only if nobody changed it meanwhile, and (when shrinking) nothing used is cut
+        guard: dict[str, Any] = {"amount": node.amount}
+        if delta < 0:
+            guard.update(remaining={"$gte": -delta}, unallocated={"$gte": -delta})
+        with _mongo_errors():
+            doc = self._nodes.find_one_and_update(
+                {"_id": node_id, **guard},
+                {"$inc": {"amount": delta, "remaining": delta, "unallocated": delta},
+                 "$set": {"updated_by": by, "updated_at": _now()}},
+                return_document=True,
+            )
+        if doc is None:
+            if delta > 0 and node.parent_id is not None:
+                self._inc(node.parent_id, {}, {"unallocated": delta})
+            raise BudgetAllocationError("the budget cannot go below what is spent or handed on", "below_used")
+        if delta < 0 and node.parent_id is not None:
+            self._inc(node.parent_id, {}, {"unallocated": -delta})
+        return self._out(doc)  # type: ignore[return-value]
+
+    def update_settings(self, node_id, *, hard_limit=None, thresholds=None, period=None, by=None):
+        node = self.get(node_id)
+        if node is None:
+            return None
+        data = node.model_dump()
+        if hard_limit is not None:
+            data["hard_limit"] = hard_limit
+        if thresholds is not None:
+            data["thresholds"] = thresholds
+        if period is not None:
+            data["period"] = period
+            data["period_start"] = period_start_for(period, _now())
+        checked = BudgetNode.model_validate({**data, "updated_by": by, "updated_at": _now()})
+        changes = {k: getattr(checked, k) for k in ("hard_limit", "thresholds", "period", "period_start", "updated_by", "updated_at")}
+        with _mongo_errors():
+            doc = self._nodes.find_one_and_update({"_id": node_id}, {"$set": changes}, return_document=True)
+        return self._out(doc)
+
+    def delete(self, node_id: str) -> None:
+        node = self.get(node_id)
+        if node is None:
+            raise BudgetAllocationError("no such budget", "missing")
+        with _mongo_errors():
+            if self._nodes.count_documents({"parent_id": node_id}, limit=1):
+                raise BudgetAllocationError("remove the budgets allocated from this one first", "has_children")
+            self._nodes.delete_one({"_id": node_id})
+        if node.parent_id is not None:
+            self._inc(node.parent_id, {}, {"unallocated": node.amount})
+
+    def reserve(self, node_ids: list[str], estimate: int) -> Reservation:
+        taken: list[str] = []
+        for nid in node_ids:
+            # a hard node needs the credit; a soft node is charged regardless
+            flt = {"$or": [{"hard_limit": False}, {"remaining": {"$gte": estimate}}]}
+            if self._inc(nid, flt, {"remaining": -estimate}):
+                taken.append(nid)
+                continue
+            node = self.get(nid)
+            if node is None:
+                continue  # no budget at this level
+            for t in taken:
+                self._inc(t, {}, {"remaining": estimate})
+            raise BudgetBlock(nid, node.remaining, estimate)
+        return Reservation(id=uuid.uuid4().hex, estimate=estimate, nodes=taken)
+
+    def settle(self, reservation: Reservation, actual: int) -> None:
+        for nid in reservation.nodes:
+            self._inc(nid, {}, {"remaining": reservation.estimate - actual})
+
+    def release(self, reservation: Reservation) -> None:
+        self.settle(reservation, 0)
+
+    def reset_if_due(self, node_id: str, now: datetime) -> bool:
+        node = self.get(node_id)
+        if node is None:
+            return False
+        start = _due(node, now)
+        if start is None:
+            return False
+        with _mongo_errors():  # the old period_start in the filter lets only one racer win
+            done = self._nodes.find_one_and_update(
+                {"_id": node_id, "period_start": node.period_start},
+                {"$set": {"period_start": start, "remaining": node.amount, "notified": []}},
+            )
+        return done is not None
+
+    def mark_notified(self, node_id: str, threshold: int) -> bool:
+        with _mongo_errors():
+            done = self._nodes.find_one_and_update(
+                {"_id": node_id, "notified": {"$ne": threshold}}, {"$addToSet": {"notified": threshold}}
+            )
+        return done is not None
+
+
+class InMemoryLedgerStore:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._entries: list[LedgerEntry] = []
+
+    def append(self, entry: LedgerEntry) -> None:
+        with self._lock:
+            self._entries.append(entry.model_copy(deep=True))
+
+    def list(self, *, user_id=None, team_id=None, project_id=None, since=None, limit=100) -> list[LedgerEntry]:
+        with self._lock:
+            found = [
+                e.model_copy(deep=True) for e in self._entries
+                if (user_id is None or e.user_id == user_id) and (team_id is None or e.team_id == team_id)
+                and (project_id is None or e.project_id == project_id) and (since is None or e.at >= since)
+            ]
+        found.sort(key=lambda e: e.at, reverse=True)
+        return found[: max(limit, 0)]
+
+
+class MongoLedgerStore:
+    """`usage_ledger`: insert-only."""
+
+    def __init__(self, db: "Database"):
+        self._log = db["usage_ledger"]
+        with _mongo_errors():
+            self._log.create_index([("user_id", 1), ("at", -1)])
+            self._log.create_index([("team_id", 1), ("at", -1)])
+
+    def append(self, entry: LedgerEntry) -> None:
+        body = entry.model_dump()
+        body["_id"] = body.pop("id")
+        with _mongo_errors():
+            self._log.insert_one(body)
+
+    def list(self, *, user_id=None, team_id=None, project_id=None, since=None, limit=100) -> list[LedgerEntry]:
+        if limit <= 0:  # MongoDB reads limit(0) as "no limit"
+            return []
+        query: dict[str, Any] = {}
+        for key, value in (("user_id", user_id), ("team_id", team_id), ("project_id", project_id)):
+            if value is not None:
+                query[key] = value
+        if since is not None:
+            query["at"] = {"$gte": since}
+        with _mongo_errors():
+            docs = list(self._log.find(query).sort("at", -1).limit(max(limit, 0)))
+        out = []
+        for d in docs:
+            d["id"] = d.pop("_id")
+            out.append(LedgerEntry.model_validate(d))
+        return out
+
+
+def make_budget_store() -> BudgetStore:
+    if MONGODB_URI:
+        return MongoBudgetStore(mongo_database(MONGODB_URI, MONGODB_DB))
+    return InMemoryBudgetStore()
+
+
+def make_ledger_store() -> LedgerStore:
+    if MONGODB_URI:
+        return MongoLedgerStore(mongo_database(MONGODB_URI, MONGODB_DB))
+    return InMemoryLedgerStore()
 
 
 def make_team_store() -> TeamStore:
