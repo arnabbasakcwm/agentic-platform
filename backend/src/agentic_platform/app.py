@@ -121,6 +121,7 @@ from .policy import (
     actor_for,
     any_access,
     can,
+    OWNER_RANK,
     has_full_rank,
     list_visible_projects,
     may_share,
@@ -139,6 +140,7 @@ from .stores import (
     McpServer,
     McpTool,
     ProjectRecord,
+    GRANT_LEVELS,
     WHOLE_PROJECT,
     AgentGrant,
     level_rank,
@@ -405,6 +407,7 @@ def _project_body(project: ProjectRecord, can_manage: bool = True) -> dict[str, 
     # view-only GET passes False.
     return {
         "can_manage": can_manage,
+        "access_level": "owner" if can_manage else None,  # get_project fills in the real one
         "project_id": project.id,
         "name": project.display_name,
         "named": project.name is not None,
@@ -459,6 +462,22 @@ def _get_project(project_id: str, user: UserRecord, action: str = "project.manag
     missing one (404), so ids can't be probed for existence."""
     project = _store.get(project_id)
     if project is None or not can(_actor(user), action, project):
+        raise ProjectNotFoundError(project_id)
+    return project
+
+
+def _project_at(project_id: str, user: UserRecord, level: str, agent_id: str | None = None) -> ProjectRecord:
+    """Load a project the caller holds at least `level` on (view < use < edit < manage): their
+    own, one their team or admin role reaches, or one shared with them. `agent_id` asks about
+    one agent (a grant on that agent or on the whole project counts); None about the whole
+    project. Not enough access reads exactly like a missing project (404)."""
+    actor = _actor(user)
+    project = _store.get(project_id)
+    grants = _grants.list_for_project(project_id) if project is not None else []
+    if project is None or not any_access(actor, project, grants):
+        raise ProjectNotFoundError(project_id)
+    # Seeing a project needs only some access to it (even one agent); anything more needs the rank.
+    if level != "view" and access_rank(actor, project, agent_id, grants) < level_rank(level):
         raise ProjectNotFoundError(project_id)
     return project
 
@@ -803,9 +822,12 @@ class _RunRecorder:
 
 
 def _new_run(project: ProjectRecord, *, kind: str, mode: str, task_input: dict[str, Any],
-             agent_id: str | None = None, plan_version: int | None = None) -> RunRecord:
+             agent_id: str | None = None, plan_version: int | None = None,
+             started_by: str | None = None) -> RunRecord:
     run = RunRecord(
         id=uuid.uuid4().hex, tenant_id=project.tenant_id, project_id=project.id, kind=kind, mode=mode,
+        # the owner's own runs stay None, as before sharing existed
+        started_by=started_by if started_by and started_by != project.tenant_id else None,
         agent_id=agent_id, plan_version=plan_version if plan_version is not None else project.plan_version,
         input=task_input, timeout_s=max(project.plan.bounds.timeout_s, RunBounds().timeout_s),
     )
@@ -852,7 +874,7 @@ def _recorded_events(project: ProjectRecord, events: Any, collector: UsageCollec
             d = terminal[1]
             recorder.finish(error={"error_type": d.get("error_type"), "message": d.get("message")},
                             usage=d.get("usage"))
-        _record_usage(project.tenant_id, project.id, collector.entries(), run_id=recorder.run.id)
+        _record_usage(recorder.run.started_by or project.tenant_id, project.id, collector.entries(), run_id=recorder.run.id)
 
 
 def _agent_run(project: ProjectRecord, agent_id: str, task_input: dict[str, Any],
@@ -868,7 +890,7 @@ def _agent_run(project: ProjectRecord, agent_id: str, task_input: dict[str, Any]
     except Exception as e:  # e.g. a knowledge or MCP context that can't be set up
         recorder.finish(error={"error_type": type(e).__name__, "message": str(e) or "the agent failed"},
                         usage=usage_mod.summarize(collector.entries()))
-        _record_usage(project.tenant_id, project.id, collector.entries(), run_id=recorder.run.id)
+        _record_usage(recorder.run.started_by or project.tenant_id, project.id, collector.entries(), run_id=recorder.run.id)
         raise
     completed: dict[str, Any] | None = None
     failed: dict[str, Any] = {}
@@ -924,10 +946,16 @@ def _in_background(target: Callable[[], Any], name: str) -> None:
     threading.Thread(target=work, daemon=True, name=name).start()
 
 
+def _may_see_run(actor: Actor, project: ProjectRecord, run: RunRecord) -> bool:
+    """The owner (and Super Admin / the team's group admin) see every run of the project; anyone
+    it is shared with sees only the runs they started."""
+    return has_full_rank(actor, project) or run.started_by == actor.user_id
+
+
 def _get_run(project_id: str, run_id: str, user: UserRecord) -> RunRecord:
-    project = _get_project(project_id, user)
+    project = _project_at(project_id, user, "use")
     run = _runs.get(project.tenant_id, project_id, run_id)
-    if run is None:
+    if run is None or not _may_see_run(_actor(user), project, run):
         raise RunNotFoundError(run_id)
     return run.effective()
 
@@ -947,13 +975,14 @@ class StartRunRequest(BaseModel):
 def start_run(project_id: str, req: StartRunRequest, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
     """Start a run in the background and save it as it happens. Returns at once; follow it
     with GET …/runs/{id}/stream (or poll GET …/runs/{id}). It keeps running if you leave."""
-    project = _get_project(project_id, user)
+    project = _project_at(project_id, user, "use", req.agent_id if req.mode == "agent" else None)
     if req.mode == "agent":
         if not any(a.id == req.agent_id for a in project.plan.agents):
             return JSONResponse(status_code=404, content={
                 "error_type": "AgentNotFound", "message": f"agent '{req.agent_id}' not in project '{project_id}'",
                 "details": None})
-        run = _new_run(project, kind="local", mode="agent", task_input=req.input, agent_id=req.agent_id)
+        run = _new_run(project, kind="local", mode="agent", task_input=req.input, agent_id=req.agent_id,
+                       started_by=user.id)
         recorder = _RunRecorder(run)
         _in_background(lambda: _agent_run(project, req.agent_id, req.input, req.upstream_outputs,
                                           UsageCollector(), recorder), f"agent-run-{run.id}")
@@ -961,7 +990,7 @@ def start_run(project_id: str, req: StartRunRequest, user: UserRecord = Depends(
     if not project.is_compiled:
         raise NotCompiledError(project_id)
     graph = _compiled_graph(project)  # compile errors are this request's errors
-    run = _new_run(project, kind="local", mode="graph", task_input=req.input)
+    run = _new_run(project, kind="local", mode="graph", task_input=req.input, started_by=user.id)
     recorder = _RunRecorder(run)
 
     def drive() -> None:
@@ -977,8 +1006,9 @@ def list_runs(
     project_id: str, kind: Literal["local", "deployed"] = "local", user: UserRecord = Depends(current_user)
 ) -> dict[str, Any]:
     """The project's last saved runs of one kind (local or deployed), newest first."""
-    project = _get_project(project_id, user)
-    return {"runs": [r.summary() for r in _runs.list(project.tenant_id, project_id, kind)]}
+    project = _project_at(project_id, user, "use")
+    actor = _actor(user)
+    return {"runs": [r.summary() for r in _runs.list(project.tenant_id, project_id, kind) if _may_see_run(actor, project, r)]}
 
 
 @app.get("/projects/{project_id}/runs/{run_id}")
@@ -998,7 +1028,7 @@ def export_run(
     """One agent's output (`agent_id`), or every finished agent's, as a Word, PDF or CSV
     file with its sources. Owner-only like the run itself: someone else's project or run
     is a 404."""
-    project = _get_project(project_id, user)
+    project = _project_at(project_id, user, "use")
     run = _get_run(project_id, run_id, user)
     doc = export_mod.build_export(project, run, agent_id)
     data = export_mod.render(doc, format)
@@ -1018,7 +1048,7 @@ def email_run(
     (sources included), and optionally the output in the body. Owner-only; at most 10
     recipients and 20 MB of attachments; rate-limited per user. A sending failure is
     logged here and reported to the client without the server's details."""
-    project = _get_project(project_id, user)
+    project = _project_at(project_id, user, "use")
     run = _get_run(project_id, run_id, user)
     config = mailer.mail_config()
     if config is None:
@@ -1086,7 +1116,7 @@ def stop_run(project_id: str, run_id: str, user: UserRecord = Depends(current_us
         return {"run": _run_body(run)}
     if run.kind == "deployed":
         raise RunNotStoppableError(run_id)
-    _runs.update(_get_project(project_id, user).tenant_id, run_id, stop_requested=True)
+    _runs.update(_project_at(project_id, user, "use").tenant_id, run_id, stop_requested=True)
     flag = _STOP_FLAGS.get(run_id)
     if flag is not None:  # running in this process: stop at once rather than at the next poll
         flag.set()
@@ -1943,6 +1973,12 @@ def _shareable_project(project_id: str, user: UserRecord) -> tuple[Actor, Projec
     return actor, project, grants
 
 
+def _level_name(rank: int) -> str | None:
+    if rank >= OWNER_RANK:
+        return "owner"
+    return GRANT_LEVELS[rank - 1] if 1 <= rank <= len(GRANT_LEVELS) else None
+
+
 def _grant_body(g: AgentGrant) -> dict[str, Any]:
     return g.model_dump()
 
@@ -2595,6 +2631,7 @@ def list_projects(scope: str | None = None, user: UserRecord = Depends(current_u
     for its full plan. The Super Admin can pass `scope=all` to list every project; for
     anyone else the parameter changes nothing."""
     actor = _actor(user)
+    reaching = _grants.list_for_grantee(actor.user_id, list(actor.team_roles))
     return {
         "projects": [
             {
@@ -2610,19 +2647,27 @@ def list_projects(scope: str | None = None, user: UserRecord = Depends(current_u
                 "mine": p.tenant_id == user.id,
                 "team_id": p.team_id,
                 "team_access": p.team_access,
+                "access_level": _level_name(access_rank(actor, p, None, reaching)),
             }
-            for p in list_visible_projects(_store, actor, everything=scope == "all")
+            for p in list_visible_projects(_store, actor, everything=scope == "all", grants=reaching)
         ]
     }
 
 
 @app.get("/projects/{project_id}")
 def get_project(project_id: str, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
-    project = _get_project(project_id, user, "project.view")
-    manage = can(_actor(user), "project.manage", project)
+    actor = _actor(user)
+    project = _project_at(project_id, user, "view")
+    grants = _grants.list_for_project(project_id)
+    manage = has_full_rank(actor, project)
     body = _project_body(project, manage)
-    if not manage:  # a view-only member sees the brief and plan, not the owner's chat or resources
+    body["access_level"] = _level_name(access_rank(actor, project, None, grants))
+    if not manage:  # a viewer or grantee sees the plan, not the owner's chat or resources
         body.update(conversation=[], knowledge=None, data_sources=None, mcp=None, deployment=None)
+        if access_rank(actor, project, None, grants) == 0:
+            # shared agent by agent: only those agents' configuration, nothing of the brief or the rest
+            mine = [a for a in project.plan.agents if access_rank(actor, project, a.id, grants) > 0]
+            body.update(plan={"agents": [a.model_dump() for a in mine]}, brief="", restricted=True)
     return body
 
 
@@ -2737,7 +2782,7 @@ def edit_plan(
     project_id: str, plan: AgentPlan, user: UserRecord = Depends(current_user)
 ) -> dict[str, Any]:
     # AgentPlan validators run on parse, so an invalid edit is rejected before it lands.
-    _get_project(project_id, user)
+    _project_at(project_id, user, "edit")
     # The edit bumps plan_version, which is what invalidates the compiled graph — in this
     # process and in any other one serving the same project.
     updated = _store.update_plan(project_id, plan)
@@ -2827,7 +2872,7 @@ def revise_project(
 
 @app.post("/projects/{project_id}/compile")
 def compile_project(project_id: str, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
-    project = _get_project(project_id, user)
+    project = _project_at(project_id, user, "edit")
     _compiled_graph(project)
     _store.mark_compiled(project_id, project.plan_version)
     return {"project_id": project_id, "status": "compiled"}
@@ -2837,12 +2882,12 @@ def compile_project(project_id: str, user: UserRecord = Depends(current_user)) -
 def run_project(
     project_id: str, req: RunRequest, user: UserRecord = Depends(current_user)
 ) -> dict[str, Any]:
-    project = _get_project(project_id, user)
+    project = _project_at(project_id, user, "use")
     if not project.is_compiled:
         raise NotCompiledError(project_id)
     collector = UsageCollector()
     graph = _compiled_graph(project)
-    recorder = _RunRecorder(_new_run(project, kind="local", mode="graph", task_input=req.input))
+    recorder = _RunRecorder(_new_run(project, kind="local", mode="graph", task_input=req.input, started_by=user.id))
     try:
         result = run_graph(graph, req.input, project.plan.bounds, collector)
     except TimeoutError:
@@ -2876,12 +2921,12 @@ def run_project_stream(
     outputs/errors/halted as /run) or run_failed (e.g. RunTimeout). Errors before the run
     starts (not compiled, not found) are ordinary JSON error responses.
     """
-    project = _get_project(project_id, user)
+    project = _project_at(project_id, user, "use")
     if not project.is_compiled:
         raise NotCompiledError(project_id)
     graph = _compiled_graph(project)
 
-    recorder = _RunRecorder(_new_run(project, kind="local", mode="graph", task_input=req.input))
+    recorder = _RunRecorder(_new_run(project, kind="local", mode="graph", task_input=req.input, started_by=user.id))
 
     def stream():
         # Saved as it streams; a client disconnect still records usage so far (and the run
@@ -2903,7 +2948,7 @@ def invoke_agent(
     req: AgentInvokeRequest,
     user: UserRecord = Depends(current_user),
 ) -> dict[str, Any]:
-    project = _get_project(project_id, user)
+    project = _project_at(project_id, user, "use", agent_id)
     if not any(a.id == agent_id for a in project.plan.agents):
         return JSONResponse(
             status_code=404,
@@ -2911,7 +2956,8 @@ def invoke_agent(
                      "details": None},
         )
     collector = UsageCollector()
-    recorder = _RunRecorder(_new_run(project, kind="local", mode="agent", task_input=req.input, agent_id=agent_id))
+    recorder = _RunRecorder(_new_run(project, kind="local", mode="agent", task_input=req.input, agent_id=agent_id,
+                                     started_by=user.id))
     result = _agent_run(project, agent_id, req.input, req.upstream_outputs, collector, recorder)
     return {
         "project_id": project_id,

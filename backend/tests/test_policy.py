@@ -172,3 +172,46 @@ def test_a_default_team_member_cannot_see_another_users_pre_existing_project(sto
     assert can(as_actor(master), "project.view", stored)
     assert visible_projects(projects.list_all(), as_actor(bob)) == []
     assert [p.id for p in visible_projects(projects.list_all(), as_actor(ann))] == [old.id]
+
+
+# ------------------------------------------------------------------- access rank (sharing)
+def _grant(project, gtype, gid, level, agent="*"):
+    from agentic_platform.stores import AgentGrant
+
+    return AgentGrant(id=AgentGrant.make_id(project.id, agent, gtype, gid), project_id=project.id, agent_id=agent,
+                      grantee_type=gtype, grantee_id=gid, level=level, granted_by="owner")
+
+
+def test_access_rank_owner_admin_grants_and_team_view():
+    from agentic_platform.policy import OWNER_RANK, access_rank, any_access, may_share
+    from agentic_platform.stores import level_rank
+
+    p = project("owner", "A", True)
+    private = project("owner", "A", False)
+    assert access_rank(OWNER, p, None, []) == OWNER_RANK
+    assert access_rank(SUPER, private, None, []) == OWNER_RANK
+    assert access_rank(GA_A, p, None, []) == OWNER_RANK and access_rank(GA_A, private, None, []) == 0
+    assert access_rank(MEM_A, p, None, []) == level_rank("view")  # team members of a shared project
+    assert access_rank(MEM_A, private, None, []) == 0 and access_rank(MEM_B, p, None, []) == 0
+    assert access_rank(None, p, None, []) == 0 and access_rank(OWNER, None, None, []) == 0
+
+    g_user = _grant(private, "user", "ma", "edit")
+    g_team = _grant(private, "team", "A", "use")
+    g_agent = _grant(private, "user", "mb", "manage", agent="x")
+    assert access_rank(MEM_A, private, None, [g_user, g_team]) == level_rank("edit")  # highest wins
+    assert access_rank(MEM_A, private, None, [g_team]) == level_rank("use")
+    assert access_rank(GA_A, private, None, [g_team]) == level_rank("use")  # via team A membership
+    assert access_rank(MEM_B, private, "x", [g_agent]) == level_rank("manage")
+    assert access_rank(MEM_B, private, "y", [g_agent]) == 0  # another agent
+    assert access_rank(MEM_B, private, None, [g_agent]) == 0  # not the whole project...
+    assert any_access(MEM_B, private, [g_agent]) is True  # ...but they can see that it exists
+    assert not any_access(MEM_B, private, [g_user, g_team])
+    # a grant on a different project never counts
+    other = project("owner", "A", False)
+    assert access_rank(MEM_A, other, None, [g_user, g_team]) == 0
+
+    assert may_share(OWNER, private, "*", "manage", []) and may_share(SUPER, private, "x", "view", [])
+    assert not may_share(MEM_A, private, "*", "view", [g_user])  # edit is below manage
+    manage = _grant(private, "user", "ma", "manage")
+    assert may_share(MEM_A, private, "*", "manage", [manage]) and may_share(MEM_A, private, "*", "use", [manage])
+    assert not may_share(MEM_A, private, "*", "not-a-level", [manage])

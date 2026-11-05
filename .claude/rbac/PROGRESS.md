@@ -1,6 +1,6 @@
 # RBAC Delegation — Progress
 STATUS: IN_PROGRESS
-Iteration: 13
+Iteration: 14
 Branch: feat/rbac-delegation
 Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint configured).
 
@@ -25,7 +25,7 @@ Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint con
 ## Phase 3 — Agent Sharing
 - [x] P3.1 `AgentGrant` (levels view<use<edit<manage, cumulative; agent_id or '*'), `AgentGrantStore` memory+Mongo, 12 contract tests
 - [x] P3.2 share/list/revoke APIs (`PUT|GET /projects/{id}/grants`, `DELETE .../grants/{gid}`): needs manage, level ceiling, grantee must be in sharer's scope (else one 404), manage-grantees touch only their own grants, audit entries, cleanup on project/team delete; `policy.access_rank/may_share/sharing_teams`; 14 tests
-- [ ] P3.3 Access resolution (owner ∪ user grants ∪ team grants) for run + read paths
+- [x] P3.3 access resolution: `policy.access_rank/any_access` (owner ∪ user grants ∪ team grants ∪ team view), `_project_at(level)` on run/read/compile/plan-edit routes; shared projects listed with access_level; runs carry started_by and runners see/stop only their own runs and pay for them; agent-level shares redact brief and other agents; 12 tests (D11/D12)
 - [ ] P3.4 Revocation effective on next model call for live sessions
 
 ## Phase 4 — Model Privileges
@@ -68,3 +68,4 @@ Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint con
 - Iter 11: P2.5 done; Phase 2 complete. Next: P3.1 agent grants.
 - Iter 12: P3.1 done.
 - Iter 13: P3.2 done.
+- Iter 14: P3.3 done.

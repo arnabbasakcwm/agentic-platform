@@ -239,6 +239,10 @@ class ProjectStore(Protocol):
         ...
 
 
+    def get_many(self, project_ids: list[str]) -> list[ProjectRecord]:
+        """The projects that exist among these ids, in one query."""
+        ...
+
     def list_all(self) -> list[ProjectRecord]:
         """Every project of every tenant. For platform jobs (backfill) and scoped queries
         built on top of it; never returned to a caller without a scope check."""
@@ -372,6 +376,9 @@ class InMemoryProjectStore:
         record.updated_at = _now()
         return record.model_copy(deep=True)
 
+
+    def get_many(self, project_ids: list[str]) -> list[ProjectRecord]:
+        return [self._records[i].model_copy(deep=True) for i in dict.fromkeys(project_ids) if i in self._records]
 
     def list_all(self) -> list[ProjectRecord]:
         return [r.model_copy(deep=True) for r in self._records.values()]
@@ -574,6 +581,13 @@ class MongoProjectStore:
             )
         return self._from_doc(doc) if doc else None
 
+
+    def get_many(self, project_ids: list[str]) -> list[ProjectRecord]:
+        if not project_ids:
+            return []
+        with _mongo_errors():
+            docs = list(self._projects.find({"_id": {"$in": list(dict.fromkeys(project_ids))}}))
+        return [self._from_doc(doc) for doc in docs]
 
     def list_all(self) -> list[ProjectRecord]:
         with _mongo_errors():
@@ -1454,6 +1468,10 @@ class RunRecord(BaseModel):
     usage: dict[str, Any] | None = None
     timeout_s: float = 300
     stop_requested: bool = False  # the user pressed Stop; the process running it ends it
+    # Who started it. Runs are stored under the project owner, but a shared project can be run by
+    # others: they see only their own runs, and their own usage and limits apply. None = the
+    # owner (and every run saved before sharing existed).
+    started_by: str | None = None
     started_at: datetime = Field(default_factory=_now)
     finished_at: datetime | None = None
     updated_at: datetime = Field(default_factory=_now)

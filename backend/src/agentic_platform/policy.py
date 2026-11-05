@@ -102,7 +102,9 @@ def visible_projects(projects: list[ProjectRecord], actor: Actor) -> list[Projec
     return [p for p in projects if scope.includes_project(p)]
 
 
-def list_visible_projects(store: ProjectStore, actor: Actor, *, everything: bool = False) -> list[ProjectRecord]:
+def list_visible_projects(
+    store: ProjectStore, actor: Actor, *, everything: bool = False, grants: list[AgentGrant] | None = None
+) -> list[ProjectRecord]:
     """The projects an actor may list, newest first: their own, plus those their teams
     share. `everything=True` (honoured for the Super Admin only) adds every project.
     Two indexed queries, never one per row; the scope filter runs again on the result as a
@@ -111,9 +113,14 @@ def list_visible_projects(store: ProjectStore, actor: Actor, *, everything: bool
         found = store.list_all()
     else:
         found = store.list_for_tenant(actor.user_id) + store.list_for_teams(list(actor.team_roles))
+    # Projects shared with the actor (or with one of their teams): `grants` are the grants that
+    # reach them. One more query for all of them, never one per grant.
+    shared = {g.project_id for g in grants or [] if _grant_reaches(actor, g)}
+    if shared:
+        found = found + store.get_many(sorted(shared))
     unique = {p.id: p for p in found}
     scope = scope_for(actor)
-    visible = [p for p in unique.values() if scope.includes_project(p)]
+    visible = [p for p in unique.values() if scope.includes_project(p) or p.id in shared]
     visible.sort(key=lambda p: p.updated_at, reverse=True)
     return visible
 

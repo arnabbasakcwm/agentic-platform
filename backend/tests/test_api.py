@@ -197,6 +197,7 @@ def test_list_projects_is_newest_first_and_summarised(monkeypatch):
             "mine": True,
             "team_id": None,
             "team_access": False,
+            "access_level": "owner",
     }
     assert projects[1]["compiled"] is False
     assert "plan" not in projects[0]
