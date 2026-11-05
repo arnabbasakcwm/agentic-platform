@@ -68,6 +68,7 @@ from .errors import (
     MasterAdminLockedError,
     MasterAdminRequiredError,
     NotATeamMemberError,
+    BudgetError,
     ShareError,
     TeamNotFoundError,
     TeamProtectedError,
@@ -117,8 +118,10 @@ from .graph_builder import (
 )
 from .meta_planner_prompt import discuss_brief, plan_project, revise_plan
 from . import audit as audit_log
+from . import budget_policy as bpol
 from . import model_policy as mpol
 from .model_gateway import CallContext, CallIdentity, Redirect, check_identity, gateway as model_gateway
+from .stores import period_start_for
 from .policy import (
     Actor,
     access_rank,
@@ -146,8 +149,11 @@ from .stores import (
     ProjectRecord,
     GRANT_LEVELS,
     WHOLE_PROJECT,
+    BUDGET_PERIODS,
     AgentFallback,
     AgentGrant,
+    BudgetAllocationError,
+    BudgetNode,
     ModelAllowlist,
     OrgModelSettings,
     level_rank,
@@ -163,6 +169,8 @@ from .stores import (
     brief_title,
     make_run_store,
     make_audit_store,
+    make_budget_store,
+    make_ledger_store,
     make_grant_store,
     make_model_policy_store,
     make_team_store,
@@ -213,6 +221,8 @@ _teams = make_team_store()
 _audit = make_audit_store()
 _grants = make_grant_store()
 _models = make_model_policy_store()
+_budgets = make_budget_store()
+_ledger = make_ledger_store()
 logger = logging.getLogger(__name__)
 
 try:  # existing installations move onto teams once; idempotent and never blocks start-up
@@ -1984,6 +1994,185 @@ def admin_user_usage(
     }
     projects = [{"project_id": pid, "name": name} for pid, name in names.items()]
     return {"user": user, "projects": projects, **body}
+
+
+# --------------------------------------------------------------------------------- budgets
+_ALLOCATION_ERRORS = {
+    "over_parent": (409, "BudgetExceedsParent"),
+    "below_used": (409, "BudgetBelowUsed"),
+    "has_children": (409, "BudgetHasChildren"),
+    "exists": (409, "BudgetExists"),
+    "no_parent": (422, "BudgetParentMissing"),
+    "missing": (404, "NotFound"),
+}
+
+
+class BudgetRequest(BaseModel):
+    amount: int = Field(ge=0, le=10**15)  # micro-USD per period (1 USD = 1,000,000)
+    parent: str | None = None  # whose budget it is allocated from; fixed once created
+    period: Literal["monthly", "weekly", "one_time"] | None = None
+    hard_limit: bool | None = None
+    thresholds: list[int] | None = Field(default=None, max_length=10)
+
+    @field_validator("thresholds")
+    @classmethod
+    def _percentages(cls, v: list[int] | None) -> list[int] | None:
+        if v is not None and any(t < 1 or t > 1000 for t in v):
+            raise ValueError("thresholds are percentages between 1 and 1000")
+        return v
+
+
+def _budget_body(n: BudgetNode) -> dict[str, Any]:
+    return {
+        "id": n.id, "scope_type": n.scope_type, "scope_id": n.scope_id, "parent_id": n.parent_id,
+        "amount": n.amount, "remaining": n.remaining, "spent": n.spent, "unallocated": n.unallocated,
+        "percent_used": round(100 * n.spent / n.amount, 1) if n.amount else (100.0 if n.spent > 0 else 0.0),
+        "period": n.period, "period_start": n.period_start, "hard_limit": n.hard_limit,
+        "thresholds": n.thresholds, "updated_by": n.updated_by, "updated_at": n.updated_at,
+    }
+
+
+def _budget_team(n: BudgetNode) -> str | None:
+    """The team an entry about this budget belongs to in the audit log."""
+    if n.scope_type == "team":
+        return n.scope_id
+    parent = _budgets.get(n.parent_id) if n.parent_id else None
+    return parent.scope_id if parent is not None and parent.scope_type == "team" else None
+
+
+def _check_budget_target(scope_type: str, scope_id: str) -> None:
+    """The thing a budget is for must exist (a Sub Admin pool only for a Sub Admin)."""
+    if scope_type == "org":
+        ok = scope_id == "org"
+    elif scope_type == "team":
+        ok = _teams.get_team(scope_id) is not None
+    else:
+        target = _users.get(scope_id)
+        ok = target is not None and (scope_type != "pool" or target.role == "admin")
+    if not ok:
+        raise TeamNotFoundError()
+
+
+def _choose_parent(actor: Actor, scope_type: str, req: BudgetRequest) -> str | None:
+    if scope_type == "org":
+        return None
+    if req.parent:
+        return req.parent
+    if scope_type == "pool":
+        return "org"
+    if actor.is_sub_admin:
+        return f"pool:{actor.user_id}"
+    if actor.is_master and scope_type == "team":
+        return "org"
+    raise BudgetError("say which budget to allocate from (parent)", status=422, error_type="BudgetParentRequired")
+
+
+@app.get("/budgets")
+def list_budgets(user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """The budgets you can see: the Super Admin all of them; a Sub Admin their pool and what hangs
+    off it; a Group Admin their team's and its members'; anyone their own."""
+    actor = _actor(user)
+    return {"budgets": [_budget_body(n) for n in _budgets.list_all() if bpol.may_see(actor, n, _budgets)]}
+
+
+@app.get("/me/budget")
+def my_budget(project_id: str | None = None, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """What limits you: the budgets a call of yours is charged to (yours, the project team's, and
+    those above them), tightest first - their remaining credit, never anyone else's use."""
+    team_id = _project_at(project_id, user, "view").team_id if project_id else None
+    nodes = [_budgets.get(i) for i in bpol.chain_ids(user.id, team_id, _budgets)]
+    chain = [n for n in nodes if n is not None]
+    return {
+        "chain": [
+            {"id": n.id, "scope_type": n.scope_type, "amount": n.amount, "remaining": n.remaining,
+             "period": n.period, "hard_limit": n.hard_limit}
+            for n in chain
+        ],
+        "tightest_remaining": min((n.remaining for n in chain if n.hard_limit), default=None),
+    }
+
+
+@app.put("/budgets/{scope_type}/{scope_id}")
+def put_budget(scope_type: str, scope_id: str, req: BudgetRequest, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """Create or change a budget. It is allocated from a parent you hold (Super Admin: any; Sub
+    Admin: their pool and below; Group Admin: their team's budget, to its members), the children of a
+    budget can never add up to more than it holds, and a budget cannot shrink below what is
+    spent or handed on. Anything you may not touch is a 404."""
+    actor = _actor(user)
+    if scope_type not in bpol.ALLOWED_CHILDREN:
+        raise TeamNotFoundError()
+    node_id = BudgetNode.make_id(scope_type, scope_id)
+    existing = _budgets.get(node_id)
+    parent_id = existing.parent_id if existing else _choose_parent(actor, scope_type, req)
+    if scope_type == "org":
+        allowed = actor.is_master
+    else:
+        parent = _budgets.get(parent_id) if parent_id else None
+        allowed = parent is not None and bpol.may_allocate_from(actor, parent, _budgets)
+        if allowed and scope_type not in bpol.ALLOWED_CHILDREN[parent.scope_type]:  # type: ignore[union-attr]
+            raise BudgetError(f"a {parent.scope_type} budget cannot contain a {scope_type} budget",  # type: ignore[union-attr]
+                              status=422, error_type="BudgetParentInvalid")
+        if allowed and actor.is_group_admin_only and not (  # a group admin splits their team among its members
+            scope_type == "user" and _teams.get_membership(parent.scope_id, scope_id) is not None  # type: ignore[union-attr]
+        ):
+            allowed = False
+    if not allowed:
+        raise TeamNotFoundError()
+    if existing is not None and req.parent and req.parent != existing.parent_id:
+        raise BudgetError("a budget stays under the parent it was allocated from; delete it and make a new one",
+                          error_type="BudgetParentFixed")
+    _check_budget_target(scope_type, scope_id)
+    try:
+        if existing is None:
+            node = BudgetNode(
+                id=node_id, scope_type=scope_type, scope_id=scope_id, parent_id=parent_id,  # type: ignore[arg-type]
+                amount=req.amount, period=req.period or "monthly", period_start=period_start_for(req.period or "monthly", datetime.now(timezone.utc)),
+                hard_limit=True if req.hard_limit is None else req.hard_limit,
+                thresholds=req.thresholds if req.thresholds is not None else [80, 100], updated_by=user.id,
+            )
+            saved = _budgets.create(node)
+            audit_log.record(
+                _audit, user.id, "budget.created", "budget", node_id, team_id=_budget_team(saved),
+                after={"amount": saved.amount, "parent": parent_id, "period": saved.period, "hard_limit": saved.hard_limit},
+            )
+            return {"budget": _budget_body(saved)}
+        before = existing
+        saved = _budgets.resize(node_id, req.amount, by=user.id) if req.amount != existing.amount else existing
+        if any(v is not None and v != getattr(existing, k) for k, v in
+               (("period", req.period), ("hard_limit", req.hard_limit), ("thresholds", req.thresholds))):
+            saved = _budgets.update_settings(
+                node_id, hard_limit=req.hard_limit, thresholds=req.thresholds, period=req.period, by=user.id) or saved
+    except BudgetAllocationError as e:
+        status, kind = _ALLOCATION_ERRORS.get(e.reason, (409, "BudgetError"))
+        raise BudgetError(str(e), status=status, error_type=kind) from None
+    changed = {k: (getattr(before, k), getattr(saved, k)) for k in ("amount", "period", "hard_limit", "thresholds")
+               if getattr(before, k) != getattr(saved, k)}
+    if changed:
+        audit_log.record(
+            _audit, user.id, "budget.changed", "budget", node_id, team_id=_budget_team(saved),
+            before={k: v[0] for k, v in changed.items()}, after={k: v[1] for k, v in changed.items()},
+        )
+    return {"budget": _budget_body(saved)}
+
+
+@app.delete("/budgets/{scope_type}/{scope_id}")
+def delete_budget(scope_type: str, scope_id: str, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """Remove a budget and give its amount back to the parent (who holds the parent may do it)."""
+    actor = _actor(user)
+    node = _budgets.get(BudgetNode.make_id(scope_type, scope_id)) if scope_type in bpol.ALLOWED_CHILDREN else None
+    parent = _budgets.get(node.parent_id) if node is not None and node.parent_id else None
+    if node is None or parent is None or not bpol.may_allocate_from(actor, parent, _budgets):
+        raise TeamNotFoundError()  # the org budget has no parent: it is never deleted through the API
+    try:
+        _budgets.delete(node.id)
+    except BudgetAllocationError as e:
+        status, kind = _ALLOCATION_ERRORS.get(e.reason, (409, "BudgetError"))
+        raise BudgetError(str(e), status=status, error_type=kind) from None
+    audit_log.record(
+        _audit, user.id, "budget.deleted", "budget", node.id, team_id=_budget_team(node),
+        before={"amount": node.amount, "parent": node.parent_id}, after=None,
+    )
+    return {"deleted": node.id}
 
 
 # ------------------------------------------------------------------------ model privileges
@@ -4026,6 +4215,11 @@ def _handle_master_required(_req: Request, exc: MasterAdminRequiredError):
 @app.exception_handler(TeamNotFoundError)
 def _handle_team_not_found(_req: Request, exc: TeamNotFoundError):
     return _error_response(404, "NotFound", str(exc))
+
+
+@app.exception_handler(BudgetError)
+def _handle_budget(_req: Request, exc: BudgetError):
+    return _error_response(exc.status, exc.error_type, str(exc))
 
 
 @app.exception_handler(ShareError)

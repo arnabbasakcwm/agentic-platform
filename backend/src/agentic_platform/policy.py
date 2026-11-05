@@ -61,6 +61,11 @@ class Actor:
         return team_id is not None and self.team_roles.get(team_id) == "group_admin"
 
     @property
+    def is_group_admin_only(self) -> bool:
+        """A group admin with no org-level admin role: their powers come from their teams alone."""
+        return not (self.is_master or self.is_sub_admin) and bool(self.admined_teams)
+
+    @property
     def admined_teams(self) -> frozenset[str]:
         return frozenset(t for t, r in self.team_roles.items() if r == "group_admin")
 

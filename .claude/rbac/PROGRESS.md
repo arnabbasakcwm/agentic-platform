@@ -1,6 +1,6 @@
 # RBAC Delegation — Progress
 STATUS: IN_PROGRESS
-Iteration: 19
+Iteration: 20
 Branch: feat/rbac-delegation
 Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint configured).
 
@@ -35,7 +35,7 @@ Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint con
 
 ## Phase 5 — Budgets
 - [x] P5.1 budget tree + ledger stores: `BudgetNode` (integer micro-USD, org>pool>team>user, remaining/unallocated counters, period, hard/soft, thresholds), `BudgetStore` with single-document conditional atomic reserve/settle/release/resize/create/delete/reset/mark_notified (+ compensation across levels), append-only `LedgerStore`; 40 tests incl. parallel last-credit on memory and Mongo
-- [ ] P5.2 Allocation APIs; reject child sum > parent; no-escalation
+- [x] P5.2 budget allocation APIs: `PUT|DELETE /budgets/{scope}/{id}`, `GET /budgets`, `GET /me/budget`; allocate only from a parent you hold (Super Admin any, Sub Admin own pool+below, Group Admin own team to its members), children never exceed parent (atomic), no shrink below spent/handed-on, fixed parent, audited; `budget_policy`; 16 tests
 - [ ] P5.3 Pre-call check + post-call debit in gateway, atomic; concurrency test; ALSO the D3 rule: hard-limit budget + unpriced model -> MODEL_NOT_PERMITTED(reason=unpriced) unless an admin per-model override (test required); and gate embeddings
 - [ ] P5.4 Period reset (lazy) + soft-threshold events
 - [ ] P5.5 BUDGET_EXCEEDED graceful stop in agent runtime
@@ -74,3 +74,4 @@ Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint con
 - Iter 17: P4.2 done.
 - Iter 18: P4.3 done.
 - Iter 19: P5.1 done.
+- Iter 20: P5.2 done.

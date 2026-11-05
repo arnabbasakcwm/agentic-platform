@@ -302,6 +302,15 @@ class TeamNotFoundError(PlatformError):
         super().__init__("not found")
 
 
+class BudgetError(PlatformError):
+    """A budget change the tree forbids. `status`/`error_type` are the API's response."""
+
+    def __init__(self, message: str, status: int = 409, error_type: str = "BudgetError"):
+        self.status = status
+        self.error_type = error_type
+        super().__init__(message)
+
+
 class ShareError(PlatformError):
     """A share that is not allowed or not valid. `status`/`error_type` are the API's response."""
 
