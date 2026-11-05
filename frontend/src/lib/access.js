@@ -26,7 +26,8 @@ export function formatMicro(micro, currency = "USD") {
   if (micro === null || micro === undefined) return "—";
   const usd = micro / 1_000_000;
   const abs = Math.abs(usd);
-  const digits = abs >= 100 ? 0 : abs >= 1 ? 2 : 4;
+  // Whole dollars show without cents; otherwise cents, or four places below a dollar. Never rounded away.
+  const digits = micro % 1_000_000 === 0 && abs >= 1 ? 0 : abs >= 1 ? 2 : 4;
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency,
@@ -112,4 +113,58 @@ export function budgetScopeLabel(scope) {
     { user: "Your own budget", team: "Your team's budget", pool: "Your administrator's pool" }[kind] ??
     "A budget"
   );
+}
+
+// ---------------------------------------------------------------------------------- budgets
+// Which kind of budget may sit under which (the API enforces the same).
+export const CHILD_KINDS = {
+  org: ["pool", "team", "user"],
+  pool: ["team", "user"],
+  team: ["user"],
+  user: [],
+};
+
+/** The visible budgets in tree order, each with its depth (a node whose parent isn't visible is a root). */
+export function budgetTree(nodes) {
+  const ids = new Set(nodes.map((n) => n.id));
+  const kids = new Map();
+  for (const n of nodes) {
+    const key = n.parent_id && ids.has(n.parent_id) ? n.parent_id : null;
+    kids.set(key, [...(kids.get(key) ?? []), n]);
+  }
+  const out = [];
+  const walk = (parent, depth) => {
+    for (const n of (kids.get(parent) ?? []).sort((a, b) => a.id.localeCompare(b.id))) {
+      out.push({ ...n, depth });
+      walk(n.id, depth + 1);
+    }
+  };
+  walk(null, 0);
+  return out;
+}
+
+/** The budgets this person may allocate FROM: you can only hand out what you hold. */
+export function allocatableParents(nodes, me, teams = []) {
+  if (me.role === "master") return nodes.filter((n) => n.scope_type !== "user");
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const below = (n, ancestor) => {
+    for (let cur = n, hops = 0; cur && hops < 8; hops += 1) {
+      if (cur.id === ancestor) return true;
+      cur = cur.parent_id ? byId.get(cur.parent_id) : null;
+    }
+    return false;
+  };
+  if (me.role === "admin") {
+    return nodes.filter((n) => n.scope_type !== "user" && below(n, `pool:${me.id}`));
+  }
+  const administered = new Set(teams.filter((t) => t.my_role === "group_admin").map((t) => `team:${t.id}`));
+  return nodes.filter((n) => administered.has(n.id));
+}
+
+/** A budget in words: the team's or person's name when known, else a short id. */
+export function budgetLabel(node, { teams = [], users = [] } = {}) {
+  if (node.scope_type === "org") return "Organisation";
+  if (node.scope_type === "team") return teams.find((t) => t.id === node.scope_id)?.name ?? `Team ${node.scope_id}`;
+  const who = users.find((u) => u.id === node.scope_id)?.email ?? `${node.scope_id.slice(0, 6)}…`;
+  return node.scope_type === "pool" ? `${who} (pool)` : who;
 }

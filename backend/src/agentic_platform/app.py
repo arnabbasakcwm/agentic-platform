@@ -2799,7 +2799,7 @@ def create_team(req: TeamRequest, user: UserRecord = Depends(current_user)) -> d
 def list_teams(user: UserRecord = Depends(current_user)) -> dict[str, Any]:
     """The Super Admin sees every team; anyone else only the teams they belong to."""
     actor = _actor(user)
-    teams = _teams.list_teams() if actor.is_master else [
+    teams = _teams.list_teams() if actor.is_master or actor.is_sub_admin else [
         t for t in (_teams.get_team(tid) for tid in actor.team_roles) if t is not None
     ]
     return {"teams": [_team_body(t, actor) for t in teams]}

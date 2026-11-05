@@ -1,6 +1,6 @@
 # RBAC Delegation — Progress
 STATUS: IN_PROGRESS
-Iteration: 25
+Iteration: 26
 Branch: feat/rbac-delegation
 Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint configured).
 
@@ -43,7 +43,7 @@ Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint con
 ## Phase 6 — UI
 - [x] P6.1 Teams in the console: `#/teams` (list; Super Admin creates), `#/teams/<id>` (members with roles, appoint/step down group admin, add (Super Admin) / remove, rename, delete (not Default)); sidebar Teams for admins and team members; `lib/access.js` helpers + tests; mock-access.js; e2e teams.spec.js (7 tests incl. axe light/dark)
 - [x] P6.2 Share dialog in the project header (native <dialog>): share a project or one agent with a person/team at a level, change level, stop sharing, list who has access; offered only at manage level; new `GET /projects/{id}/share-targets` (teams + people in the sharer's scope, manage-level only; 2 backend tests); e2e sharing.spec.js (11 tests incl. axe light/dark and which levels get the button)
-- [ ] P6.3 Budget allocation + scoped usage views
+- [x] P6.3 Budgets page (`#/budgets`): your own limit with meters and 80%/100% warnings, the visible budget tree (rows only where you may change them), allocate-from-what-you-hold form (Super Admin any, Sub Admin pool and below, Group Admin team to its members), change amount, remove (with confirm), API errors shown; team Activity tab (scoped usage via the existing dashboard + audit trail); Sub Admins list all teams to allocate to; formatMicro never rounds cents away; 8 e2e tests incl. axe light/dark
 - [ ] P6.4 Model privilege editor
 - [ ] P6.5 User-facing budget/model errors; hide controls user can't use
 
@@ -80,3 +80,4 @@ Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint con
 - Iter 23: P5.5 done.
 - Iter 24: P6.1 done.
 - Iter 25: P6.2 done.
+- Iter 26: P6.3 done.

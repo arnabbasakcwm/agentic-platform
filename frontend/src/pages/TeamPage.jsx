@@ -11,6 +11,7 @@ import {
   Pill,
   Skeleton,
 } from "../components/ui.jsx";
+import { ActivityTab } from "../components/team/ActivityTab.jsx";
 import { teamRoleLabel } from "../lib/access.js";
 import { api } from "../lib/api.js";
 import { navigate, paths } from "../lib/router.js";
@@ -160,8 +161,8 @@ function Rename({ team, onChanged }) {
   );
 }
 
-/** One team: its members and their roles. (Budget, model limits and activity are added to this page as tabs.) */
-export function TeamPage({ teamId, me, onChanged, extraTabs = [] }) {
+/** One team: its members and their roles, and its activity. */
+export function TeamPage({ teamId, me, onChanged }) {
   const [team, setTeam] = useState(null);
   const [members, setMembers] = useState(null);
   const [tab, setTab] = useState("members");
@@ -201,7 +202,7 @@ export function TeamPage({ teamId, me, onChanged, extraTabs = [] }) {
   }
   const isTeamAdmin = team.my_role === "group_admin";
   const canManage = isMaster || isTeamAdmin;
-  const tabs = [{ id: "members", label: "Members" }, ...(canManage ? extraTabs : [])];
+  const tabs = [{ id: "members", label: "Members" }, ...(canManage ? [{ id: "activity", label: "Activity" }] : [])];
 
   return (
     <div className="page access">
@@ -301,7 +302,7 @@ export function TeamPage({ teamId, me, onChanged, extraTabs = [] }) {
           )}
         </div>
       ) : (
-        extraTabs.find((t) => t.id === tab)?.render({ team, me, isMaster, isTeamAdmin, members })
+        tab === "activity" && canManage && <ActivityTab team={team} />
       )}
     </div>
   );

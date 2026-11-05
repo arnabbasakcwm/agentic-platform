@@ -137,6 +137,13 @@ export function Sidebar({
           tone="pink"
           active={route.page === "usage"}
         />
+        <NavItem
+          href={paths.budgets}
+          icon="chart"
+          label="Budgets"
+          tone="amber"
+          active={route.page === "budgets"}
+        />
         {(isAdminRole(user?.role) || teamCount > 0) && (
           <NavItem
             href={paths.teams}

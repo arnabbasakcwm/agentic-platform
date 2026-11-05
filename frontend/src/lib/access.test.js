@@ -19,6 +19,8 @@ describe("money", () => {
   it("formats whole micro-USD", () => {
     expect(formatMicro(12_500_000)).toBe("$12.50");
     expect(formatMicro(250_000_000)).toBe("$250");
+    expect(formatMicro(15_000_000)).toBe("$15");
+    expect(formatMicro(120_500_000)).toBe("$120.50"); // not rounded to $121
     expect(formatMicro(2_000)).toBe("$0.0020");
     expect(formatMicro(0)).toBe("$0.0000");
     expect(formatMicro(null)).toBe("—");
@@ -100,5 +102,67 @@ describe("run errors", () => {
     expect(budgetScopeLabel("team:T")).toBe("Your team's budget");
     expect(budgetScopeLabel("org")).toBe("The organisation's budget");
     expect(budgetScopeLabel(undefined)).toBe("A budget");
+  });
+});
+
+import { CHILD_KINDS, allocatableParents, budgetLabel, budgetTree } from "./access.js";
+
+const node = (id, parent, type = id.split(":")[0]) => ({ id, parent_id: parent, scope_type: type, scope_id: id.split(":")[1] ?? "org" });
+const NODES = [
+  node("user:u1", "team:A"),
+  node("team:A", "pool:sub"),
+  node("pool:sub", "org"),
+  node("org", null),
+  node("user:u2", "team:A"),
+  node("team:B", "org"),
+];
+
+describe("budget tree", () => {
+  it("orders parents before children with their depth", () => {
+    const tree = budgetTree(NODES);
+    expect(tree.map((n) => [n.id, n.depth])).toEqual([
+      ["org", 0],
+      ["pool:sub", 1],
+      ["team:A", 2],
+      ["user:u1", 3],
+      ["user:u2", 3],
+      ["team:B", 1],
+    ]);
+  });
+  it("treats a node whose parent isn't visible as a root", () => {
+    const part = budgetTree(NODES.filter((n) => n.id.startsWith("team:A") || n.id.startsWith("user:")));
+    expect(part.map((n) => [n.id, n.depth])).toEqual([["team:A", 0], ["user:u1", 1], ["user:u2", 1]]);
+  });
+  it("mirrors which kinds may contain which", () => {
+    expect(CHILD_KINDS.org).toEqual(["pool", "team", "user"]);
+    expect(CHILD_KINDS.team).toEqual(["user"]);
+    expect(CHILD_KINDS.user).toEqual([]);
+  });
+});
+
+describe("what you may allocate from", () => {
+  it("lets the Super Admin allocate from any non-person budget", () => {
+    expect(allocatableParents(NODES, { id: "root", role: "master" }).map((n) => n.id).sort()).toEqual(["org", "pool:sub", "team:A", "team:B"]);
+  });
+  it("lets a Sub Admin allocate only from their pool and below", () => {
+    expect(allocatableParents(NODES, { id: "sub", role: "admin" }).map((n) => n.id).sort()).toEqual(["pool:sub", "team:A"]);
+    expect(allocatableParents(NODES, { id: "other", role: "admin" })).toEqual([]);
+  });
+  it("lets a group admin split only their own team's budget", () => {
+    const teams = [{ id: "A", my_role: "group_admin" }, { id: "B", my_role: "member" }];
+    expect(allocatableParents(NODES, { id: "ga", role: "user" }, teams).map((n) => n.id)).toEqual(["team:A"]);
+    expect(allocatableParents(NODES, { id: "m", role: "user" }, [{ id: "A", my_role: "member" }])).toEqual([]);
+  });
+});
+
+describe("budget labels", () => {
+  it("names teams and people when known", () => {
+    const ctx = { teams: [{ id: "A", name: "Growth" }], users: [{ id: "u1", email: "ann@example.com" }] };
+    expect(budgetLabel(node("org", null), ctx)).toBe("Organisation");
+    expect(budgetLabel(node("team:A", "org"), ctx)).toBe("Growth");
+    expect(budgetLabel(node("user:u1", "team:A"), ctx)).toBe("ann@example.com");
+    expect(budgetLabel(node("pool:u1", "org"), ctx)).toBe("ann@example.com (pool)");
+    expect(budgetLabel(node("user:abcdefgh", "org"), ctx)).toBe("abcdef…");
+    expect(budgetLabel(node("team:Z", "org"), ctx)).toBe("Team Z");
   });
 });

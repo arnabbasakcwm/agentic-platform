@@ -18,6 +18,7 @@ import { ProjectsPage } from "./pages/ProjectsPage.jsx";
 import { UsagePage } from "./pages/UsagePage.jsx";
 import { AdminPage } from "./pages/AdminPage.jsx";
 import { AdminUserPage } from "./pages/AdminUserPage.jsx";
+import { BudgetsPage } from "./pages/BudgetsPage.jsx";
 import { TeamPage } from "./pages/TeamPage.jsx";
 import { TeamsPage } from "./pages/TeamsPage.jsx";
 import { isAdminRole } from "./lib/admin.js";
@@ -280,6 +281,7 @@ function Console() {
                   </Empty>
                 </div>
               ))}
+            {route.page === "budgets" && <BudgetsPage me={user} />}
             {route.page === "teams" && <TeamsPage me={user} onChanged={refreshTeams} />}
             {route.page === "team" && (
               <TeamPage key={route.id} teamId={route.id} me={user} onChanged={refreshTeams} />

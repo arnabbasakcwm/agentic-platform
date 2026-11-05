@@ -81,6 +81,9 @@ def test_lists_show_only_your_teams_and_the_super_admin_sees_all(api):
     assert names(mem) == {"A": "member", "B": "member"}
     assert names(ga) == {"A": "group_admin"}
     assert names(out) == {}
+    sub, _ = api.login("sub@example.com", "admin")
+    assert set(names(sub)) == {"A", "B", DEFAULT_TEAM_ID}  # a Sub Admin allocates budget to any team, so sees them all
+    assert api.get("/teams/A", headers=sub).status_code == 404  # but opens none of them
     assert api.get("/teams/A", headers=ga).json()["team"]["name"] == "Team A"
     assert api.get("/teams/B", headers=ga).status_code == 404  # not their team
     assert api.get("/teams/A", headers=out).status_code == 404
