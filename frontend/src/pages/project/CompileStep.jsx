@@ -13,6 +13,7 @@ import { api } from "../../lib/api.js";
 import { agentStyle, parallelStages, sequentialOrder } from "../../lib/flow.js";
 import { paths } from "../../lib/router.js";
 import { useAction } from "../../lib/useAction.js";
+import { requireAccess } from "../../components/AccessGuard.jsx";
 
 // One stage box: a coloured top bar (its first agent's colour), "Stage 01", and each
 // agent in it with its real role, model and number of tools. Boxes enter left to right.
@@ -125,7 +126,7 @@ function describe(plan) {
   }
 }
 
-export function CompileStep({ project, onCompiled }) {
+function CompileStepInner({ project, onCompiled }) {
   const { plan } = project;
   const compile = useAction();
   // Compiled while this page was open: the status card glows briefly (visual only).
@@ -239,3 +240,5 @@ export function CompileStep({ project, onCompiled }) {
     </>
   );
 }
+
+export const CompileStep = requireAccess("edit", CompileStepInner, "compile a project");

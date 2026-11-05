@@ -24,6 +24,7 @@ import { agentIndex, agentStyle } from "../../lib/flow.js";
 import { paths } from "../../lib/router.js";
 import { providerLabel } from "../../lib/usage.js";
 import { useAction } from "../../lib/useAction.js";
+import { requireAccess } from "../../components/AccessGuard.jsx";
 
 // Need a data source attached to the project (Data sources page).
 const SQL_TOOLS = new Set(["sql_schema", "sql_query"]);
@@ -338,7 +339,7 @@ function AgentSettings({ project, tools, providers, onSaved, savedVersion }) {
   );
 }
 
-export function BriefStep({ project, tools, providers, onSaved }) {
+function BriefStepInner({ project, tools, providers, onSaved }) {
   const { plan } = project;
   // Kept here, not in the editor (which starts fresh for each plan version), so the
   // "Saved" confirmation survives the save.
@@ -405,3 +406,5 @@ export function BriefStep({ project, tools, providers, onSaved }) {
     </>
   );
 }
+
+export const BriefStep = requireAccess("manage", BriefStepInner, "change a project's brief or its agents' models and tools");

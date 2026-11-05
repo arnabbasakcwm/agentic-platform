@@ -13,6 +13,7 @@ import { api } from "../../lib/api.js";
 import { agentIndex, agentStyle } from "../../lib/flow.js";
 import { paths } from "../../lib/router.js";
 import { useAction } from "../../lib/useAction.js";
+import { canEditProject } from "../../lib/access.js";
 
 /**
  * AgentCard (DESIGN.md §5.10): a 3px top bar in the agent's colour, its index, key and
@@ -82,6 +83,9 @@ function AgentCard({ agent, index, isRouter, externalTools }) {
 
 export function PlanStep({ project, onSaved }) {
   const { plan } = project;
+  // Editing needs Edit access, and a project shared agent by agent has only those agents to show.
+  const canEdit = canEditProject(project) && !project.restricted;
+  const partial = Boolean(project.restricted);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [parseError, setParseError] = useState(null);
@@ -148,6 +152,7 @@ export function PlanStep({ project, onSaved }) {
           </div>
         ) : (
           <>
+            {!partial && (
             <Panel title="Overview">
               <MetaList
                 rows={[
@@ -164,6 +169,7 @@ export function PlanStep({ project, onSaved }) {
                 ]}
               />
             </Panel>
+            )}
 
             <section className="section ap-fade" aria-labelledby="agents-title">
               <header className="section__head">
@@ -172,10 +178,12 @@ export function PlanStep({ project, onSaved }) {
                 </h2>
                 <Pill tone="slate">{plan.agents.length} in this team</Pill>
                 <div className="panel__spacer" />
-                <Button size="sm" onClick={startEditing}>
-                  <Icon name="edit" size={14} />
-                  Edit as JSON
-                </Button>
+                {canEdit && (
+                  <Button size="sm" onClick={startEditing}>
+                    <Icon name="edit" size={14} />
+                    Edit as JSON
+                  </Button>
+                )}
               </header>
               <div className="agentgrid">
                 {plan.agents.map((agent, i) => (

@@ -3337,11 +3337,12 @@ def list_projects(scope: str | None = None, user: UserRecord = Depends(current_u
     }
 
 
-@app.get("/projects/{project_id}")
-def get_project(project_id: str, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+def _body_for(project: ProjectRecord, user: UserRecord) -> dict[str, Any]:
+    """The project as this person may see it: their access level, and for anyone who does not hold
+    it fully only its plan (not the owner's chat or resources; for an agent-by-agent share, only
+    those agents)."""
     actor = _actor(user)
-    project = _project_at(project_id, user, "view")
-    grants = _grants.list_for_project(project_id)
+    grants = _grants.list_for_project(project.id)
     manage = has_full_rank(actor, project)
     body = _project_body(project, manage)
     body["access_level"] = _level_name(access_rank(actor, project, None, grants))
@@ -3352,6 +3353,11 @@ def get_project(project_id: str, user: UserRecord = Depends(current_user)) -> di
             mine = [a for a in project.plan.agents if access_rank(actor, project, a.id, grants) > 0]
             body.update(plan={"agents": [a.model_dump() for a in mine]}, brief="", restricted=True)
     return body
+
+
+@app.get("/projects/{project_id}")
+def get_project(project_id: str, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    return _body_for(_project_at(project_id, user, "view"), user)
 
 
 class RenameProjectRequest(BaseModel):
@@ -3473,7 +3479,7 @@ def edit_plan(
     if updated is None:
         raise ProjectNotFoundError(project_id)
     _COMPILED.pop(project_id, None)
-    return _project_body(updated)
+    return _body_for(updated, user)  # an Edit-level person gets back an Edit-level view
 
 
 @app.post("/projects/{project_id}/revise")

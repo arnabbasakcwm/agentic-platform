@@ -5,6 +5,7 @@ import { RESOURCE_TABS, navigate, paths } from "../../lib/router.js";
 import { DataStep } from "./DataStep.jsx";
 import { KnowledgeStep } from "./KnowledgeStep.jsx";
 import { McpTab } from "./McpTab.jsx";
+import { requireAccess } from "../../components/AccessGuard.jsx";
 
 const TABS = {
   documents: {
@@ -26,7 +27,7 @@ const TABS = {
  * Attaching any of them is the project's opt-in; agents get them as tools on the Brief
  * step (or from the assistant). The tab is part of the URL.
  */
-export function ResourcesStep({
+function ResourcesStepInner({
   project,
   tab,
   onKnowledgeChanged,
@@ -116,3 +117,5 @@ export function ResourcesStep({
     </>
   );
 }
+
+export const ResourcesStep = requireAccess("manage", ResourcesStepInner, "attach files, data and tools to a project");

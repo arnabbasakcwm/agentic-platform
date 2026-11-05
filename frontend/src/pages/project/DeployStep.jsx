@@ -21,6 +21,7 @@ import { paths } from "../../lib/router.js";
 import { useAction } from "../../lib/useAction.js";
 import { ResultOutputs } from "../../components/ResultOutputs.jsx";
 import { UsageLine } from "../../components/UsageLine.jsx";
+import { requireAccess } from "../../components/AccessGuard.jsx";
 
 const POLL_MS = 3000;
 const PROGRESS = [
@@ -433,7 +434,7 @@ print(json.loads(response["response"].read()))`;
   );
 }
 
-export function DeployStep({ project, onDeploymentChanged }) {
+function DeployStepInner({ project, onDeploymentChanged }) {
   const [info, setInfo] = useState(null); // { available, region }
   const deployment = project.deployment;
   const load = useAction();
@@ -536,3 +537,5 @@ export function DeployStep({ project, onDeploymentChanged }) {
     </>
   );
 }
+
+export const DeployStep = requireAccess("manage", DeployStepInner, "deploy a project");

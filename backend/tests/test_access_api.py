@@ -228,3 +228,13 @@ def test_the_highest_of_several_grants_wins_and_a_lower_one_never_lowers_it(w):
     share(w, "A", "view", gtype="team")
     share(w, "user", "edit")
     assert w.c.get(f"/projects/{w.pid}", headers=w.h["user"]).json()["access_level"] == "edit"
+
+
+def test_a_response_that_returns_the_project_reports_the_callers_own_access(w):
+    share(w, "editor", "edit")
+    plan = _plan().model_dump()
+    body = w.c.patch(f"/projects/{w.pid}/plan", json=plan, headers=w.h["editor"]).json()
+    assert body["access_level"] == "edit" and body["can_manage"] is False  # not promoted to "owner" by saving
+    assert body["conversation"] == [] and body["knowledge"] is None
+    own = w.c.patch(f"/projects/{w.pid}/plan", json=plan, headers=w.h["ann"]).json()
+    assert own["access_level"] == "owner" and own["can_manage"] is True

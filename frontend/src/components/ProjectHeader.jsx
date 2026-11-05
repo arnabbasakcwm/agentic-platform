@@ -1,5 +1,5 @@
 import { useId, useState } from "react";
-import { canShareProject } from "../lib/access.js";
+import { canManageProject, canShareProject } from "../lib/access.js";
 import { Icon } from "./icons.jsx";
 import { ProjectName } from "./ProjectName.jsx";
 import { ShareDialog } from "./ShareDialog.jsx";
@@ -93,7 +93,7 @@ export function ProjectHeader({ project, onRenamed, assistant }) {
           <ShareDialog project={project} open={sharing} onClose={() => setSharing(false)} />
         </>
       )}
-      {assistant && (
+      {assistant && canManageProject(project) && (
         <button
           type="button"
           className="btn btn--outline projhead__assistant"

@@ -62,7 +62,11 @@ function node(scope, id, parent, amount, spent) {
 resetAccess();
 
 /** The access fields of the project body for the signed-in e2e user (default: the owner). */
-export const projectAccess = () => ({ access_level: state.projectLevel, can_manage: state.projectLevel === "owner" });
+export const projectAccess = () => ({
+  access_level: state.projectLevel,
+  can_manage: state.projectLevel === "owner",
+  ...(state.projectRestricted ? { restricted: true, brief: "" } : {}),
+});
 
 const notFound = { error_type: "NotFound", message: "not found", details: null };
 const myRole = (team) => state.members[team]?.u1 ?? null;
@@ -124,6 +128,7 @@ export async function handleAccess({ req, res, path, readBody, send, orgRole, se
     const body = await readBody(req);
     state.orgRole = body.orgRole ?? "user";
     if (body.projectLevel) state.projectLevel = body.projectLevel;
+    state.projectRestricted = Boolean(body.restricted);
     setOrgRole(state.orgRole);
     for (const [team, role] of Object.entries(body.teams ?? {})) {
       state.members[team] ??= {};

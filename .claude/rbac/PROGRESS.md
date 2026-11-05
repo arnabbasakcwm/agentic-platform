@@ -1,6 +1,6 @@
 # RBAC Delegation — Progress
 STATUS: IN_PROGRESS
-Iteration: 27
+Iteration: 28
 Branch: feat/rbac-delegation
 Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint configured).
 
@@ -45,7 +45,7 @@ Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint con
 - [x] P6.2 Share dialog in the project header (native <dialog>): share a project or one agent with a person/team at a level, change level, stop sharing, list who has access; offered only at manage level; new `GET /projects/{id}/share-targets` (teams + people in the sharer's scope, manage-level only; 2 backend tests); e2e sharing.spec.js (11 tests incl. axe light/dark and which levels get the button)
 - [x] P6.3 Budgets page (`#/budgets`): your own limit with meters and 80%/100% warnings, the visible budget tree (rows only where you may change them), allocate-from-what-you-hold form (Super Admin any, Sub Admin pool and below, Group Admin team to its members), change amount, remove (with confirm), API errors shown; team Activity tab (scoped usage via the existing dashboard + audit trail); Sub Admins list all teams to allocate to; formatMicro never rounds cents away; 8 e2e tests incl. axe light/dark
 - [x] P6.4 Model privilege editors: team limit (Super Admin edits, group admin reads), per-member limits inside a team (offered only the models the team allows), organisation catalog + fallback + unpriced exceptions on the Admin page (Sub Admins read-only); `ModelChecklist`; 6 e2e tests incl. axe light/dark
-- [ ] P6.5 User-facing budget/model errors; hide controls user can't use
+- [x] P6.5 controls follow your access: steps you can't use (Brief/Resources/Deploy need manage, Compile edit, Run use) are replaced by a plain explanation, Plan hides editing below Edit and shows only the agents of an agent-by-agent share, Assistant/Share hidden accordingly; runs the platform stopped explain themselves (budget used up / model not allowed / access removed) in the run view and history; saving as an Edit-level person no longer reports 'owner' (backend `_body_for`); 10 e2e tests incl. axe
 
 ## Phase 7 — Hardening & Verification
 - [ ] P7.1 Full authorization matrix passing (spec §5)
@@ -82,3 +82,4 @@ Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint con
 - Iter 25: P6.2 done.
 - Iter 26: P6.3 done.
 - Iter 27: P6.4 done.
+- Iter 28: P6.5 done.

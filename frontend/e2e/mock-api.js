@@ -47,6 +47,11 @@ const project = {
   updated_at: "2026-10-01T06:09:54Z",
 };
 
+const ACCESS_STOPS = {
+  budget: { error_type: "BUDGET_EXCEEDED", message: "the user:u1 budget is used up (about 5000 micro-USD left, this call needs 20490)" },
+  model: { error_type: "MODEL_NOT_PERMITTED", message: "you may not use the model google_genai/gemini-3.1-pro-preview: your team limit does not include it" },
+};
+
 function trip(input) {
   const from = input.origin ?? "your origin";
   const to = input.destination ?? "your destination";
@@ -169,6 +174,10 @@ async function streamRun(req, res, input) {
     const started = Date.now();
     emit("node_started", { node: agent.id });
     if (input.scenario === "slow" && i === 1) await sleep(120_000);
+    if (ACCESS_STOPS[input.scenario] && i === 1) {
+      emit("run_failed", { ...ACCESS_STOPS[input.scenario] });
+      return res.end();
+    }
     if (input.scenario === "fail" && i === 1) {
       await sleep(step);
       emit("run_failed", {
@@ -240,6 +249,11 @@ async function simulateRun(run, input) {
     const started = Date.now();
     record(run, "node_started", { node: agent.id });
     if (input.scenario === "slow" && i === 1) await sleep(120_000);
+    if (ACCESS_STOPS[input.scenario] && i === 1) {
+      const error = { ...ACCESS_STOPS[input.scenario] };
+      record(run, "run_failed", error);
+      return finish(run, { status: "failed", error });
+    }
     if (input.scenario === "fail" && i === 1) {
       await sleep(step);
       const error = { error_type: "RunTimeout", message: "the run exceeded its 60s time limit", limit_s: 60 };
@@ -1136,7 +1150,7 @@ const server = http.createServer(async (req, res) => {
     project.plan_version += 1;
     project.compiled = false;
     knowledgeBody();
-    return send(res, 200, project);
+    return send(res, 200, { ...project, ...projectAccess() });
   }
   if (path === "/auth/me") return send(res, 200, { id: "u1", email: "e2e@example.com", role: me().role, created_at: "2026-10-01T00:00:00Z" });
   if (path === "/projects") {
@@ -1170,7 +1184,7 @@ const server = http.createServer(async (req, res) => {
     if (name.length > 100) return send(res, 422, { error_type: "ValidationError", message: "name: too long", details: null });
     Object.assign(project, name ? { name, named: true } : { name: project.brief.split("\n")[0], named: false });
     project.updated_at = new Date().toISOString();
-    return send(res, 200, project);
+    return send(res, 200, { ...project, ...projectAccess() });
   }
   if (path === p) {
     knowledgeBody();

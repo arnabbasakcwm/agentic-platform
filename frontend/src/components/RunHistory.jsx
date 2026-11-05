@@ -3,6 +3,16 @@ import { formatCost, formatTokens } from "../lib/usage.js";
 import { useEffect, useRef } from "react";
 import { Icon } from "./icons.jsx";
 import { StatusBadge } from "./ui.jsx";
+import { accessErrorInfo } from "../lib/access.js";
+
+// Short history labels for the runs the platform stopped for a budget, model or access reason.
+const ACCESS_LABELS = {
+  BUDGET_EXCEEDED: "Budget used up",
+  MODEL_NOT_PERMITTED: "Model not allowed",
+  AccessRevokedError: "Access removed",
+  AccessRevoked: "Access removed",
+};
+const accessLabel = (type) => (accessErrorInfo(type) ? ACCESS_LABELS[type] : null);
 
 const ms = (iso) => (iso ? new Date(iso).getTime() : null);
 
@@ -19,7 +29,7 @@ function statusOf(run) {
           ? "Interrupted"
           : run.error?.error_type === "RunStopped"
             ? "Stopped"
-            : "Failed",
+            : accessLabel(run.error?.error_type) ?? "Failed",
     };
   return { badge: "running", label: "Running" };
 }

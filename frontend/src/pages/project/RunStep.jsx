@@ -30,6 +30,8 @@ import { agentTitle, buildGraph, finalAgentIds } from "../../lib/flow.js";
 import { formatDuration } from "../../lib/format.js";
 import { paths } from "../../lib/router.js";
 import { runCounts, serverNow } from "../../lib/runState.js";
+import { accessErrorInfo } from "../../lib/access.js";
+import { requireAccess } from "../../components/AccessGuard.jsx";
 
 // The diagram library is the heaviest part of the console; load it with this page only.
 const RunDiagram = lazy(() =>
@@ -88,6 +90,15 @@ function StopButton({ run, runId, stopping, onStop, size }) {
       {!stopping && <Icon name="stop" size={14} />}
       {stopping ? "Stopping…" : "Stop"}
     </Button>
+  );
+}
+
+/** A run the platform stopped for a budget, model or access reason: what happened, and what to do. */
+function AccessStop({ info, type }) {
+  return (
+    <Callout tone="warn" title={info.title} detail={type === "BUDGET_EXCEEDED" ? info.detail : null}>
+      {info.body}
+    </Callout>
   );
 }
 
@@ -381,6 +392,8 @@ function ResultsPanel({
               <Callout tone="info" title="Stopped">
                 You stopped this run. Outputs finished before then are kept below.
               </Callout>
+            ) : accessErrorInfo(run.error.errorType, run.error.message) ? (
+              <AccessStop info={accessErrorInfo(run.error.errorType, run.error.message)} type={run.error.errorType} />
             ) : (
               <ErrorCallout error={run.error} />
             )}
@@ -431,7 +444,7 @@ function ResultsPanel({
   );
 }
 
-export function RunStep({
+function RunStepInner({
   project,
   run,
   runId,
@@ -605,3 +618,5 @@ export function RunStep({
     </>
   );
 }
+
+export const RunStep = requireAccess("use", RunStepInner, "run a project");
