@@ -2090,6 +2090,7 @@ def my_budget(project_id: str | None = None, user: UserRecord = Depends(current_
     return {
         "chain": [
             {"id": n.id, "scope_type": n.scope_type, "amount": n.amount, "remaining": n.remaining,
+             "percent_used": _budget_body(n)["percent_used"], "thresholds_reached": sorted(n.notified),
              "period": n.period, "hard_limit": n.hard_limit}
             for n in chain if n.id in mine or bpol.may_see(_actor(user), n, _budgets)
         ],
@@ -2257,6 +2258,33 @@ def _model_gateway_hook(ctx: CallContext) -> Redirect | None:
 model_gateway.before_call = _model_gateway_hook
 
 
+def _budget_now() -> datetime:
+    """The clock budgets use for their periods (a function so tests can move time)."""
+    return datetime.now(timezone.utc)
+
+
+def _announce_thresholds(reservation: Any) -> None:
+    """After a call is charged, announce each threshold a budget has now reached (80% and 100% by
+    default) - once per budget per period, however many calls cross it. The announcement is an
+    audit entry by `system` (visible to admins, and to a group admin for their team's budgets) and
+    a log warning; a hard budget that is full then refuses the next call. Never raises."""
+    try:
+        for nid in reservation.nodes:
+            node = _budgets.get(nid)
+            if node is None or node.amount <= 0:
+                continue
+            for threshold in node.thresholds:
+                if node.spent * 100 >= threshold * node.amount and _budgets.mark_notified(nid, threshold):
+                    logger.warning("budget %s reached %d%%", nid, threshold)
+                    audit_log.record(
+                        _audit, "system", "budget.threshold", "budget", nid, team_id=_budget_team(node),
+                        details={"threshold": threshold, "percent_used": round(100 * node.spent / node.amount, 1),
+                                 "hard_limit": node.hard_limit, "period_start": node.period_start.isoformat()},
+                    )
+    except Exception:  # noqa: BLE001
+        logger.exception("announcing budget thresholds failed")
+
+
 def _input_text(value: Any) -> str:
     """The text of a model input (a prompt string, or a list of messages), to estimate its size."""
     if isinstance(value, str):
@@ -2274,7 +2302,7 @@ def _reserve_budget(ctx: CallContext, ident: CallIdentity, user_id: str, final_k
     model with no price cannot be metered, so under a hard limit it is refused unless an admin
     explicitly allowed it."""
     chain = bpol.chain_ids(user_id, ident.team_id, _budgets)
-    now = datetime.now(timezone.utc)
+    now = _budget_now()
     nodes = []
     for nid in chain:
         _budgets.reset_if_due(nid, now)  # a new period starts on first use
@@ -2328,6 +2356,7 @@ def _settle_call(ctx: CallContext, ok: bool) -> None:
         reservation = st.get("reservation")
         if reservation is not None:
             _budgets.settle(reservation, actual)
+            _announce_thresholds(reservation)
         _ledger.append(LedgerEntry(
             id=uuid.uuid4().hex, user_id=st["user_id"], team_id=st["team_id"], project_id=st["project_id"],
             agent_id=st["agent_id"], provider=provider, model=model, input_tokens=in_t, output_tokens=out_t,

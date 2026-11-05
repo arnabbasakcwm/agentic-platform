@@ -2854,7 +2854,7 @@ class MongoBudgetStore:
             return False
         with _mongo_errors():  # the old period_start in the filter lets only one racer win
             done = self._nodes.find_one_and_update(
-                {"_id": node_id, "period_start": node.period_start},
+                {"_id": node_id, "period_start": node.period_start, "amount": node.amount},
                 {"$set": {"period_start": start, "remaining": node.amount, "notified": []}},
             )
         return done is not None
