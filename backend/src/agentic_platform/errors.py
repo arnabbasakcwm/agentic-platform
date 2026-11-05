@@ -264,6 +264,18 @@ class ModelNotPermittedError(RunStoppedError):
         super().__init__(f"you may not use the model {model}: {why}")
 
 
+class BudgetExceededError(RunStoppedError):
+    """A hard budget has run out. `scope` names the budget that did ("user:...", "team:...",
+    "pool:...", "org"). Raised before the model call, so nothing more is spent; the agent stops
+    gracefully, finished agents keep their answers, and it is never retried."""
+
+    code = "BUDGET_EXCEEDED"
+
+    def __init__(self, scope: str, remaining: int, needed: int) -> None:
+        self.scope, self.remaining, self.needed = scope, remaining, needed
+        super().__init__(f"the {scope} budget is used up (about {max(remaining, 0)} micro-USD left, this call needs {needed})")
+
+
 class RunNotStoppableError(PlatformError):
     def __init__(self, run_id: str):
         super().__init__(f"run {run_id} runs on AWS and can't be stopped from here; it ends at its time limit")

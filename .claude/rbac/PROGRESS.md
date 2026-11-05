@@ -1,6 +1,6 @@
 # RBAC Delegation — Progress
 STATUS: IN_PROGRESS
-Iteration: 20
+Iteration: 21
 Branch: feat/rbac-delegation
 Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint configured).
 
@@ -36,7 +36,7 @@ Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint con
 ## Phase 5 — Budgets
 - [x] P5.1 budget tree + ledger stores: `BudgetNode` (integer micro-USD, org>pool>team>user, remaining/unallocated counters, period, hard/soft, thresholds), `BudgetStore` with single-document conditional atomic reserve/settle/release/resize/create/delete/reset/mark_notified (+ compensation across levels), append-only `LedgerStore`; 40 tests incl. parallel last-credit on memory and Mongo
 - [x] P5.2 budget allocation APIs: `PUT|DELETE /budgets/{scope}/{id}`, `GET /budgets`, `GET /me/budget`; allocate only from a parent you hold (Super Admin any, Sub Admin own pool+below, Group Admin own team to its members), children never exceed parent (atomic), no shrink below spent/handed-on, fixed parent, audited; `budget_policy`; 16 tests
-- [ ] P5.3 Pre-call check + post-call debit in gateway, atomic; concurrency test; ALSO the D3 rule: hard-limit budget + unpriced model -> MODEL_NOT_PERMITTED(reason=unpriced) unless an admin per-model override (test required); and gate embeddings
+- [x] P5.3 gateway charges every run call to the budget chain (user, project team, parents, always the org pool): atomic pre-call reservation, settle to provider-reported cost (integer micro-USD, `usage.cost_micro`), append-only ledger, BUDGET_EXCEEDED (402, names the scope, never retried), soft limits warn only, failed calls refunded; D3: unpriced model under a hard budget -> MODEL_NOT_PERMITTED(unpriced) unless an org override; fallbacks priced as the model that ran; lazy period reset on first use; 21 tests incl. 20 parallel calls on the last credit -> 1 provider call
 - [ ] P5.4 Period reset (lazy) + soft-threshold events
 - [ ] P5.5 BUDGET_EXCEEDED graceful stop in agent runtime
 
@@ -75,3 +75,4 @@ Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint con
 - Iter 18: P4.3 done.
 - Iter 19: P5.1 done.
 - Iter 20: P5.2 done.
+- Iter 21: P5.3 done.

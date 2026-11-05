@@ -19,8 +19,10 @@ sub-agent or tool loop cannot reach the raw model.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable
+
+from langchain_core.callbacks import BaseCallbackHandler
 
 from .usage import UsageCallback
 
@@ -37,6 +39,26 @@ class CallIdentity:
     check: Callable[[str | None], None] | None = None
 
 
+class CallTally(BaseCallbackHandler):
+    """Counts the provider-reported tokens of ONE gateway call, independent of the run's own usage
+    collector, so the gateway can charge what the call really cost."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.input_tokens = 0
+        self.output_tokens = 0
+        self.reported = False
+
+    def on_llm_end(self, response: Any, **kwargs: Any) -> None:
+        for generations in response.generations:
+            for generation in generations:
+                usage = getattr(getattr(generation, "message", None), "usage_metadata", None)
+                if usage:
+                    self.reported = True
+                    self.input_tokens += usage.get("input_tokens", 0)
+                    self.output_tokens += usage.get("output_tokens", 0)
+
+
 @dataclass(frozen=True)
 class CallContext:
     """What the gateway knows about one model call."""
@@ -44,6 +66,9 @@ class CallContext:
     provider: str
     model: str
     config: dict[str, Any]  # the LangChain run config of this call (callbacks, configurable)
+    input: Any = None  # what is being sent to the model (to estimate its size)
+    tally: CallTally | None = None  # tokens the provider reports for this call, when tracked
+    state: dict[str, Any] = field(default_factory=dict)  # for the hooks of one call (a reservation, ...)
 
     @property
     def identity(self) -> CallIdentity | None:
@@ -82,6 +107,10 @@ class ModelGateway:
     def __init__(self) -> None:
         self.before_call: Callable[[CallContext], Redirect | None] = check_identity
         self.after_call: Callable[[CallContext, Any], None] = lambda ctx, result: None
+        # Called when the model call itself failed (after before_call let it through).
+        self.on_error: Callable[[CallContext, BaseException], None] = lambda ctx, exc: None
+        # Set by whoever settles costs: count each call's provider-reported tokens in `ctx.tally`.
+        self.track_tokens = False
 
 
 gateway = ModelGateway()
@@ -133,7 +162,10 @@ class GatewayRunnable:
     def invoke(self, input: Any, config: Any = None, **kwargs: Any) -> Any:
         gw = self._gateway()
         config = dict(config or {})
-        ctx = CallContext(self._provider, self._model, config)
+        tally = CallTally() if gw.track_tokens else None
+        if tally is not None:
+            config["callbacks"] = [*(config.get("callbacks") or []), tally]
+        ctx = CallContext(self._provider, self._model, config, input=input, tally=tally)
         outcome = gw.before_call(ctx)
         target = self._inner
         if isinstance(outcome, Redirect):
@@ -142,7 +174,11 @@ class GatewayRunnable:
             target = self._replay(outcome.provider, outcome.model)
             config = self._relabel(config, outcome.provider, outcome.model)
             ctx = replace(ctx, provider=outcome.provider, model=outcome.model, config=config)
-        result = target.invoke(input, config, **kwargs)
+        try:
+            result = target.invoke(input, config, **kwargs)
+        except BaseException as exc:
+            gw.on_error(ctx, exc)
+            raise
         gw.after_call(ctx, result)
         return result
 

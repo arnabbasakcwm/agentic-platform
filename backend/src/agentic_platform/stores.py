@@ -2186,11 +2186,18 @@ class OrgModelSettings(BaseModel):
     catalog: list[str] | None = None
     # Used instead of a blocked model when the person is allowed it (None = never substitute).
     fallback_model: str | None = None
+    # Models with no price that may still run under a hard-limit budget (their cost is counted as
+    # 0 - an explicit admin decision; otherwise a hard limit cannot meter them and they are refused).
+    unpriced_overrides: list[str] = Field(default_factory=list)
     updated_by: str | None = None
     updated_at: datetime = Field(default_factory=_now)
 
     @model_validator(mode="after")
     def _check(self) -> "OrgModelSettings":
+        bad = [m for m in self.unpriced_overrides if not valid_model_ref(m) or m.endswith("/*")]
+        if bad:
+            raise ValueError("an override names one model (provider/model)")
+        self.unpriced_overrides = list(dict.fromkeys(self.unpriced_overrides))
         if self.catalog is not None:
             self.catalog = _model_refs(self.catalog)
         if self.fallback_model is not None and (not valid_model_ref(self.fallback_model) or self.fallback_model.endswith("/*")):

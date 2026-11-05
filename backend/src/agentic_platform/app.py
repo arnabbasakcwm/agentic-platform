@@ -83,6 +83,7 @@ from .errors import (
     RunNotFoundError,
     RunNotStoppableError,
     AccessRevokedError,
+    BudgetExceededError,
     ModelNotPermittedError,
     RunStoppedError,
     DataSourceNotFoundError,
@@ -120,6 +121,7 @@ from .meta_planner_prompt import discuss_brief, plan_project, revise_plan
 from . import audit as audit_log
 from . import budget_policy as bpol
 from . import model_policy as mpol
+from .config import BUDGET_OUTPUT_TOKEN_ESTIMATE
 from .model_gateway import CallContext, CallIdentity, Redirect, check_identity, gateway as model_gateway
 from .stores import period_start_for
 from .policy import (
@@ -153,7 +155,9 @@ from .stores import (
     AgentFallback,
     AgentGrant,
     BudgetAllocationError,
+    BudgetBlock,
     BudgetNode,
+    LedgerEntry,
     ModelAllowlist,
     OrgModelSettings,
     level_rank,
@@ -2082,11 +2086,12 @@ def my_budget(project_id: str | None = None, user: UserRecord = Depends(current_
     team_id = _project_at(project_id, user, "view").team_id if project_id else None
     nodes = [_budgets.get(i) for i in bpol.chain_ids(user.id, team_id, _budgets)]
     chain = [n for n in nodes if n is not None]
+    mine = {f"user:{user.id}", f"team:{team_id}"}  # others above you are limits, not yours to read
     return {
         "chain": [
             {"id": n.id, "scope_type": n.scope_type, "amount": n.amount, "remaining": n.remaining,
              "period": n.period, "hard_limit": n.hard_limit}
-            for n in chain
+            for n in chain if n.id in mine or bpol.may_see(_actor(user), n, _budgets)
         ],
         "tightest_remaining": min((n.remaining for n in chain if n.hard_limit), default=None),
     }
@@ -2230,29 +2235,126 @@ def _model_gateway_hook(ctx: CallContext) -> Redirect | None:
         fallbacks.append(org_fallback)
     decision = mpol.decide(key, limits, sorted(set(_offered_cached()) | {key}), list(dict.fromkeys(fallbacks)))
     details = {"project_id": ident.project_id, "agent_id": ctx.agent_id, "model": key, "reason": decision.reason}
-    if decision.model == key:
-        return None
     if decision.model is None:
         logger.warning("model %s blocked for user %s (%s)", key, who.id, decision.reason)
         audit_log.record(_audit, who.id, "model.blocked", "model", key, team_id=ident.team_id, details=details)
         raise ModelNotPermittedError(key, decision.reason)
-    logger.info("model %s replaced by fallback %s for user %s (%s)", key, decision.model, who.id, decision.reason)
-    seen_key = (who.id, str(ident.project_id), str(ctx.agent_id), key, decision.model)
-    now = time.monotonic()
-    if now - _FALLBACK_SEEN.get(seen_key, -1e9) > 600:
-        _FALLBACK_SEEN[seen_key] = now
-        audit_log.record(_audit, who.id, "model.fallback", "model", key, team_id=ident.team_id,
-                         details={**details, "used": decision.model})
-    provider, model = decision.model.split("/", 1)
-    return Redirect(provider, model, blocked=ModelNotPermittedError(key, decision.reason))
+    redirect: Redirect | None = None
+    if decision.model != key:
+        logger.info("model %s replaced by fallback %s for user %s (%s)", key, decision.model, who.id, decision.reason)
+        seen_key = (who.id, str(ident.project_id), str(ctx.agent_id), key, decision.model)
+        now = time.monotonic()
+        if now - _FALLBACK_SEEN.get(seen_key, -1e9) > 600:
+            _FALLBACK_SEEN[seen_key] = now
+            audit_log.record(_audit, who.id, "model.fallback", "model", key, team_id=ident.team_id,
+                             details={**details, "used": decision.model})
+        provider, model = decision.model.split("/", 1)
+        redirect = Redirect(provider, model, blocked=ModelNotPermittedError(key, decision.reason))
+    _reserve_budget(ctx, ident, who.id, decision.model)  # the model that will really answer is the one priced
+    return redirect
 
 
 model_gateway.before_call = _model_gateway_hook
 
 
+def _input_text(value: Any) -> str:
+    """The text of a model input (a prompt string, or a list of messages), to estimate its size."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (list, tuple)):
+        return "\n".join(_input_text(v) for v in value)
+    content = getattr(value, "content", None)
+    return content if isinstance(content, str) else str(content if content is not None else value)
+
+
+def _reserve_budget(ctx: CallContext, ident: CallIdentity, user_id: str, final_key: str) -> None:
+    """Set credit aside on every budget of the call's chain (the person's, the project team's, and
+    everything above) - atomically: parallel calls cannot both take the last credit. A hard
+    budget that cannot cover it stops the call with BUDGET_EXCEEDED before any money is spent. A
+    model with no price cannot be metered, so under a hard limit it is refused unless an admin
+    explicitly allowed it."""
+    chain = bpol.chain_ids(user_id, ident.team_id, _budgets)
+    now = datetime.now(timezone.utc)
+    nodes = []
+    for nid in chain:
+        _budgets.reset_if_due(nid, now)  # a new period starts on first use
+        node = _budgets.get(nid)
+        if node is not None:
+            nodes.append(node)
+    provider, model = final_key.split("/", 1)
+    unpriced = usage_mod.price_for(provider, model) is None
+    if unpriced and any(n.hard_limit for n in nodes) and final_key not in _models.get_org().unpriced_overrides:
+        logger.warning("unpriced model %s refused under a hard budget for user %s", final_key, user_id)
+        audit_log.record(_audit, user_id, "model.blocked", "model", final_key, team_id=ident.team_id,
+                         details={"project_id": ident.project_id, "agent_id": ctx.agent_id, "model": final_key,
+                                  "reason": "unpriced"})
+        raise ModelNotPermittedError(final_key, "unpriced")
+    in_tokens = usage_mod.estimate_tokens(_input_text(ctx.input))
+    estimate = 0 if unpriced else (usage_mod.cost_micro(provider, model, in_tokens, BUDGET_OUTPUT_TOKEN_ESTIMATE) or 0)
+    reservation = None
+    if nodes and estimate > 0:
+        try:
+            reservation = _budgets.reserve([n.id for n in nodes], estimate)
+        except BudgetBlock as blocked:
+            logger.warning("budget %s exhausted for user %s", blocked.node_id, user_id)
+            audit_log.record(_audit, user_id, "budget.blocked", "budget", blocked.node_id, team_id=ident.team_id,
+                             details={"project_id": ident.project_id, "agent_id": ctx.agent_id, "model": final_key,
+                                      "remaining": blocked.remaining, "needed": blocked.needed})
+            raise BudgetExceededError(blocked.node_id, blocked.remaining, blocked.needed) from None
+    ctx.state.update(user_id=user_id, team_id=ident.team_id, project_id=ident.project_id, agent_id=ctx.agent_id,
+                     key=final_key, unpriced=unpriced, estimate=estimate, in_tokens=in_tokens,
+                     reservation=reservation, nodes=[n.id for n in nodes])
+
+
+def _settle_call(ctx: CallContext, ok: bool) -> None:
+    """Charge what the call really cost (or, when the provider reported no tokens, the estimate) in
+    place of the reservation, and write the ledger entry. Never raises: accounting must not fail
+    the work it measures."""
+    st = ctx.state
+    if "key" not in st:
+        return
+    try:
+        provider, model = st["key"].split("/", 1)
+        tally = ctx.tally
+        reported = bool(tally is not None and tally.reported)
+        in_t = tally.input_tokens if reported else st["in_tokens"]
+        out_t = tally.output_tokens if reported else (BUDGET_OUTPUT_TOKEN_ESTIMATE if ok else 0)
+        if st["unpriced"]:
+            actual = 0
+        elif reported:
+            actual = usage_mod.cost_micro(provider, model, in_t, out_t) or 0
+        else:
+            actual = st["estimate"] if ok else 0  # no tokens reported: keep the estimate; a failed call costs nothing
+        reservation = st.get("reservation")
+        if reservation is not None:
+            _budgets.settle(reservation, actual)
+        _ledger.append(LedgerEntry(
+            id=uuid.uuid4().hex, user_id=st["user_id"], team_id=st["team_id"], project_id=st["project_id"],
+            agent_id=st["agent_id"], provider=provider, model=model, input_tokens=in_t, output_tokens=out_t,
+            cost_micro=actual, estimate_micro=st["estimate"], unpriced=st["unpriced"],
+            estimated=ok and not reported, outcome="ok" if ok else "failed", nodes=st["nodes"],
+        ))
+    except Exception:  # noqa: BLE001
+        logger.exception("settling the cost of a model call failed")
+
+
+def _after_model_call(ctx: CallContext, result: Any) -> None:
+    _settle_call(ctx, True)
+
+
+def _on_model_error(ctx: CallContext, exc: BaseException) -> None:
+    _settle_call(ctx, False)
+
+
+model_gateway.after_call = _after_model_call
+model_gateway.on_error = _on_model_error
+model_gateway.track_tokens = True
+
+
 class OrgModelsRequest(BaseModel):
     catalog: list[str] | None = None  # None = every offered model
     fallback_model: str | None = None  # None = never substitute
+    unpriced_overrides: list[str] = Field(default_factory=list, max_length=100)  # priceless models allowed under hard budgets
 
 
 class AllowlistRequest(BaseModel):
@@ -2271,8 +2373,8 @@ def _checked_refs(refs: list[str], offered: list[str]) -> list[str]:
 
 
 def _org_body(org: OrgModelSettings) -> dict[str, Any]:
-    return {"catalog": org.catalog, "fallback_model": org.fallback_model, "updated_by": org.updated_by,
-            "updated_at": org.updated_at}
+    return {"catalog": org.catalog, "fallback_model": org.fallback_model, "unpriced_overrides": org.unpriced_overrides,
+            "updated_by": org.updated_by, "updated_at": org.updated_at}
 
 
 def _allowlist_body(a: ModelAllowlist) -> dict[str, Any]:
@@ -2299,14 +2401,17 @@ def set_org_models(req: OrgModelsRequest, admin: UserRecord = Depends(require_ma
     fallback = req.fallback_model
     if fallback is not None and (not valid_model_ref(fallback) or fallback not in offered):
         raise ShareError("the fallback must be one model the platform offers", error_type="UnknownModel")
+    overrides = list(dict.fromkeys(req.unpriced_overrides))
+    if any(not valid_model_ref(m) or m.endswith("/*") or m not in offered for m in overrides):
+        raise ShareError("an override must be one model the platform offers", error_type="UnknownModel")
     before = _models.get_org()
-    after = OrgModelSettings(catalog=catalog, fallback_model=fallback, updated_by=admin.id)
-    if (before.catalog, before.fallback_model) != (after.catalog, after.fallback_model):
+    after = OrgModelSettings(catalog=catalog, fallback_model=fallback, unpriced_overrides=overrides, updated_by=admin.id)
+    if (before.catalog, before.fallback_model, before.unpriced_overrides) != (after.catalog, after.fallback_model, after.unpriced_overrides):
         _models.set_org(after)
         audit_log.record(
             _audit, admin.id, "model.org_updated", "model_settings", "org",
-            before={"catalog": before.catalog, "fallback_model": before.fallback_model},
-            after={"catalog": after.catalog, "fallback_model": after.fallback_model},
+            before={"catalog": before.catalog, "fallback_model": before.fallback_model, "unpriced_overrides": before.unpriced_overrides},
+            after={"catalog": after.catalog, "fallback_model": after.fallback_model, "unpriced_overrides": after.unpriced_overrides},
         )
     return {"org": _org_body(_models.get_org())}
 
@@ -4175,6 +4280,11 @@ def _handle_knowledge(_req: Request, exc: KnowledgeError):
 @app.exception_handler(ModelNotPermittedError)
 def _handle_model_not_permitted(_req: Request, exc: ModelNotPermittedError):
     return _error_response(403, "MODEL_NOT_PERMITTED", str(exc), {"model": exc.model, "reason": exc.reason})
+
+
+@app.exception_handler(BudgetExceededError)
+def _handle_budget_exceeded(_req: Request, exc: BudgetExceededError):
+    return _error_response(402, "BUDGET_EXCEEDED", str(exc), {"scope": exc.scope, "remaining": exc.remaining, "needed": exc.needed})
 
 
 @app.exception_handler(AccessRevokedError)

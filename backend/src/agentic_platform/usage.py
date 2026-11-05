@@ -175,6 +175,25 @@ def price_for(provider: str, model: str, table: dict[str, Any] | None = None) ->
     return table["models"].get(f"{provider}/{model}")
 
 
+def cost_micro(provider: str, model: str, input_tokens: int, output_tokens: int,
+               table: dict[str, Any] | None = None) -> int | None:
+    """The cost of a call in integer micro-USD (rounded up), or None if the model has no price.
+    A price in USD per 1M tokens is exactly micro-USD per token, so no float ever reaches the
+    budgets: rates are read as decimals."""
+    from decimal import ROUND_CEILING, Decimal
+
+    rate = price_for(provider, model, table)
+    if rate is None:
+        return None
+    long_rate = rate.get("long_context") or {}
+    if long_rate and input_tokens > long_rate.get("above_prompt_tokens", float("inf")):
+        rate = {**rate, **long_rate}
+    total = Decimal(input_tokens) * Decimal(str(rate.get("input_per_1m", 0))) + Decimal(output_tokens) * Decimal(
+        str(rate.get("output_per_1m", 0))
+    )
+    return int(total.to_integral_value(rounding=ROUND_CEILING))
+
+
 # Counted, but never costed: calls to the user's own MCP servers (like other tool API
 # costs, the platform doesn't know or bill them).
 UNCOSTED_KINDS = frozenset({"mcp_call"})

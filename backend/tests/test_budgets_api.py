@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import agentic_platform.app as app_module
+from agentic_platform.agent_schema import AgentPlan, AgentSpec, LLMConfig
 from agentic_platform.stores import (
     InMemoryAgentGrantStore,
     InMemoryAuditStore,
@@ -26,6 +27,9 @@ def w(monkeypatch):
                     ("_teams", InMemoryTeamStore()), ("_audit", InMemoryAuditStore()), ("_grants", InMemoryAgentGrantStore()),
                     ("_budgets", InMemoryBudgetStore()), ("_ledger", InMemoryLedgerStore())]:
         monkeypatch.setattr(app_module, name, s)
+    plan = AgentPlan(agents=[AgentSpec(id="a", role="r", system_prompt="p", llm=LLMConfig(provider="google_genai", model="m"))],
+                     orchestration_pattern="sequential")
+    monkeypatch.setattr(app_module, "plan_project", lambda **kw: plan)  # the suite is offline: never reach a real planner
     client = TestClient(app_module.app)
     for t in ("A", "B"):
         app_module._teams.create_team(TeamRecord(id=t, name=t))
@@ -211,13 +215,18 @@ def test_who_sees_which_budgets(w):
     assert ids("out") == set()
 
 
-def test_my_budget_shows_only_my_chain(w):
+def test_my_budget_shows_my_own_budget_and_the_project_teams_but_not_the_pools_above(w):
     build(w)
+    mem = "user:" + w.ids["mem"]
     chain = w.c.get("/me/budget", headers=w.h["mem"]).json()
-    assert [n["id"] for n in chain["chain"]] == ["user:" + w.ids["mem"], "team:A", "pool:" + w.ids["sub"], "org"]
-    assert chain["tightest_remaining"] == 100 * USD
-    pid = w.c.post("/projects", json={"brief": "x"}, headers=w.h["mem"]).json()["project_id"] if False else None
-    assert w.c.get("/me/budget", headers=w.h["out"]).json() == {"chain": [], "tightest_remaining": None}
+    assert [n["id"] for n in chain["chain"]] == [mem]  # not the team, pool or org: those are others' to read
+    assert chain["tightest_remaining"] == 100 * USD  # but they still bound the answer
+    pid = w.c.post("/projects", json={"brief": "x"}, headers=w.h["mem"]).json()["project_id"]
+    app_module._store.set_team(pid, "A", True)
+    both = w.c.get("/me/budget", params={"project_id": pid}, headers=w.h["mem"]).json()
+    assert [n["id"] for n in both["chain"]] == [mem, "team:A"]
+    # someone with no budget of their own is still limited by the org pool
+    assert w.c.get("/me/budget", headers=w.h["out"]).json() == {"chain": [], "tightest_remaining": 1000 * USD}
 
 
 def test_every_change_writes_one_audit_entry_and_refusals_none(w):

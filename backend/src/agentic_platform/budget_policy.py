@@ -63,7 +63,7 @@ def may_see(actor: Actor, node: BudgetNode, store: BudgetStore) -> bool:
 
 def chain_ids(user_id: str, team_id: str | None, store: BudgetStore) -> list[str]:
     """The budgets a model call is charged to, tightest first: the person's, then the project
-    team's, each with everything above it (duplicates removed, order kept)."""
+    team's, each with everything above it, and always the org pool (duplicates removed)."""
     ids: list[str] = []
     for start in (f"user:{user_id}", f"team:{team_id}" if team_id else None):
         node = store.get(start) if start else None
@@ -71,4 +71,6 @@ def chain_ids(user_id: str, team_id: str | None, store: BudgetStore) -> list[str
             continue
         ids.append(node.id)
         ids.extend(a.id for a in ancestors(store, node))
+    if store.get("org") is not None:  # the org pool counts everyone's spending, budgeted people or not
+        ids.append("org")
     return list(dict.fromkeys(ids))

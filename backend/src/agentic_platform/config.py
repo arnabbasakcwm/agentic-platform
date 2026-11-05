@@ -111,3 +111,7 @@ MCP_MAX_RESULT_CHARS: int = int(os.environ.get("MCP_MAX_RESULT_CHARS") or 12_000
 # One model request may take this long before the client gives up and the agent's retry
 # loop sees the error. Without it a stalled provider call waits forever.
 LLM_REQUEST_TIMEOUT_S: float = float(os.environ.get("LLM_REQUEST_TIMEOUT_S") or 180)
+
+# Budgets reserve credit before a model call, from the input size plus this many output tokens;
+# the real cost replaces the estimate afterwards.
+BUDGET_OUTPUT_TOKEN_ESTIMATE = 1024
