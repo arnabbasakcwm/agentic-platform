@@ -2145,6 +2145,250 @@ def make_grant_store() -> AgentGrantStore:
     return InMemoryAgentGrantStore()
 
 
+# -------------------------------------------------------------------------- model privileges
+# Which models people may use. A model is written "provider/model" (Bedrock ids contain dots,
+# colons and slashes, so only the first "/" separates the provider); "provider/*" allows every
+# model of a provider. Three layers, each optional below the org: the org catalog, then a
+# team allowlist, then a user allowlist. What someone may use is their intersection.
+def model_key(provider: str, model: str) -> str:
+    return f"{provider}/{model}"
+
+
+def valid_model_ref(ref: str) -> bool:
+    """`provider/model` or `provider/*`: no spaces, a provider, something after the slash."""
+    if not ref or len(ref) > 200 or any(c.isspace() for c in ref) or "/" not in ref:
+        return False
+    provider, rest = ref.split("/", 1)
+    return bool(provider) and bool(rest) and "*" not in provider and ("*" not in rest or rest == "*")
+
+
+def model_matches(pattern: str, key: str) -> bool:
+    """Whether the model `key` is covered by `pattern` (exact, or `provider/*`)."""
+    if pattern == key:
+        return True
+    return pattern.endswith("/*") and key.startswith(pattern[:-1])
+
+
+def _model_refs(refs: list[str]) -> list[str]:
+    bad = [r for r in refs if not valid_model_ref(r)]
+    if bad:
+        raise ValueError(f"not a model reference (provider/model or provider/*): {bad[0]!r}")
+    return list(dict.fromkeys(refs))  # no duplicates, order kept
+
+
+class OrgModelSettings(BaseModel):
+    """The organisation's model catalog and its optional fallback."""
+
+    id: str = "org"
+    # None = every model the platform offers. A list narrows the platform's models to these.
+    catalog: list[str] | None = None
+    # Used instead of a blocked model when the person is allowed it (None = never substitute).
+    fallback_model: str | None = None
+    updated_by: str | None = None
+    updated_at: datetime = Field(default_factory=_now)
+
+    @model_validator(mode="after")
+    def _check(self) -> "OrgModelSettings":
+        if self.catalog is not None:
+            self.catalog = _model_refs(self.catalog)
+        if self.fallback_model is not None and (not valid_model_ref(self.fallback_model) or self.fallback_model.endswith("/*")):
+            raise ValueError("the fallback must name one model (provider/model)")
+        return self
+
+
+class ModelAllowlist(BaseModel):
+    """What a team or a user is limited to. No allowlist at all means no limit at that level;
+    an empty list means no model at all."""
+
+    id: str  # "team:<id>" | "user:<id>"
+    scope_type: Literal["team", "user"]
+    scope_id: str
+    models: list[str]
+    set_by: str
+    updated_at: datetime = Field(default_factory=_now)
+
+    @model_validator(mode="after")
+    def _check(self) -> "ModelAllowlist":
+        self.models = _model_refs(self.models)
+        if self.id != f"{self.scope_type}:{self.scope_id}":
+            raise ValueError("allowlist id must be scope_type:scope_id")
+        return self
+
+    @staticmethod
+    def make_id(scope_type: str, scope_id: str) -> str:
+        return f"{scope_type}:{scope_id}"
+
+
+class AgentFallback(BaseModel):
+    """A fallback model for one agent of one project, overriding the org's."""
+
+    id: str  # project:agent
+    project_id: str
+    agent_id: str
+    model: str
+    set_by: str
+    updated_at: datetime = Field(default_factory=_now)
+
+    @model_validator(mode="after")
+    def _check(self) -> "AgentFallback":
+        if not valid_model_ref(self.model) or self.model.endswith("/*"):
+            raise ValueError("the fallback must name one model (provider/model)")
+        return self
+
+    @staticmethod
+    def make_id(project_id: str, agent_id: str) -> str:
+        return f"{project_id}:{agent_id}"
+
+
+class ModelPolicyStore(Protocol):
+    def get_org(self) -> OrgModelSettings:
+        """The org's settings; the defaults (whole platform catalog, no fallback) if never set."""
+
+    def set_org(self, settings: OrgModelSettings) -> None: ...
+
+    def get_allowlist(self, scope_type: str, scope_id: str) -> ModelAllowlist | None: ...
+
+    def set_allowlist(self, allowlist: ModelAllowlist) -> None: ...
+
+    def delete_allowlist(self, scope_type: str, scope_id: str) -> bool: ...
+
+    def list_allowlists(self, scope_type: str | None = None) -> list[ModelAllowlist]: ...
+
+    def get_agent_fallback(self, project_id: str, agent_id: str) -> AgentFallback | None: ...
+
+    def set_agent_fallback(self, fallback: AgentFallback) -> None: ...
+
+    def delete_agent_fallback(self, project_id: str, agent_id: str) -> bool: ...
+
+    def delete_for_project(self, project_id: str) -> int:
+        """Drop a deleted project's agent fallbacks."""
+
+
+class InMemoryModelPolicyStore:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._org = OrgModelSettings()
+        self._lists: dict[str, ModelAllowlist] = {}
+        self._fallbacks: dict[str, AgentFallback] = {}
+
+    def get_org(self) -> OrgModelSettings:
+        return self._org.model_copy(deep=True)
+
+    def set_org(self, settings: OrgModelSettings) -> None:
+        with self._lock:
+            self._org = settings.model_copy(deep=True)
+
+    def get_allowlist(self, scope_type: str, scope_id: str) -> ModelAllowlist | None:
+        a = self._lists.get(ModelAllowlist.make_id(scope_type, scope_id))
+        return a.model_copy(deep=True) if a else None
+
+    def set_allowlist(self, allowlist: ModelAllowlist) -> None:
+        with self._lock:
+            self._lists[allowlist.id] = allowlist.model_copy(deep=True)
+
+    def delete_allowlist(self, scope_type: str, scope_id: str) -> bool:
+        with self._lock:
+            return self._lists.pop(ModelAllowlist.make_id(scope_type, scope_id), None) is not None
+
+    def list_allowlists(self, scope_type: str | None = None) -> list[ModelAllowlist]:
+        with self._lock:
+            found = [a.model_copy(deep=True) for a in self._lists.values() if scope_type in (None, a.scope_type)]
+        return sorted(found, key=lambda a: a.id)
+
+    def get_agent_fallback(self, project_id: str, agent_id: str) -> AgentFallback | None:
+        f = self._fallbacks.get(AgentFallback.make_id(project_id, agent_id))
+        return f.model_copy() if f else None
+
+    def set_agent_fallback(self, fallback: AgentFallback) -> None:
+        with self._lock:
+            self._fallbacks[fallback.id] = fallback.model_copy()
+
+    def delete_agent_fallback(self, project_id: str, agent_id: str) -> bool:
+        with self._lock:
+            return self._fallbacks.pop(AgentFallback.make_id(project_id, agent_id), None) is not None
+
+    def delete_for_project(self, project_id: str) -> int:
+        with self._lock:
+            ids = [i for i, f in self._fallbacks.items() if f.project_id == project_id]
+            for i in ids:
+                del self._fallbacks[i]
+        return len(ids)
+
+
+class MongoModelPolicyStore:
+    """`model_org` (one document, `_id` "org"), `model_allowlists` (`_id` "team:x" / "user:x") and
+    `agent_fallbacks` (`_id` "project:agent")."""
+
+    def __init__(self, db: "Database"):
+        self._org = db["model_org"]
+        self._lists = db["model_allowlists"]
+        self._fallbacks = db["agent_fallbacks"]
+        with _mongo_errors():
+            self._fallbacks.create_index("project_id")
+
+    @staticmethod
+    def _out(doc: dict[str, Any], cls: Any) -> Any:
+        doc = dict(doc)
+        doc["id"] = doc.pop("_id")
+        return cls.model_validate(doc)
+
+    @staticmethod
+    def _in(model: BaseModel) -> dict[str, Any]:
+        body = model.model_dump()
+        body["_id"] = body.pop("id")
+        return body
+
+    def get_org(self) -> OrgModelSettings:
+        with _mongo_errors():
+            doc = self._org.find_one({"_id": "org"})
+        return self._out(doc, OrgModelSettings) if doc else OrgModelSettings()
+
+    def set_org(self, settings: OrgModelSettings) -> None:
+        with _mongo_errors():
+            self._org.replace_one({"_id": "org"}, self._in(settings), upsert=True)
+
+    def get_allowlist(self, scope_type: str, scope_id: str) -> ModelAllowlist | None:
+        with _mongo_errors():
+            doc = self._lists.find_one({"_id": ModelAllowlist.make_id(scope_type, scope_id)})
+        return self._out(doc, ModelAllowlist) if doc else None
+
+    def set_allowlist(self, allowlist: ModelAllowlist) -> None:
+        with _mongo_errors():
+            self._lists.replace_one({"_id": allowlist.id}, self._in(allowlist), upsert=True)
+
+    def delete_allowlist(self, scope_type: str, scope_id: str) -> bool:
+        with _mongo_errors():
+            return self._lists.delete_one({"_id": ModelAllowlist.make_id(scope_type, scope_id)}).deleted_count > 0
+
+    def list_allowlists(self, scope_type: str | None = None) -> list[ModelAllowlist]:
+        with _mongo_errors():
+            docs = list(self._lists.find({"scope_type": scope_type} if scope_type else {}))
+        return sorted((self._out(d, ModelAllowlist) for d in docs), key=lambda a: a.id)
+
+    def get_agent_fallback(self, project_id: str, agent_id: str) -> AgentFallback | None:
+        with _mongo_errors():
+            doc = self._fallbacks.find_one({"_id": AgentFallback.make_id(project_id, agent_id)})
+        return self._out(doc, AgentFallback) if doc else None
+
+    def set_agent_fallback(self, fallback: AgentFallback) -> None:
+        with _mongo_errors():
+            self._fallbacks.replace_one({"_id": fallback.id}, self._in(fallback), upsert=True)
+
+    def delete_agent_fallback(self, project_id: str, agent_id: str) -> bool:
+        with _mongo_errors():
+            return self._fallbacks.delete_one({"_id": AgentFallback.make_id(project_id, agent_id)}).deleted_count > 0
+
+    def delete_for_project(self, project_id: str) -> int:
+        with _mongo_errors():
+            return self._fallbacks.delete_many({"project_id": project_id}).deleted_count
+
+
+def make_model_policy_store() -> ModelPolicyStore:
+    if MONGODB_URI:
+        return MongoModelPolicyStore(mongo_database(MONGODB_URI, MONGODB_DB))
+    return InMemoryModelPolicyStore()
+
+
 def make_team_store() -> TeamStore:
     if MONGODB_URI:
         return MongoTeamStore(mongo_database(MONGODB_URI, MONGODB_DB))
