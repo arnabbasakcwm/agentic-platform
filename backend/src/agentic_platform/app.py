@@ -116,6 +116,7 @@ from .graph_builder import (
 )
 from .meta_planner_prompt import discuss_brief, plan_project, revise_plan
 from . import audit as audit_log
+from . import model_policy as mpol
 from .model_gateway import CallIdentity
 from .policy import (
     Actor,
@@ -144,8 +145,13 @@ from .stores import (
     ProjectRecord,
     GRANT_LEVELS,
     WHOLE_PROJECT,
+    AgentFallback,
     AgentGrant,
+    ModelAllowlist,
+    OrgModelSettings,
     level_rank,
+    model_key,
+    valid_model_ref,
     TEAM_NAME_MAX,
     TeamMembership,
     TeamRecord,
@@ -157,6 +163,7 @@ from .stores import (
     make_run_store,
     make_audit_store,
     make_grant_store,
+    make_model_policy_store,
     make_team_store,
     make_datasource_store,
     make_mcp_store,
@@ -204,6 +211,7 @@ _runs = make_run_store()
 _teams = make_team_store()
 _audit = make_audit_store()
 _grants = make_grant_store()
+_models = make_model_policy_store()
 logger = logging.getLogger(__name__)
 
 try:  # existing installations move onto teams once; idempotent and never blocks start-up
@@ -1977,6 +1985,212 @@ def admin_user_usage(
     return {"user": user, "projects": projects, **body}
 
 
+# ------------------------------------------------------------------------ model privileges
+def _offered_models() -> list[str]:
+    """Every model the platform offers, as `provider/model` keys: each provider's default plus,
+    when the AWS account is reachable, the Bedrock models it can use. This is the org's full
+    catalog before the Super Admin narrows it."""
+    keys = [model_key(p, m) for p, m in DEFAULT_MODELS.items()]
+    if aws_credentials_available():
+        keys += [model_key("bedrock", m["model"]) for m in bedrock_models()]
+    return list(dict.fromkeys(keys))
+
+
+def _limits_for(actor: Actor, team_id: str | None) -> mpol.Limits:
+    """The model limits that apply to this person working in this team's context. The Super
+    Admin is bound only by the org's catalog (which the Super Admin sets)."""
+    if actor.is_master:
+        return mpol.Limits(org=None, layers=())
+    return mpol.limits_for(_models, actor.user_id, team_id)
+
+
+class OrgModelsRequest(BaseModel):
+    catalog: list[str] | None = None  # None = every offered model
+    fallback_model: str | None = None  # None = never substitute
+
+
+class AllowlistRequest(BaseModel):
+    models: list[str] = Field(max_length=200)
+
+
+def _checked_refs(refs: list[str], offered: list[str]) -> list[str]:
+    """Every reference must be well-formed and cover at least one offered model."""
+    bad = [r for r in refs if not valid_model_ref(r)]
+    if bad:
+        raise ShareError(f"not a model reference (provider/model or provider/*): {bad[0]!r}", error_type="InvalidModelReference")
+    unknown = mpol.escalations(refs, offered, mpol.Limits(org=None, layers=()))
+    if unknown:
+        raise ShareError(f"the platform does not offer: {', '.join(unknown)}", error_type="UnknownModel")
+    return list(dict.fromkeys(refs))
+
+
+def _org_body(org: OrgModelSettings) -> dict[str, Any]:
+    return {"catalog": org.catalog, "fallback_model": org.fallback_model, "updated_by": org.updated_by,
+            "updated_at": org.updated_at}
+
+
+def _allowlist_body(a: ModelAllowlist) -> dict[str, Any]:
+    return {"scope_type": a.scope_type, "scope_id": a.scope_id, "models": a.models, "set_by": a.set_by,
+            "updated_at": a.updated_at}
+
+
+@app.get("/admin/models")
+def admin_models(admin: UserRecord = Depends(require_admin)) -> dict[str, Any]:
+    """The org's model catalog and fallback, every allowlist, and what the platform offers
+    (Super Admin and Sub Admins)."""
+    return {
+        "offered": _offered_models(),
+        "org": _org_body(_models.get_org()),
+        "allowlists": [_allowlist_body(a) for a in _models.list_allowlists()],
+    }
+
+
+@app.put("/admin/models/org")
+def set_org_models(req: OrgModelsRequest, admin: UserRecord = Depends(require_master)) -> dict[str, Any]:
+    """Narrow the org's catalog and/or set the fallback model (Super Admin only)."""
+    offered = _offered_models()
+    catalog = _checked_refs(req.catalog, offered) if req.catalog is not None else None
+    fallback = req.fallback_model
+    if fallback is not None and (not valid_model_ref(fallback) or fallback not in offered):
+        raise ShareError("the fallback must be one model the platform offers", error_type="UnknownModel")
+    before = _models.get_org()
+    after = OrgModelSettings(catalog=catalog, fallback_model=fallback, updated_by=admin.id)
+    if (before.catalog, before.fallback_model) != (after.catalog, after.fallback_model):
+        _models.set_org(after)
+        audit_log.record(
+            _audit, admin.id, "model.org_updated", "model_settings", "org",
+            before={"catalog": before.catalog, "fallback_model": before.fallback_model},
+            after={"catalog": after.catalog, "fallback_model": after.fallback_model},
+        )
+    return {"org": _org_body(_models.get_org())}
+
+
+def _set_allowlist(actor: Actor, scope_type: str, scope_id: str, models: list[str], team_id: str | None) -> ModelAllowlist:
+    previous = _models.get_allowlist(scope_type, scope_id)
+    current = ModelAllowlist(
+        id=ModelAllowlist.make_id(scope_type, scope_id), scope_type=scope_type, scope_id=scope_id,  # type: ignore[arg-type]
+        models=models, set_by=actor.user_id,
+    )
+    if previous is None or previous.models != current.models:
+        _models.set_allowlist(current)
+        audit_log.record(
+            _audit, actor.user_id, "model.allowlist_set", "model_allowlist", current.id, team_id=team_id,
+            before={"models": previous.models} if previous else None, after={"models": current.models},
+        )
+    return _models.get_allowlist(scope_type, scope_id) or current
+
+
+def _clear_allowlist(actor: Actor, scope_type: str, scope_id: str, team_id: str | None) -> bool:
+    previous = _models.get_allowlist(scope_type, scope_id)
+    if previous is None:
+        return False
+    _models.delete_allowlist(scope_type, scope_id)
+    audit_log.record(
+        _audit, actor.user_id, "model.allowlist_cleared", "model_allowlist", previous.id, team_id=team_id,
+        before={"models": previous.models}, after=None,
+    )
+    return True
+
+
+@app.get("/teams/{team_id}/models")
+def team_models(team_id: str, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """The team's allowlist and its members' limits (Super Admin and the team's group admins)."""
+    actor = _actor(user)
+    _visible_team(team_id, actor, "team.manage_members")
+    members = [a for a in _models.list_allowlists("member") if a.scope_id.startswith(f"{team_id}:")]
+    team = _models.get_allowlist("team", team_id)
+    return {
+        "offered": _offered_models(),
+        "org": _org_body(_models.get_org()),
+        "team": _allowlist_body(team) if team else None,
+        "members": [_allowlist_body(a) for a in members],
+    }
+
+
+@app.put("/teams/{team_id}/models")
+def set_team_models(team_id: str, req: AllowlistRequest, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """Limit the models a team's projects may use (Super Admin only)."""
+    actor = _actor(user)
+    _visible_team(team_id, actor, "models.team_allowlist")
+    models = _checked_refs(req.models, _offered_models())
+    return {"allowlist": _allowlist_body(_set_allowlist(actor, "team", team_id, models, team_id))}
+
+
+@app.delete("/teams/{team_id}/models")
+def clear_team_models(team_id: str, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    actor = _actor(user)
+    _visible_team(team_id, actor, "models.team_allowlist")
+    return {"cleared": _clear_allowlist(actor, "team", team_id, team_id)}
+
+
+def _member_target(team_id: str, member_id: str, actor: Actor) -> None:
+    _visible_team(team_id, actor, "team.manage_members")
+    if _teams.get_membership(team_id, member_id) is None:
+        raise TeamNotFoundError()
+
+
+@app.put("/teams/{team_id}/members/{member_id}/models")
+def set_member_models(
+    team_id: str, member_id: str, req: AllowlistRequest, user: UserRecord = Depends(current_user)
+) -> dict[str, Any]:
+    """Limit one member's models inside the team (Super Admin, or the team's group admin). You can
+    give only models you may use yourself in this team, so nobody is handed more than the granter has."""
+    actor = _actor(user)
+    _member_target(team_id, member_id, actor)
+    offered = _offered_models()
+    models = _checked_refs(req.models, offered)
+    over = mpol.escalations(models, offered, _limits_for(actor, team_id))
+    if over:
+        raise ShareError(f"you cannot grant models you may not use yourself: {', '.join(over)}", status=403,
+                         error_type="ModelAboveYourOwn")
+    return {"allowlist": _allowlist_body(_set_allowlist(actor, "member", f"{team_id}:{member_id}", models, team_id))}
+
+
+@app.delete("/teams/{team_id}/members/{member_id}/models")
+def clear_member_models(team_id: str, member_id: str, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    actor = _actor(user)
+    _member_target(team_id, member_id, actor)
+    return {"cleared": _clear_allowlist(actor, "member", f"{team_id}:{member_id}", team_id)}
+
+
+@app.put("/users/{target_id}/models")
+def set_user_models(target_id: str, req: AllowlistRequest, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """Limit the models a person may use anywhere (Super Admin only)."""
+    actor = _actor(user)
+    if not can(actor, "models.user_allowlist") or _users.get(target_id) is None:
+        raise TeamNotFoundError()
+    models = _checked_refs(req.models, _offered_models())
+    return {"allowlist": _allowlist_body(_set_allowlist(actor, "user", target_id, models, None))}
+
+
+@app.delete("/users/{target_id}/models")
+def clear_user_models(target_id: str, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    actor = _actor(user)
+    if not can(actor, "models.user_allowlist") or _users.get(target_id) is None:
+        raise TeamNotFoundError()
+    return {"cleared": _clear_allowlist(actor, "user", target_id, None)}
+
+
+@app.get("/me/models")
+def my_models(project_id: str | None = None, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    """The models you may use, optionally for one project (its team's limits apply). Each
+    offered model says whether you may use it, and which limit stops you when you may not."""
+    actor = _actor(user)
+    team_id = None
+    if project_id is not None:
+        team_id = _project_at(project_id, user, "view").team_id
+    limits = mpol.limits_for(_models, actor.user_id, team_id)
+    if actor.is_master:
+        limits = mpol.Limits(org=limits.org, layers=())
+    offered = _offered_models()
+    return {
+        "models": [
+            {"model": k, "allowed": (b := mpol.blocked_by(k, limits)) is None, "blocked_by": b} for k in offered
+        ],
+        "fallback_model": _models.get_org().fallback_model,
+    }
+
+
 # ------------------------------------------------------------------------------ sharing
 class ShareRequest(BaseModel):
     agent_id: str = Field(default=WHOLE_PROJECT, min_length=1, max_length=100)  # "*" = every agent
@@ -2737,6 +2951,7 @@ def delete_project(project_id: str, user: UserRecord = Depends(current_user)) ->
     _mcp.detach_project(user.id, project_id)
     _runs.delete_for_project(project.tenant_id, project_id)
     _grants.delete_for_project(project_id)
+    _models.delete_for_project(project_id)
     return {"deleted": project_id, "knowledge_documents_detached": detached}
 
 

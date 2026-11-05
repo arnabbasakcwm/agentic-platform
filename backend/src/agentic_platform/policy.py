@@ -182,6 +182,10 @@ _ACTIONS: dict[str, Callable[[Actor, Any], bool]] = {
     # Audit log: the Super and Sub Admin read it org-wide; a group admin only for a team they
     # administer (resource = that team id; None asks for "my teams" and is decided by the route).
     "audit.view": lambda actor, r: actor.is_master or actor.is_sub_admin or (r is not None and actor.admins_team(r)),
+    # Model privileges: the org catalog and the team / user allowlists are the Super Admin's;
+    # a group admin limits their own team's members (checked in the route against their own set).
+    "models.team_allowlist": lambda actor, _r: actor.is_master,
+    "models.user_allowlist": lambda actor, _r: actor.is_master,
     "role.grant_sub_admin": lambda actor, _r: actor.is_master,
     "role.grant_group_admin": _manage_team_members,  # master, or the team's own group admin
     "role.revoke_group_admin": _revoke_group_admin,

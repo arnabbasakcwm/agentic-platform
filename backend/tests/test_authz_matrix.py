@@ -62,6 +62,8 @@ MATRIX = {
     ("audit.view", "A"): {"super", "sub", "ga_a"},  # org-wide for admins, own team for its group admin
     ("audit.view", "B"): {"super", "sub"},  # ga_a is only a member of B
     ("audit.view", None): {"super", "sub"},
+    ("models.team_allowlist", "A"): {"super"},  # team and user allowlists are the Super Admin's
+    ("models.user_allowlist", "ma"): {"super"},
     ("team.add_member", "A"): {"super"},  # choosing from all users needs org-wide sight
     ("team.delete", "A"): {"super"},
     ("team.manage_members", "A"): {"super", "ga_a"},

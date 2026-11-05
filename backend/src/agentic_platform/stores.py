@@ -2200,9 +2200,9 @@ class ModelAllowlist(BaseModel):
     """What a team or a user is limited to. No allowlist at all means no limit at that level;
     an empty list means no model at all."""
 
-    id: str  # "team:<id>" | "user:<id>"
-    scope_type: Literal["team", "user"]
-    scope_id: str
+    id: str  # "team:<id>" | "user:<id>" | "member:<team>:<user>"
+    scope_type: Literal["team", "user", "member"]  # member: one person's limit inside one team
+    scope_id: str  # team id, user id, or "team:user" for member
     models: list[str]
     set_by: str
     updated_at: datetime = Field(default_factory=_now)

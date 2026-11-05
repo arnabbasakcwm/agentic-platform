@@ -1,6 +1,6 @@
 # RBAC Delegation — Progress
 STATUS: IN_PROGRESS
-Iteration: 16
+Iteration: 17
 Branch: feat/rbac-delegation
 Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint configured).
 
@@ -30,7 +30,7 @@ Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint con
 
 ## Phase 4 — Model Privileges
 - [x] P4.1 model privileges schema: `OrgModelSettings` (catalog, fallback_model), `ModelAllowlist` (team/user, empty list = no model), `AgentFallback`, refs `provider/model` or `provider/*`, `ModelPolicyStore` memory+Mongo; 11 tests
-- [ ] P4.2 `effective_models(user)` = intersection; grant APIs with no-escalation
+- [x] P4.2 model privileges APIs: org catalog+fallback (Super Admin), team/user allowlists (Super Admin), member limits (group admin, only from their own effective set), GET /me/models; `model_policy` intersection/escalations/decide; 18 tests (D13)
 - [ ] P4.3 Enforce in gateway (MODEL_NOT_PERMITTED / fallback) incl. sub-agents & tool loops; hard-limit + unpriced model → MODEL_NOT_PERMITTED(reason=unpriced) unless per-model override (D3) — test required
 
 ## Phase 5 — Budgets
@@ -71,3 +71,4 @@ Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint con
 - Iter 14: P3.3 done.
 - Iter 15: P3.4 done.
 - Iter 16: P4.1 done.
+- Iter 17: P4.2 done.
