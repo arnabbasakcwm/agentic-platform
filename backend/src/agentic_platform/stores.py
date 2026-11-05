@@ -1974,6 +1974,159 @@ def make_audit_store() -> AuditStore:
     return InMemoryAuditStore()
 
 
+# ---------------------------------------------------------------------------- agent grants
+# Sharing never copies a project or agent: it records a grant. Levels are cumulative -
+# each includes the ones before it - so a comparison of ranks answers "is this enough?".
+GRANT_LEVELS = ("view", "use", "edit", "manage")  # see config < run < change < re-share
+WHOLE_PROJECT = "*"  # agent_id of a grant that covers every agent of the project
+
+
+def level_rank(level: str) -> int:
+    """Higher is more powerful; an unknown level ranks below every real one (fail closed)."""
+    return GRANT_LEVELS.index(level) + 1 if level in GRANT_LEVELS else 0
+
+
+class AgentGrant(BaseModel):
+    id: str  # project:agent:grantee_type:grantee_id - one grant per grantee and target
+    project_id: str
+    agent_id: str = WHOLE_PROJECT
+    grantee_type: Literal["user", "team"]
+    grantee_id: str
+    level: Literal["view", "use", "edit", "manage"]
+    granted_by: str
+    granted_at: datetime = Field(default_factory=_now)
+
+    @staticmethod
+    def make_id(project_id: str, agent_id: str, grantee_type: str, grantee_id: str) -> str:
+        return f"{project_id}:{agent_id}:{grantee_type}:{grantee_id}"
+
+
+class AgentGrantStore(Protocol):
+    def upsert(self, grant: AgentGrant) -> None:
+        """Create the grant, or change the level of the existing one for the same grantee."""
+
+    def get(self, grant_id: str) -> AgentGrant | None: ...
+
+    def revoke(self, grant_id: str) -> bool:
+        """Remove one grant. Takes effect for the very next check."""
+
+    def list_for_project(self, project_id: str) -> list[AgentGrant]: ...
+
+    def list_for_grantee(self, user_id: str, team_ids: list[str]) -> list[AgentGrant]:
+        """Every grant that reaches this user: made to them, or to any of their teams."""
+
+    def delete_for_project(self, project_id: str) -> int: ...
+
+    def delete_for_grantee(self, grantee_type: str, grantee_id: str) -> int:
+        """Drop every grant to a user or team that no longer exists."""
+
+
+class InMemoryAgentGrantStore:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._grants: dict[str, AgentGrant] = {}
+
+    def upsert(self, grant: AgentGrant) -> None:
+        with self._lock:
+            self._grants[grant.id] = grant.model_copy()
+
+    def get(self, grant_id: str) -> AgentGrant | None:
+        g = self._grants.get(grant_id)
+        return g.model_copy() if g else None
+
+    def revoke(self, grant_id: str) -> bool:
+        with self._lock:
+            return self._grants.pop(grant_id, None) is not None
+
+    def list_for_project(self, project_id: str) -> list[AgentGrant]:
+        with self._lock:
+            found = [g.model_copy() for g in self._grants.values() if g.project_id == project_id]
+        return sorted(found, key=lambda g: (g.granted_at, g.id))
+
+    def list_for_grantee(self, user_id: str, team_ids: list[str]) -> list[AgentGrant]:
+        teams = set(team_ids)
+        with self._lock:
+            found = [
+                g.model_copy()
+                for g in self._grants.values()
+                if (g.grantee_type == "user" and g.grantee_id == user_id)
+                or (g.grantee_type == "team" and g.grantee_id in teams)
+            ]
+        return sorted(found, key=lambda g: (g.granted_at, g.id))
+
+    def delete_for_project(self, project_id: str) -> int:
+        with self._lock:
+            ids = [i for i, g in self._grants.items() if g.project_id == project_id]
+            for i in ids:
+                del self._grants[i]
+        return len(ids)
+
+    def delete_for_grantee(self, grantee_type: str, grantee_id: str) -> int:
+        with self._lock:
+            ids = [i for i, g in self._grants.items() if g.grantee_type == grantee_type and g.grantee_id == grantee_id]
+            for i in ids:
+                del self._grants[i]
+        return len(ids)
+
+
+class MongoAgentGrantStore:
+    """`agent_grants`: `_id` is the grant id, so one grantee has one level per target."""
+
+    def __init__(self, db: "Database"):
+        self._grants = db["agent_grants"]
+        with _mongo_errors():
+            self._grants.create_index("project_id")
+            self._grants.create_index([("grantee_type", 1), ("grantee_id", 1)])
+
+    @staticmethod
+    def _grant(doc: dict[str, Any]) -> AgentGrant:
+        doc = dict(doc)
+        doc["id"] = doc.pop("_id")
+        return AgentGrant.model_validate(doc)
+
+    def upsert(self, grant: AgentGrant) -> None:
+        body = grant.model_dump()
+        body["_id"] = body.pop("id")
+        with _mongo_errors():
+            self._grants.replace_one({"_id": body["_id"]}, body, upsert=True)
+
+    def get(self, grant_id: str) -> AgentGrant | None:
+        with _mongo_errors():
+            doc = self._grants.find_one({"_id": grant_id})
+        return self._grant(doc) if doc else None
+
+    def revoke(self, grant_id: str) -> bool:
+        with _mongo_errors():
+            return self._grants.delete_one({"_id": grant_id}).deleted_count > 0
+
+    def list_for_project(self, project_id: str) -> list[AgentGrant]:
+        with _mongo_errors():
+            docs = list(self._grants.find({"project_id": project_id}))
+        return sorted((self._grant(d) for d in docs), key=lambda g: (g.granted_at, g.id))
+
+    def list_for_grantee(self, user_id: str, team_ids: list[str]) -> list[AgentGrant]:
+        query: dict[str, Any] = {"$or": [{"grantee_type": "user", "grantee_id": user_id}]}
+        if team_ids:
+            query["$or"].append({"grantee_type": "team", "grantee_id": {"$in": list(team_ids)}})
+        with _mongo_errors():
+            docs = list(self._grants.find(query))
+        return sorted((self._grant(d) for d in docs), key=lambda g: (g.granted_at, g.id))
+
+    def delete_for_project(self, project_id: str) -> int:
+        with _mongo_errors():
+            return self._grants.delete_many({"project_id": project_id}).deleted_count
+
+    def delete_for_grantee(self, grantee_type: str, grantee_id: str) -> int:
+        with _mongo_errors():
+            return self._grants.delete_many({"grantee_type": grantee_type, "grantee_id": grantee_id}).deleted_count
+
+
+def make_grant_store() -> AgentGrantStore:
+    if MONGODB_URI:
+        return MongoAgentGrantStore(mongo_database(MONGODB_URI, MONGODB_DB))
+    return InMemoryAgentGrantStore()
+
+
 def make_team_store() -> TeamStore:
     if MONGODB_URI:
         return MongoTeamStore(mongo_database(MONGODB_URI, MONGODB_DB))

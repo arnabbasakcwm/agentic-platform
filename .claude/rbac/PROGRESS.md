@@ -1,6 +1,6 @@
 # RBAC Delegation — Progress
 STATUS: IN_PROGRESS
-Iteration: 11
+Iteration: 12
 Branch: feat/rbac-delegation
 Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint configured).
 
@@ -23,7 +23,7 @@ Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint con
 - [x] P2.5 Append-only audit log: AuditEntry/AuditStore (memory+Mongo, no update/delete, insert-only), audit.record (write after success, failure logged not fatal), wired into role/team/membership/group-admin actions (no entry on no-ops or refusals), GET /audit (master+sub org-wide, group admin own teams); 12 tests. Phase 2 complete
 
 ## Phase 3 — Agent Sharing
-- [ ] P3.1 `agent_grants` model/store (project_id, agent_id|"*", grantee user|team, level, granted_by)
+- [x] P3.1 `AgentGrant` (levels view<use<edit<manage, cumulative; agent_id or '*'), `AgentGrantStore` memory+Mongo, 12 contract tests
 - [ ] P3.2 Share/revoke/list APIs with scope + level-ceiling checks
 - [ ] P3.3 Access resolution (owner ∪ user grants ∪ team grants) for run + read paths
 - [ ] P3.4 Revocation effective on next model call for live sessions
@@ -66,3 +66,4 @@ Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint con
 - Iter 9: P2.3 done. Next: P2.4 team CRUD + membership.
 - Iter 10: P2.4 done. Next: P2.5 audit log.
 - Iter 11: P2.5 done; Phase 2 complete. Next: P3.1 agent grants.
+- Iter 12: P3.1 done.
