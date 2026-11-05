@@ -1,6 +1,6 @@
 # RBAC Delegation — Progress
 STATUS: IN_PROGRESS
-Iteration: 15
+Iteration: 16
 Branch: feat/rbac-delegation
 Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint configured).
 
@@ -29,7 +29,7 @@ Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint con
 - [x] P3.4 live-run revocation: `CallIdentity` + `gateway.before_call=check_identity` re-validates access before every model call (agents, tool loops, supervisor); `AccessRevokedError` (a RunStoppedError, never retried); covers revoked share, downgrade below use, team removal, deleted project; owner unaffected; 9 tests
 
 ## Phase 4 — Model Privileges
-- [ ] P4.1 Org catalog + team/user allowlist store + `fallback_model`
+- [x] P4.1 model privileges schema: `OrgModelSettings` (catalog, fallback_model), `ModelAllowlist` (team/user, empty list = no model), `AgentFallback`, refs `provider/model` or `provider/*`, `ModelPolicyStore` memory+Mongo; 11 tests
 - [ ] P4.2 `effective_models(user)` = intersection; grant APIs with no-escalation
 - [ ] P4.3 Enforce in gateway (MODEL_NOT_PERMITTED / fallback) incl. sub-agents & tool loops; hard-limit + unpriced model → MODEL_NOT_PERMITTED(reason=unpriced) unless per-model override (D3) — test required
 
@@ -70,3 +70,4 @@ Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint con
 - Iter 13: P3.2 done.
 - Iter 14: P3.3 done.
 - Iter 15: P3.4 done.
+- Iter 16: P4.1 done.
