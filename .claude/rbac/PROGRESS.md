@@ -48,8 +48,8 @@ Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint con
 - [x] P6.5 controls follow your access: steps you can't use (Brief/Resources/Deploy need manage, Compile edit, Run use) are replaced by a plain explanation, Plan hides editing below Edit and shows only the agents of an agent-by-agent share, Assistant/Share hidden accordingly; runs the platform stopped explain themselves (budget used up / model not allowed / access removed) in the run view and history; saving as an Edit-level person no longer reports 'owner' (backend `_body_for`); 10 e2e tests incl. axe
 
 ## Phase 7 — Hardening & Verification
-- [ ] P7.1 Full authorization matrix passing (spec §5)
-- [ ] P7.2 Security pass: every route has a policy check; list in NOTES
+- [x] P7.1 Full authorization matrix: `tests/test_authz_matrix.py` (policy, 6 roles x 25 rows) and `tests/test_authz_api_matrix.py` (API, 6 roles x 35 sensitive actions + unauthenticated + 404-looks-like-missing + group-admin-in-A/member-in-B); every spec section 5 bullet maps to a test (see NOTES)
+- [x] P7.2 Route security sweep `tests/test_route_security.py` (104 routes: 401 without token except 5 public; project/team/admin/delegated routes call their guard; privileged routes audit); full classified route list in NOTES; no unprotected route
 - [ ] P7.3 Backfill rollback tested on a copy
 - [ ] P7.4 docs/rbac.md
 - [ ] P7.5 Final review vs completion condition
