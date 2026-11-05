@@ -16,6 +16,7 @@ import { fullDate, timeAgo } from "../lib/format.js";
 import { formatCost, formatCount, formatTokens } from "../lib/usage.js";
 import { paths } from "../lib/router.js";
 import { useAction } from "../lib/useAction.js";
+import { OrgModelsPanel } from "../components/OrgModelsPanel.jsx";
 import { RANGES, Stat, costCell } from "./UsagePage.jsx";
 
 /** Make admin / Remove admin, confirmed inline. Only the master admin sees it, and
@@ -266,6 +267,7 @@ export function AdminPage({ me }) {
               </table>
             )}
           </Panel>
+          <OrgModelsPanel me={me} />
           <Callout tone="info" title="How cost is counted">
             The same way as each user&apos;s own Usage page: tokens reported by
             the model providers, priced from the platform&apos;s price table at

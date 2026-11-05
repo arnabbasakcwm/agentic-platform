@@ -12,6 +12,7 @@ import {
   Skeleton,
 } from "../components/ui.jsx";
 import { ActivityTab } from "../components/team/ActivityTab.jsx";
+import { ModelsTab } from "../components/team/ModelsTab.jsx";
 import { teamRoleLabel } from "../lib/access.js";
 import { api } from "../lib/api.js";
 import { navigate, paths } from "../lib/router.js";
@@ -202,7 +203,7 @@ export function TeamPage({ teamId, me, onChanged }) {
   }
   const isTeamAdmin = team.my_role === "group_admin";
   const canManage = isMaster || isTeamAdmin;
-  const tabs = [{ id: "members", label: "Members" }, ...(canManage ? [{ id: "activity", label: "Activity" }] : [])];
+  const tabs = [{ id: "members", label: "Members" }, ...(canManage ? [{ id: "models", label: "Models" }, { id: "activity", label: "Activity" }] : [])];
 
   return (
     <div className="page access">
@@ -302,7 +303,7 @@ export function TeamPage({ teamId, me, onChanged }) {
           )}
         </div>
       ) : (
-        tab === "activity" && canManage && <ActivityTab team={team} />
+        canManage && (tab === "activity" ? <ActivityTab team={team} /> : <ModelsTab team={team} members={members} isMaster={isMaster} />)
       )}
     </div>
   );

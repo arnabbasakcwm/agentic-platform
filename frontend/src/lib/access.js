@@ -168,3 +168,28 @@ export function budgetLabel(node, { teams = [], users = [] } = {}) {
   const who = users.find((u) => u.id === node.scope_id)?.email ?? `${node.scope_id.slice(0, 6)}…`;
   return node.scope_type === "pool" ? `${who} (pool)` : who;
 }
+
+// ------------------------------------------------------------------------- model limits
+const PROVIDER_NAMES = {
+  google_genai: "Google",
+  openai: "OpenAI",
+  anthropic: "Anthropic",
+  groq: "Groq",
+  moonshot: "Moonshot",
+  ollama: "Ollama",
+  bedrock: "Amazon Bedrock",
+};
+
+/** "bedrock/openai.gpt-oss-120b-1:0" -> "Amazon Bedrock · openai.gpt-oss-120b-1:0"; "groq/*" -> "Groq · all models". */
+export function modelLabel(ref) {
+  const slash = ref.indexOf("/");
+  if (slash < 1) return ref;
+  const provider = ref.slice(0, slash);
+  const model = ref.slice(slash + 1);
+  return `${PROVIDER_NAMES[provider] ?? provider} · ${model === "*" ? "all models" : model}`;
+}
+
+export const toggleRef = (list, ref) => (list.includes(ref) ? list.filter((x) => x !== ref) : [...list, ref]);
+
+/** A stable key for a limit (null = no limit), to tell whether it changed. */
+export const summarizeLimit = (list) => (list === null || list === undefined ? "no-limit" : `only:${[...list].sort().join("|")}`);

@@ -166,3 +166,28 @@ describe("budget labels", () => {
     expect(budgetLabel(node("team:Z", "org"), ctx)).toBe("Team Z");
   });
 });
+
+import { modelLabel, summarizeLimit, toggleRef } from "./access.js";
+
+describe("model limits", () => {
+  it("labels models by provider", () => {
+    expect(modelLabel("bedrock/openai.gpt-oss-120b-1:0")).toBe("Amazon Bedrock · openai.gpt-oss-120b-1:0");
+    expect(modelLabel("google_genai/gemini-3.1-pro-preview")).toBe("Google · gemini-3.1-pro-preview");
+    expect(modelLabel("groq/*")).toBe("Groq · all models");
+    expect(modelLabel("newprovider/x")).toBe("newprovider · x");
+    expect(modelLabel("nonsense")).toBe("nonsense");
+  });
+  it("toggles a model in a list without mutating it", () => {
+    const list = ["a/1"];
+    expect(toggleRef(list, "b/2")).toEqual(["a/1", "b/2"]);
+    expect(toggleRef(["a/1", "b/2"], "a/1")).toEqual(["b/2"]);
+    expect(list).toEqual(["a/1"]);
+  });
+  it("tells no limit from an empty or ordered list", () => {
+    expect(summarizeLimit(null)).toBe("no-limit");
+    expect(summarizeLimit(undefined)).toBe("no-limit");
+    expect(summarizeLimit([])).toBe("only:");
+    expect(summarizeLimit(["b/2", "a/1"])).toBe(summarizeLimit(["a/1", "b/2"]));
+    expect(summarizeLimit([])).not.toBe(summarizeLimit(null)); // an empty list means NO model
+  });
+});
