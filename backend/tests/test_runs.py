@@ -29,7 +29,7 @@ def _plan():
     )
 
 
-def _fake_events(graph, task_input, bounds, usage=None, should_stop=None):
+def _fake_events(graph, task_input, bounds, usage=None, should_stop=None, identity=None):
     """What run_graph_events yields for a one-agent run, with a model call counted."""
     usage.add(kind="run", provider="google_genai", model="gemini-3.1-pro-preview", agent_id="analyst",
               input_tokens=100, output_tokens=20)
@@ -175,7 +175,7 @@ def test_the_existing_run_endpoints_save_runs_too(api, monkeypatch):
     pid = _project(api, h)
     events = _sse(api.post(f"/projects/{pid}/run/stream", json={"input": {"q": "x"}}, headers=h).text)
     assert events[-1][0] == "run_completed"  # same stream as before
-    monkeypatch.setattr(app_module, "run_graph", lambda graph, task_input, bounds, usage=None: {
+    monkeypatch.setattr(app_module, "run_graph", lambda graph, task_input, bounds, usage=None, identity=None: {
         "outputs": {"analyst": {"content": "done", "data": {}}}, "errors": [], "halted": False})
     body = api.post(f"/projects/{pid}/run", json={"input": {"q": "y"}}, headers=h).json()
     assert body["outputs"]["analyst"]["content"] == "done"  # same response as before

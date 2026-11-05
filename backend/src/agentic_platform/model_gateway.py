@@ -18,12 +18,41 @@ from typing import Any, Callable
 
 
 @dataclass(frozen=True)
+class CallIdentity:
+    """Who a run's model calls are made for. It travels in the run's config (`configurable`), so
+    sub-agents and tool loops carry it too. `check(agent_id)` re-validates access and raises a
+    typed error when it is gone; it runs before every model call."""
+
+    user_id: str
+    project_id: str | None = None
+    team_id: str | None = None
+    check: Callable[[str | None], None] | None = None
+
+
+@dataclass(frozen=True)
 class CallContext:
     """What the gateway knows about one model call."""
 
     provider: str
     model: str
     config: dict[str, Any]  # the LangChain run config of this call (callbacks, configurable)
+
+    @property
+    def identity(self) -> CallIdentity | None:
+        found = (self.config.get("configurable") or {}).get("identity")
+        return found if isinstance(found, CallIdentity) else None
+
+    @property
+    def agent_id(self) -> str | None:
+        return (self.config.get("configurable") or {}).get("agent_id")
+
+
+def check_identity(ctx: CallContext) -> None:
+    """Default hook: if the call carries an identity with an access check, run it. Calls with
+    no identity (planner, probes, tests) are unaffected."""
+    identity = ctx.identity
+    if identity is not None and identity.check is not None:
+        identity.check(ctx.agent_id)
 
 
 class ModelGateway:
@@ -34,7 +63,7 @@ class ModelGateway:
     sees the finished call (failures skip it)."""
 
     def __init__(self) -> None:
-        self.before_call: Callable[[CallContext], None] = lambda ctx: None
+        self.before_call: Callable[[CallContext], None] = check_identity
         self.after_call: Callable[[CallContext, Any], None] = lambda ctx, result: None
 
 

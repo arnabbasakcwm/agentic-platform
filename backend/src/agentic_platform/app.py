@@ -81,6 +81,7 @@ from .errors import (
     ModelCannotCallToolsError,
     RunNotFoundError,
     RunNotStoppableError,
+    AccessRevokedError,
     RunStoppedError,
     DataSourceNotFoundError,
     DataSourceUnavailableError,
@@ -115,6 +116,7 @@ from .graph_builder import (
 )
 from .meta_planner_prompt import discuss_brief, plan_project, revise_plan
 from . import audit as audit_log
+from .model_gateway import CallIdentity
 from .policy import (
     Actor,
     access_rank,
@@ -482,6 +484,25 @@ def _project_at(project_id: str, user: UserRecord, level: str, agent_id: str | N
     return project
 
 
+def _call_identity(project: ProjectRecord, user_id: str) -> CallIdentity:
+    """Who a run is for, with a check the model gateway runs before EVERY model call of the run
+    (agents, tool loops, the supervisor): the person must still be able to use the project or
+    agent. Revoking a share, removing someone from a team, or deleting the project or the
+    account therefore ends their live run at its next model call, with `AccessRevokedError`.
+    It reads the current records each time; nothing is cached."""
+
+    def check(agent_id: str | None) -> None:
+        who = _users.get(user_id)
+        current = _store.get(project.id)
+        if who is None or current is None:
+            raise AccessRevokedError()
+        rank = access_rank(_actor(who), current, agent_id if agent_id else None, _grants.list_for_project(project.id))
+        if rank < level_rank("use"):
+            raise AccessRevokedError()
+
+    return CallIdentity(user_id=user_id, project_id=project.id, team_id=project.team_id, check=check)
+
+
 def _compiled_graph(project: ProjectRecord) -> Any:
     # Knowledge files and their embedding models are read at search time, so only the plan
     # version keys the cache.
@@ -842,7 +863,8 @@ def _new_run(project: ProjectRecord, *, kind: str, mode: str, task_input: dict[s
 def _graph_events(project: ProjectRecord, graph: Any, task_input: dict[str, Any], collector: UsageCollector,
                   recorder: _RunRecorder):
     """Run the graph, saving every event; yields them for a live stream."""
-    events = run_graph_events(graph, task_input, project.plan.bounds, collector, should_stop=recorder.stop_requested)
+    events = run_graph_events(graph, task_input, project.plan.bounds, collector, should_stop=recorder.stop_requested,
+                              identity=_call_identity(project, recorder.run.started_by or project.tenant_id))
     return _recorded_events(project, events, collector, recorder)
 
 
@@ -886,6 +908,7 @@ def _agent_run(project: ProjectRecord, agent_id: str, task_input: dict[str, Any]
             project.plan, agent_id, task_input, upstream, _knowledge_context(project),
             usage=collector, data=_data_context(project), mcp=_mcp_context(project),
             json_models=_json_models(project.plan, project.tenant_id), should_stop=recorder.stop_requested,
+            identity=_call_identity(project, recorder.run.started_by or project.tenant_id),
         )
     except Exception as e:  # e.g. a knowledge or MCP context that can't be set up
         recorder.finish(error={"error_type": type(e).__name__, "message": str(e) or "the agent failed"},
@@ -2889,7 +2912,7 @@ def run_project(
     graph = _compiled_graph(project)
     recorder = _RunRecorder(_new_run(project, kind="local", mode="graph", task_input=req.input, started_by=user.id))
     try:
-        result = run_graph(graph, req.input, project.plan.bounds, collector)
+        result = run_graph(graph, req.input, project.plan.bounds, collector, _call_identity(project, user.id))
     except TimeoutError:
         recorder.finish(error={"error_type": "RunTimeout",
                                "message": f"the run exceeded its {project.plan.bounds.timeout_s:g}s time limit"},
@@ -3643,6 +3666,11 @@ def _handle_deploy(_req: Request, exc: DeployError):
 @app.exception_handler(KnowledgeError)
 def _handle_knowledge(_req: Request, exc: KnowledgeError):
     return _error_response(exc.status, "KnowledgeRejected", str(exc))
+
+
+@app.exception_handler(AccessRevokedError)
+def _handle_access_revoked(_req: Request, exc: AccessRevokedError):
+    return _error_response(403, "AccessRevoked", str(exc))
 
 
 @app.exception_handler(RunStoppedError)

@@ -70,3 +70,9 @@ Plan: wrap the runnable returned by `get_llm()` in a thin gateway object (same i
 ## By-id scope (P2.2)
 - `_get_project` is the single by-id chokepoint (35 call sites). Mutating routes keep the default `project.manage`. Only `GET /projects/{id}` uses `project.view`.
 - Known limits to resolve later: (1) routes that act on the *caller's* libraries (knowledge, data sources, MCP attach) still key on `user.id`, so a Group Admin/master managing someone else's project gets 404 there (fail closed). (2) Usage for a run started by a non-owner is still recorded by the existing code paths; Phase 5 must charge the runner. (3) Runs by a non-owner (after sharing, Phase 3) need run lookups by project, not owner tenant. (4) P7.2 must sweep all 72 routes.
+
+## Run identity and revocation (P3.4)
+- `model_gateway.CallIdentity(user_id, project_id, team_id, check)` travels in the run config (`configurable["identity"]`) through run_graph/run_graph_events/run_agent_events; `graph_builder._call_config` puts it (and agent_id) into every model call config, including supervisor routing. `gateway.before_call` defaults to `check_identity`, which runs `identity.check(agent_id)`. P4.3/P5.3 extend the same hook (model allowlist, budget) - do not add a second path.
+- `app._call_identity` re-reads user, project, grants and teams on every model call (4 store reads); cache briefly if this shows up in profiles.
+- Test fakes that stand in for run_graph / run_graph_events must accept `identity=None`.
+- The call already in flight when access is revoked finishes (documented limit, same as Stop); nothing after it runs.

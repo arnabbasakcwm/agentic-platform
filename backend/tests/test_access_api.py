@@ -31,7 +31,7 @@ def _plan():
     )
 
 
-def _fake_events(graph, task_input, bounds, usage=None, should_stop=None):
+def _fake_events(graph, task_input, bounds, usage=None, should_stop=None, identity=None):
     usage.add(kind="run", provider="google_genai", model="gemini-3.1-pro-preview", agent_id="analyst",
               input_tokens=100, output_tokens=20)
     yield "run_started", {"at": 1.0, "timeout_s": bounds.timeout_s}
@@ -159,7 +159,7 @@ def test_runs_stay_private_between_grantees(w):
 
 def test_the_synchronous_run_endpoints_follow_the_same_rule(w, monkeypatch):
     result = {"outputs": {"analyst": {"content": "x", "data": {}}}, "errors": [], "halted": False}
-    monkeypatch.setattr(app_module, "run_graph", lambda graph, inp, bounds, collector: result)
+    monkeypatch.setattr(app_module, "run_graph", lambda graph, inp, bounds, collector, identity=None: result)
     assert w.c.post(f"/projects/{w.pid}/run", json={"input": {}}, headers=w.h["viewer"]).status_code == 404
     share(w, "user", "use")
     assert w.c.post(f"/projects/{w.pid}/run", json={"input": {}}, headers=w.h["user"]).status_code == 200

@@ -41,7 +41,7 @@ from .config import (
     PROVIDER_ENV_VARS,
     embedding_option,
 )
-from .model_gateway import GatewayRunnable
+from .model_gateway import CallIdentity, GatewayRunnable
 from .errors import (
     ModelCannotCallToolsError,
     AgentExecutionError,
@@ -318,6 +318,7 @@ def _run_agent_once(
     stop: threading.Event | None = None,
     citations_out: dict[str, Any] | None = None,
     inherited: list[dict[str, Any]] | None = None,
+    identity: CallIdentity | None = None,
 ) -> AgentOutput:
     """One full attempt for an agent node: bounded tool loop, then structured output.
 
@@ -333,12 +334,7 @@ def _run_agent_once(
     tools = get_tools(spec.tools, knowledge, data, mcp)
     # Every model call (tool turns, the structured answer, the rewrite) reports its
     # provider-counted tokens to the run's collector, labelled with this agent.
-    call_config: RunnableConfig = (
-        {"callbacks": [UsageCallback(usage, kind="run", provider=spec.llm.provider,
-                                     model=spec.llm.model, agent_id=spec.id)]}
-        if usage is not None
-        else {}
-    )
+    call_config = _call_config(usage, spec, identity)
     citation_log = CitationLog()
     for source in inherited or []:  # numbered first, as in the context the agent was shown
         citation_log.inherit(source)
@@ -537,6 +533,24 @@ def _stop_event(config: RunnableConfig | None) -> threading.Event | None:
     return stop if isinstance(stop, threading.Event) else None
 
 
+def _identity(config: RunnableConfig | None) -> CallIdentity | None:
+    """Who the run is for, passed like `emit` and `stop` through LangGraph's config."""
+    found = ((config or {}).get("configurable") or {}).get("identity")
+    return found if isinstance(found, CallIdentity) else None
+
+
+def _call_config(usage: UsageCollector | None, spec: AgentSpec, identity: CallIdentity | None) -> RunnableConfig:
+    """The config of every model call an agent makes: token counting, and the identity the
+    gateway checks before the call."""
+    config: dict[str, Any] = {}
+    if usage is not None:
+        config["callbacks"] = [UsageCallback(usage, kind="run", provider=spec.llm.provider,
+                                            model=spec.llm.model, agent_id=spec.id)]
+    if identity is not None:
+        config["configurable"] = {"identity": identity, "agent_id": spec.id}
+    return config  # type: ignore[return-value]
+
+
 def _check_stop(stop: threading.Event | None) -> None:
     if stop is not None and stop.is_set():
         raise RunStoppedError()
@@ -557,6 +571,7 @@ def _make_node(
         emit = _emitter(config)
         usage = _usage(config)
         stop = _stop_event(config)
+        identity = _identity(config)
         started = time.monotonic()
 
         def elapsed_ms() -> int:
@@ -608,7 +623,7 @@ def _make_node(
             try:
                 citations: dict[str, Any] = {}
                 output = _run_agent_once(llm, spec, attempt_messages, bounds, knowledge, usage, data, mcp,
-                                         json_answer, stop, citations, inherited)
+                                         json_answer, stop, citations, inherited, identity)
                 # Structured citations travel with the output (and are stored with the run).
                 dumped = {**output.model_dump(), **citations}
                 emit("node_completed", node=spec.id, duration_ms=elapsed_ms(),
@@ -806,12 +821,7 @@ def _make_supervisor(sup_spec: AgentSpec, worker_ids: list[str], cap: int):
             HumanMessage(content=_build_context(state, sup_spec, include_all_outputs=True)),
         ]
         try:
-            call_config: RunnableConfig = (
-                {"callbacks": [UsageCallback(usage, kind="run", provider=sup_spec.llm.provider,
-                                             model=sup_spec.llm.model, agent_id=sup_spec.id)]}
-                if usage is not None
-                else {}
-            )
+            call_config = _call_config(usage, sup_spec, _identity(config))
             decision = llm.with_structured_output(_SupervisorDecision).invoke(messages, config=call_config)
             if decision is None:
                 raise ModelCannotCallToolsError(_no_tools_message(sup_spec.llm))
@@ -916,6 +926,7 @@ def run_single_agent(
     data: DataContext | None = None,
     mcp: McpContext | None = None,
     json_models: set[str] | frozenset[str] | None = None,
+    identity: CallIdentity | None = None,
 ) -> dict[str, Any]:
     """Run one agent node in isolation (the per-agent endpoint path), under the plan's
     time limit like a whole run (TimeoutError when it passes).
@@ -924,7 +935,7 @@ def run_single_agent(
     would normally provide, without running the whole graph.
     """
     invoke = _agent_invoker(plan, agent_id, task_input, upstream_outputs, knowledge, data, mcp, json_models)
-    return _run_bounded(invoke, plan.bounds, usage)
+    return _run_bounded(invoke, plan.bounds, usage, identity)
 
 
 def run_agent_events(
@@ -938,15 +949,17 @@ def run_agent_events(
     mcp: McpContext | None = None,
     json_models: set[str] | frozenset[str] | None = None,
     should_stop: Callable[[], bool] | None = None,
+    identity: CallIdentity | None = None,
 ) -> Iterator[tuple[str, dict[str, Any]]]:
     """One agent on its own, with the same events, time limit and stop as
     run_graph_events. KeyError (raised at once) for an unknown agent."""
     invoke = _agent_invoker(plan, agent_id, task_input, upstream_outputs, knowledge, data, mcp, json_models)
-    return _run_events(invoke, plan.bounds, usage, should_stop)
+    return _run_events(invoke, plan.bounds, usage, should_stop, identity)
 
 
 def run_graph(
-    graph, task_input: dict[str, Any], bounds: RunBounds, usage: UsageCollector | None = None
+    graph, task_input: dict[str, Any], bounds: RunBounds, usage: UsageCollector | None = None,
+    identity: CallIdentity | None = None,
 ) -> dict[str, Any]:
     """Invoke a compiled graph with a wall-clock timeout bound (principle: every run is
     bounded, not left to model good behavior).
@@ -958,18 +971,19 @@ def run_graph(
     The result includes `usage`: tokens per agent and model. Pass a collector to keep
     reading it after a timeout (it holds whatever was used up to then).
     """
-    return _run_bounded(_graph_invoker(graph, task_input), bounds, usage)
+    return _run_bounded(_graph_invoker(graph, task_input), bounds, usage, identity)
 
 
 def _run_bounded(
-    invoke: Callable[[RunnableConfig], dict[str, Any]], bounds: RunBounds, usage: UsageCollector | None
+    invoke: Callable[[RunnableConfig], dict[str, Any]], bounds: RunBounds, usage: UsageCollector | None,
+    identity: CallIdentity | None = None,
 ) -> dict[str, Any]:
     import concurrent.futures
 
     usage = usage if usage is not None else UsageCollector()
     stop = threading.Event()
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-    future = pool.submit(invoke, {"configurable": {"usage": usage, "stop": stop}})
+    future = pool.submit(invoke, {"configurable": {"usage": usage, "stop": stop, "identity": identity}})
     try:
         return {**future.result(timeout=bounds.timeout_s), "usage": usage.entries()}
     except concurrent.futures.TimeoutError as e:
@@ -987,6 +1001,7 @@ def run_graph_events(
     bounds: RunBounds,
     usage: UsageCollector | None = None,
     should_stop: Callable[[], bool] | None = None,
+    identity: CallIdentity | None = None,
 ) -> Iterator[tuple[str, dict[str, Any]]]:
     """Run a compiled graph and yield (event, data) pairs as it happens:
 
@@ -999,7 +1014,7 @@ def run_graph_events(
     ends at once with run_failed `RunStopped`. Either way the abandoned worker is told to
     stop and quits at its agents' next model or tool call.
     """
-    return _run_events(_graph_invoker(graph, task_input), bounds, usage, should_stop)
+    return _run_events(_graph_invoker(graph, task_input), bounds, usage, should_stop, identity)
 
 
 def _run_events(
@@ -1007,6 +1022,7 @@ def _run_events(
     bounds: RunBounds,
     usage: UsageCollector | None,
     should_stop: Callable[[], bool] | None,
+    identity: CallIdentity | None = None,
 ) -> Iterator[tuple[str, dict[str, Any]]]:
     events: queue.Queue = queue.Queue()
     started = time.time()
@@ -1018,7 +1034,7 @@ def _run_events(
 
     def work() -> None:
         try:
-            result = invoke({"configurable": {"emit": emit, "usage": usage, "stop": stop}})
+            result = invoke({"configurable": {"emit": emit, "usage": usage, "stop": stop, "identity": identity}})
             events.put(("__done__", result))
         except Exception as e:  # noqa: BLE001 — reported to the caller as run_failed
             events.put(("__error__", e))

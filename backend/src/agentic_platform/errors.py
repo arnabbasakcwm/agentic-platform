@@ -240,6 +240,15 @@ class RunStoppedError(PlatformError):
         super().__init__(message)
 
 
+class AccessRevokedError(RunStoppedError):
+    """The person running this no longer has access to the project or agent (a share was
+    revoked, or they left the team). Raised before the next model call, so a live session
+    ends at once and spends nothing more; handled like a stopped run, never retried."""
+
+    def __init__(self, message: str = "your access to this agent was removed") -> None:
+        super().__init__(message)
+
+
 class RunNotStoppableError(PlatformError):
     def __init__(self, run_id: str):
         super().__init__(f"run {run_id} runs on AWS and can't be stopped from here; it ends at its time limit")
