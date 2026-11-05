@@ -1,6 +1,6 @@
 # RBAC Delegation — Progress
 STATUS: IN_PROGRESS
-Iteration: 17
+Iteration: 18
 Branch: feat/rbac-delegation
 Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint configured).
 
@@ -31,12 +31,12 @@ Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint con
 ## Phase 4 — Model Privileges
 - [x] P4.1 model privileges schema: `OrgModelSettings` (catalog, fallback_model), `ModelAllowlist` (team/user, empty list = no model), `AgentFallback`, refs `provider/model` or `provider/*`, `ModelPolicyStore` memory+Mongo; 11 tests
 - [x] P4.2 model privileges APIs: org catalog+fallback (Super Admin), team/user allowlists (Super Admin), member limits (group admin, only from their own effective set), GET /me/models; `model_policy` intersection/escalations/decide; 18 tests (D13)
-- [ ] P4.3 Enforce in gateway (MODEL_NOT_PERMITTED / fallback) incl. sub-agents & tool loops; hard-limit + unpriced model → MODEL_NOT_PERMITTED(reason=unpriced) unless per-model override (D3) — test required
+- [x] P4.3 gateway enforces model privileges on every run call (agents, tool loops, supervisor): MODEL_NOT_PERMITTED (never retried, audited), org/agent fallback via Redirect replay + usage relabel, per-agent fallback API; 16 tests. D3 unpriced rule moved into P5.3
 
 ## Phase 5 — Budgets
 - [ ] P5.1 Budget schema (hierarchical, integer micro-USD, period, hard/soft) + append-only usage ledger
 - [ ] P5.2 Allocation APIs; reject child sum > parent; no-escalation
-- [ ] P5.3 Pre-call check + post-call debit in gateway, atomic; concurrency test
+- [ ] P5.3 Pre-call check + post-call debit in gateway, atomic; concurrency test; ALSO the D3 rule: hard-limit budget + unpriced model -> MODEL_NOT_PERMITTED(reason=unpriced) unless an admin per-model override (test required); and gate embeddings
 - [ ] P5.4 Period reset (lazy) + soft-threshold events
 - [ ] P5.5 BUDGET_EXCEEDED graceful stop in agent runtime
 
@@ -72,3 +72,4 @@ Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint con
 - Iter 15: P3.4 done.
 - Iter 16: P4.1 done.
 - Iter 17: P4.2 done.
+- Iter 18: P4.3 done.

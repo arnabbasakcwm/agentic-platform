@@ -76,3 +76,9 @@ Plan: wrap the runnable returned by `get_llm()` in a thin gateway object (same i
 - `app._call_identity` re-reads user, project, grants and teams on every model call (4 store reads); cache briefly if this shows up in profiles.
 - Test fakes that stand in for run_graph / run_graph_events must accept `identity=None`.
 - The call already in flight when access is revoked finishes (documented limit, same as Stop); nothing after it runs.
+
+## Model enforcement (P4.3)
+- `app._model_gateway_hook` is installed as `model_gateway.before_call`: identity/access check first, then `model_policy.decide` (limits for the runner in the project's team context; the Super Admin only by the org catalog). Blocked -> `ModelNotPermittedError` (code MODEL_NOT_PERMITTED, a RunStoppedError so never retried; run_failed carries the code). Fallback (agent's own, then org's; only if offered AND allowed for the person) -> `Redirect`; `GatewayRunnable` replays its recorded derivations (bind_tools, with_structured_output) on a rebuilt model and relabels UsageCallback to the model that ran.
+- Only runs carry an identity, so planner/assistant/brief calls and capability probes are NOT model-limited (they use the platform's own planner model). Budgets (P5) must still charge them.
+- Fallback audit entries are deduplicated per person/project/agent/model pair for 10 minutes (a tool loop calls the model many times); the log line is per call.
+- `_offered_cached` (30 s) avoids re-reading the Bedrock catalog per call.

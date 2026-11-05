@@ -249,6 +249,21 @@ class AccessRevokedError(RunStoppedError):
         super().__init__(message)
 
 
+class ModelNotPermittedError(RunStoppedError):
+    """The person running this may not use the agent's model (org catalog, team, member or user
+    limit), and no allowed fallback exists. The agent stops gracefully before the call; the
+    run ends with this typed error and is never retried."""
+
+    code = "MODEL_NOT_PERMITTED"
+
+    def __init__(self, model: str, reason: str | None) -> None:
+        self.model = model
+        self.reason = reason
+        why = {"unpriced": "it has no price, so its cost cannot be limited",
+               "unknown_model": "the platform does not offer it"}.get(reason or "", f"your {reason} limit does not include it")
+        super().__init__(f"you may not use the model {model}: {why}")
+
+
 class RunNotStoppableError(PlatformError):
     def __init__(self, run_id: str):
         super().__init__(f"run {run_id} runs on AWS and can't be stopped from here; it ends at its time limit")

@@ -123,6 +123,11 @@ class UsageCallback(BaseCallbackHandler):
         self._collector = collector
         self._labels = {"kind": kind, "provider": provider, "model": model, "agent_id": agent_id}
 
+    def relabelled(self, provider: str, model: str) -> "UsageCallback":
+        """The same counter, labelled with another model (when a call is redirected to a fallback)."""
+        return UsageCallback(self._collector, kind=self._labels["kind"], provider=provider, model=model,
+                             agent_id=self._labels["agent_id"])
+
     def on_llm_end(self, response: LLMResult, **kwargs: Any) -> None:
         for generations in response.generations:
             for generation in generations:

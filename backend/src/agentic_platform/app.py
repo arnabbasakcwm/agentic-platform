@@ -82,6 +82,7 @@ from .errors import (
     RunNotFoundError,
     RunNotStoppableError,
     AccessRevokedError,
+    ModelNotPermittedError,
     RunStoppedError,
     DataSourceNotFoundError,
     DataSourceUnavailableError,
@@ -117,7 +118,7 @@ from .graph_builder import (
 from .meta_planner_prompt import discuss_brief, plan_project, revise_plan
 from . import audit as audit_log
 from . import model_policy as mpol
-from .model_gateway import CallIdentity
+from .model_gateway import CallContext, CallIdentity, Redirect, check_identity, gateway as model_gateway
 from .policy import (
     Actor,
     access_rank,
@@ -2004,6 +2005,62 @@ def _limits_for(actor: Actor, team_id: str | None) -> mpol.Limits:
     return mpol.limits_for(_models, actor.user_id, team_id)
 
 
+# The gateway's pre-call hook: access, then model privileges. Fallbacks that were used are
+# logged once per person/agent/model pair per 10 minutes (a tool loop calls the model often).
+_FALLBACK_SEEN: dict[tuple[str, ...], float] = {}
+_OFFERED_CACHE: dict[str, Any] = {"at": 0.0, "keys": []}
+
+
+def _offered_cached() -> list[str]:
+    now = time.monotonic()
+    if now - _OFFERED_CACHE["at"] > 30:
+        _OFFERED_CACHE.update(at=now, keys=_offered_models())
+    return list(_OFFERED_CACHE["keys"])
+
+
+def _model_gateway_hook(ctx: CallContext) -> Redirect | None:
+    check_identity(ctx)  # access first: a revoked share must not even reach the model rules
+    ident = ctx.identity
+    if ident is None:  # planner, probes, tests: no person to limit
+        return None
+    who = _users.get(ident.user_id)
+    if who is None:
+        raise AccessRevokedError()
+    key = model_key(ctx.provider, ctx.model)
+    if who.role == "master":  # bound only by the org catalog
+        limits = mpol.Limits(org=mpol.limits_for(_models, who.id, None).org, layers=())
+    else:
+        limits = mpol.limits_for(_models, who.id, ident.team_id)
+    fallbacks: list[str] = []
+    if ident.project_id and ctx.agent_id:
+        own = _models.get_agent_fallback(ident.project_id, ctx.agent_id)
+        if own is not None:
+            fallbacks.append(own.model)
+    org_fallback = _models.get_org().fallback_model
+    if org_fallback:
+        fallbacks.append(org_fallback)
+    decision = mpol.decide(key, limits, sorted(set(_offered_cached()) | {key}), list(dict.fromkeys(fallbacks)))
+    details = {"project_id": ident.project_id, "agent_id": ctx.agent_id, "model": key, "reason": decision.reason}
+    if decision.model == key:
+        return None
+    if decision.model is None:
+        logger.warning("model %s blocked for user %s (%s)", key, who.id, decision.reason)
+        audit_log.record(_audit, who.id, "model.blocked", "model", key, team_id=ident.team_id, details=details)
+        raise ModelNotPermittedError(key, decision.reason)
+    logger.info("model %s replaced by fallback %s for user %s (%s)", key, decision.model, who.id, decision.reason)
+    seen_key = (who.id, str(ident.project_id), str(ctx.agent_id), key, decision.model)
+    now = time.monotonic()
+    if now - _FALLBACK_SEEN.get(seen_key, -1e9) > 600:
+        _FALLBACK_SEEN[seen_key] = now
+        audit_log.record(_audit, who.id, "model.fallback", "model", key, team_id=ident.team_id,
+                         details={**details, "used": decision.model})
+    provider, model = decision.model.split("/", 1)
+    return Redirect(provider, model, blocked=ModelNotPermittedError(key, decision.reason))
+
+
+model_gateway.before_call = _model_gateway_hook
+
+
 class OrgModelsRequest(BaseModel):
     catalog: list[str] | None = None  # None = every offered model
     fallback_model: str | None = None  # None = never substitute
@@ -2169,6 +2226,49 @@ def clear_user_models(target_id: str, user: UserRecord = Depends(current_user)) 
     if not can(actor, "models.user_allowlist") or _users.get(target_id) is None:
         raise TeamNotFoundError()
     return {"cleared": _clear_allowlist(actor, "user", target_id, None)}
+
+
+class FallbackRequest(BaseModel):
+    model: str = Field(min_length=3, max_length=200)  # provider/model
+
+
+@app.put("/projects/{project_id}/agents/{agent_id}/fallback")
+def set_agent_fallback(
+    project_id: str, agent_id: str, req: FallbackRequest, user: UserRecord = Depends(current_user)
+) -> dict[str, Any]:
+    """Name the model to use instead when this agent's own model is not allowed for the person
+    running it (and only if they may use the fallback). Overrides the org's fallback. For those
+    who manage the project."""
+    project = _get_project(project_id, user)
+    if agent_id not in {a.id for a in project.plan.agents}:
+        raise ShareError(f"this project has no agent {agent_id!r}")
+    if not valid_model_ref(req.model) or req.model.endswith("/*") or req.model not in _offered_models():
+        raise ShareError("the fallback must be one model the platform offers", error_type="UnknownModel")
+    before = _models.get_agent_fallback(project_id, agent_id)
+    if before is None or before.model != req.model:
+        _models.set_agent_fallback(AgentFallback(
+            id=AgentFallback.make_id(project_id, agent_id), project_id=project_id, agent_id=agent_id,
+            model=req.model, set_by=user.id,
+        ))
+        audit_log.record(
+            _audit, user.id, "model.fallback_set", "agent_fallback", AgentFallback.make_id(project_id, agent_id),
+            team_id=project.team_id, before={"model": before.model} if before else None, after={"model": req.model},
+        )
+    return {"fallback": {"project_id": project_id, "agent_id": agent_id, "model": req.model}}
+
+
+@app.delete("/projects/{project_id}/agents/{agent_id}/fallback")
+def clear_agent_fallback(project_id: str, agent_id: str, user: UserRecord = Depends(current_user)) -> dict[str, Any]:
+    project = _get_project(project_id, user)
+    before = _models.get_agent_fallback(project_id, agent_id)
+    if before is None:
+        return {"cleared": False}
+    _models.delete_agent_fallback(project_id, agent_id)
+    audit_log.record(
+        _audit, user.id, "model.fallback_cleared", "agent_fallback", before.id, team_id=project.team_id,
+        before={"model": before.model}, after=None,
+    )
+    return {"cleared": True}
 
 
 @app.get("/me/models")
@@ -3881,6 +3981,11 @@ def _handle_deploy(_req: Request, exc: DeployError):
 @app.exception_handler(KnowledgeError)
 def _handle_knowledge(_req: Request, exc: KnowledgeError):
     return _error_response(exc.status, "KnowledgeRejected", str(exc))
+
+
+@app.exception_handler(ModelNotPermittedError)
+def _handle_model_not_permitted(_req: Request, exc: ModelNotPermittedError):
+    return _error_response(403, "MODEL_NOT_PERMITTED", str(exc), {"model": exc.model, "reason": exc.reason})
 
 
 @app.exception_handler(AccessRevokedError)

@@ -91,7 +91,10 @@ def _require_key(provider: str) -> str:
 def get_llm(config: LLMConfig) -> BaseChatModel:
     """The only way to get a chat model. The result is wrapped by the model gateway
     (model_gateway.py), so every call is gated in one place."""
-    return GatewayRunnable(_build_llm(config), config.provider, config.model)  # type: ignore[return-value]
+    def rebuild(provider: str, model: str) -> BaseChatModel:  # a fallback model, for a redirected call
+        return _build_llm(LLMConfig(provider=provider, model=model, temperature=config.temperature))
+
+    return GatewayRunnable(_build_llm(config), config.provider, config.model, rebuild=rebuild)  # type: ignore[return-value]
 
 
 def _build_llm(config: LLMConfig) -> BaseChatModel:
@@ -1080,7 +1083,7 @@ def _run_events(
             if event == "__error__":
                 yield "run_failed", {
                     "at": time.time(),
-                    "error_type": type(data).__name__,
+                    "error_type": getattr(data, "code", None) or type(data).__name__,
                     "message": str(data) or "the run failed",
                     "exception": data,  # for callers that answer with the typed error; not data to send
                 }
