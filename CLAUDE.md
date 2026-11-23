@@ -917,6 +917,18 @@ whenever a change departs from or extends the contract above — don't silently 
     searches trigger the re-prompt / auto-append; inherited numbers it cites are linked
     and stored (`citations.resolve`), unknown ones removed.
 
+### 2026-11-23 — Teams, delegated admin, sharing, model limits and budgets
+- **Why:** one master and read-only admins could not delegate; users needed teams,
+  sharing, per-person model limits and spending caps.
+- **Rule:** full reference in `docs/rbac.md` (decisions D1–D13 in `.claude/rbac/`).
+  Every model call goes through the gateway (`model_gateway.py`), which checks access,
+  model limits and budget before the call and charges after it; all decisions come from
+  `policy.can`, and out-of-scope is a 404. Roles stay on `UserRecord.role`; Group Admin is
+  a team membership. Money is integer micro-USD with atomic reserve/settle. Existing
+  installations are moved onto a Default team by an idempotent, reversible backfill
+  (`scripts/rbac_backfill.py up|down`), with projects staying owner-only. Not yet
+  budgeted or model-limited: embeddings and planner/assistant calls.
+
 ## Working style — verify-and-retry, always
 
 Never mark something done because the code looks right.
