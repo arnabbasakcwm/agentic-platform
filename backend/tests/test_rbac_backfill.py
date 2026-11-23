@@ -124,3 +124,46 @@ def test_old_project_documents_without_team_fields_read_as_personal(stores):
     r = _project(projects, owner)
     got = projects.get(r.id)
     assert got.team_id is None and got.team_access is False
+
+
+def _snapshot(users, projects):
+    """What a copy of the installation holds: the documents the backfill can touch."""
+    return (
+        {u.id: u.model_dump() for u in users.list_all()},
+        {p.id: p.model_dump() for p in projects.list_all()},
+    )
+
+
+def test_rollback_on_a_copy_matches_the_original_and_leaves_the_source_alone(stores):
+    """P7.3: apply the backfill to a copy, undo it there, and compare with the pre-backfill state."""
+    from agentic_platform import policy
+
+    users, projects, teams = stores
+    _master, _admin, ann, bob, pa, pb = _world(stores)
+    before = _snapshot(users, projects)
+    seen_before = {
+        u.id: sorted(p.id for p in policy.visible_projects(projects.list_all(), policy.actor_for(u, teams)))
+        for u in users.list_all()
+    }
+
+    # the "copy": in-memory stores loaded with the same documents (never the live ones)
+    copy_users, copy_projects, copy_teams = InMemoryUserStore(), InMemoryProjectStore(), InMemoryTeamStore()
+    for u in users.list_all():
+        copy_users.create(u)
+    for p in projects.list_all():
+        copy_projects.create(p)
+
+    time.sleep(0.01)
+    backfill(copy_users, copy_projects, copy_teams)
+    assert _snapshot(copy_users, copy_projects) != before  # the copy really changed
+    rollback(copy_projects, copy_teams)
+
+    assert _snapshot(copy_users, copy_projects) == before  # byte-for-byte what it was
+    assert copy_teams.get_team(DEFAULT_TEAM_ID) is None
+    seen_after = {
+        u.id: sorted(p.id for p in policy.visible_projects(copy_projects.list_all(), policy.actor_for(u, copy_teams)))
+        for u in copy_users.list_all()
+    }
+    assert seen_after == seen_before  # nobody sees more or less than before
+    assert _snapshot(users, projects) == before  # the source was never touched
+    assert teams.get_team(DEFAULT_TEAM_ID) is None

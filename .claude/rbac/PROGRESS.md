@@ -1,6 +1,6 @@
 # RBAC Delegation — Progress
 STATUS: IN_PROGRESS
-Iteration: 28
+Iteration: 29
 Branch: feat/rbac-delegation
 Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint configured).
 
@@ -50,7 +50,7 @@ Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint con
 ## Phase 7 — Hardening & Verification
 - [x] P7.1 Full authorization matrix: `tests/test_authz_matrix.py` (policy, 6 roles x 25 rows) and `tests/test_authz_api_matrix.py` (API, 6 roles x 35 sensitive actions + unauthenticated + 404-looks-like-missing + group-admin-in-A/member-in-B); every spec section 5 bullet maps to a test (see NOTES)
 - [x] P7.2 Route security sweep `tests/test_route_security.py` (104 routes: 401 without token except 5 public; project/team/admin/delegated routes call their guard; privileged routes audit); full classified route list in NOTES; no unprotected route
-- [ ] P7.3 Backfill rollback tested on a copy
+- [x] P7.3 Backfill rollback tested on a copy: backfill then rollback on a copied store restores every user and project document exactly, visibility per user unchanged, source untouched (`test_rollback_on_a_copy...`); 14 tests
 - [ ] P7.4 docs/rbac.md
 - [ ] P7.5 Final review vs completion condition
 
@@ -83,3 +83,4 @@ Baseline: backend `uv run pytest -q` = 564 passed (no backend typecheck/lint con
 - Iter 26: P6.3 done.
 - Iter 27: P6.4 done.
 - Iter 28: P6.5 done.
+- Iter 29: P7.3 done.
