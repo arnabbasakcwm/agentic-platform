@@ -57,6 +57,7 @@ export function TeamsPage({ me, onChanged }) {
             <form className="access__row" onSubmit={submit} aria-label="New team">
               <Field label="Team name">
                 <input
+                  type="text"
                   value={name}
                   maxLength={100}
                   onChange={(e) => setName(e.target.value)}

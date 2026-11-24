@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { ModelChecklist } from "./ModelChecklist.jsx";
+import { ModelChecklist, modelOptions } from "./ModelChecklist.jsx";
+import { OptionDropdown } from "./OptionDropdown.jsx";
 import { Button, Callout, ErrorCallout, Field, Panel, Skeleton } from "./ui.jsx";
-import { modelLabel, summarizeLimit, toggleRef } from "../lib/access.js";
+import { summarizeLimit } from "../lib/access.js";
 import { api } from "../lib/api.js";
 import { useAction } from "../lib/useAction.js";
 
@@ -24,32 +25,31 @@ function Fallback({ org, offered, disabled, onSaved }) {
         label="Fallback model"
         hint="Used instead when an agent's model isn't allowed for the person running it — only if they may use the fallback. Leave empty to stop the run instead."
       >
-        <select value={fallback} onChange={(e) => setFallback(e.target.value)} disabled={disabled}>
-          <option value="">No fallback — stop the run</option>
-          {offered.map((m) => (
-            <option key={m} value={m}>
-              {modelLabel(m)}
-            </option>
-          ))}
-        </select>
+        <OptionDropdown
+          label="Fallback model"
+          options={modelOptions(offered)}
+          value={fallback}
+          onChange={setFallback}
+          emptyLabel="No fallback — stop the run"
+          searchPlaceholder="Search models"
+          disabled={disabled}
+        />
       </Field>
-      <div className="modelcheck__list" role="group" aria-label="Models allowed without a price">
-        <p className="muted">
-          Under a hard budget, a model with no price can&apos;t be metered, so it is refused. Tick a model to let it run anyway (its cost
-          counts as zero; its tokens are still recorded).
-        </p>
-        {offered.map((m) => (
-          <label key={m} className="access__check">
-            <input
-              type="checkbox"
-              checked={overrides.includes(m)}
-              disabled={disabled}
-              onChange={() => setOverrides((list) => toggleRef(list, m))}
-            />
-            {modelLabel(m)}
-          </label>
-        ))}
-      </div>
+      <Field
+        label="Models allowed without a price"
+        hint="Under a hard budget, a model with no price can't be metered, so it is refused. Pick a model to let it run anyway (its cost counts as zero; its tokens are still recorded)."
+      >
+        <OptionDropdown
+          multiple
+          label="Models allowed without a price"
+          placeholder="None — all unpriced models are refused"
+          options={modelOptions(offered)}
+          value={overrides}
+          onChange={setOverrides}
+          searchPlaceholder="Search models"
+          disabled={disabled}
+        />
+      </Field>
       {!disabled && (
         <div className="access__row">
           <Button type="submit" variant="primary" loading={save.busy} disabled={!dirty}>

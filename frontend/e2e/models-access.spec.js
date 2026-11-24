@@ -5,9 +5,16 @@ import { settled } from "./settled.js";
 // Model privileges in the console: the organisation's catalog, a team's limit, a member's limit inside
 // the team. A limit only narrows; a group admin can only hand out models they may use themselves.
 const API = "http://127.0.0.1:8765";
-const GEMINI = "Google · gemini-3.1-pro-preview";
-const MINI = "OpenAI · gpt-4o-mini";
-const CLAUDE = "Amazon Bedrock · global.anthropic.claude-sonnet-4-6";
+const GEMINI = "gemini-3.1-pro-preview";
+const MINI = "gpt-4o-mini";
+const CLAUDE = "global.anthropic.claude-sonnet-4-6";
+
+/** Open a dropdown inside `scope`, tick the named models, close it. */
+async function tick(scope, ...models) {
+  await scope.getByRole("button", { name: /^Allowed models for/ }).click();
+  for (const m of models) await scope.getByRole("option", { name: m, exact: true }).click();
+  await scope.page().keyboard.press("Escape");
+}
 
 test.beforeEach(async ({ page, request }) => {
   await request.post(`${API}/__reset`);
@@ -35,8 +42,7 @@ test("the Super Admin limits a team to some models, and clears the limit", async
   const team = page.getByRole("form", { name: "Models for the team" });
   await expect(team.getByLabel("No limit (every model)")).toBeChecked();
   await team.getByLabel("Only these models").check();
-  await team.getByLabel(MINI).check();
-  await team.getByLabel(GEMINI).check();
+  await tick(team, MINI, GEMINI);
   await team.getByRole("button", { name: "Save" }).click();
   await expect.poll(async () => (await state(request)).allowlists.find((l) => l.scope_type === "team")?.models).toEqual([
     "openai/gpt-4o-mini",
@@ -57,8 +63,7 @@ test("a group admin sees the team's limit but can't change it, and limits member
   await openModels(page);
   const team = page.getByRole("form", { name: "Models for the team" });
   await team.getByLabel("Only these models").check();
-  await team.getByLabel(MINI).check();
-  await team.getByLabel(GEMINI).check();
+  await tick(team, MINI, GEMINI);
   await team.getByRole("button", { name: "Save" }).click();
   await expect.poll(async () => (await state(request)).allowlists.length).toBe(1);
 
@@ -73,8 +78,10 @@ test("a group admin sees the team's limit but can't change it, and limits member
   await page.getByText("ada@example.com").first().click();
   const member = page.getByRole("form", { name: "Models for ada@example.com" });
   await member.getByLabel("Only these models").check();
-  await expect(member.getByLabel(CLAUDE)).toHaveCount(0);
-  await member.getByLabel(MINI).check();
+  await member.getByRole("button", { name: /^Allowed models for/ }).click();
+  await expect(member.getByRole("option", { name: CLAUDE, exact: true })).toHaveCount(0);
+  await member.getByRole("option", { name: MINI, exact: true }).click();
+  await page.keyboard.press("Escape");
   await member.getByRole("button", { name: "Save" }).click();
   await expect.poll(async () => (await state(request)).allowlists.find((l) => l.scope_type === "member")?.models).toEqual(["openai/gpt-4o-mini"]);
   await expect(page.getByText("1 model", { exact: true })).toBeVisible();
@@ -85,14 +92,16 @@ test("the organisation's catalog, fallback and unpriced-model exceptions are the
   await page.goto("/#/admin");
   const org = page.getByRole("form", { name: "Models for the organisation" });
   await org.getByLabel("Only these models").check();
-  await org.getByLabel(MINI).check();
-  await org.getByLabel(CLAUDE).check();
+  await tick(org, MINI, CLAUDE);
   await org.getByRole("button", { name: "Save" }).click();
   await expect.poll(async () => (await state(request)).orgModels.catalog).toEqual(["openai/gpt-4o-mini", "bedrock/global.anthropic.claude-sonnet-4-6"]);
 
   const fb = page.getByRole("form", { name: "Fallback and unpriced models" });
-  await fb.getByLabel("Fallback model").selectOption({ label: MINI });
-  await fb.getByRole("group", { name: "Models allowed without a price" }).getByLabel(CLAUDE).check();
+  await fb.getByRole("button", { name: "Fallback model" }).click();
+  await fb.getByRole("option", { name: MINI, exact: true }).click();
+  await fb.getByRole("button", { name: "Models allowed without a price" }).click();
+  await fb.getByRole("option", { name: CLAUDE, exact: true }).click();
+  await page.keyboard.press("Escape");
   await fb.getByRole("button", { name: "Save fallback and exceptions" }).click();
   await expect.poll(async () => (await state(request)).orgModels.fallback_model).toBe("openai/gpt-4o-mini");
   expect((await state(request)).orgModels.unpriced_overrides).toEqual(["bedrock/global.anthropic.claude-sonnet-4-6"]);
