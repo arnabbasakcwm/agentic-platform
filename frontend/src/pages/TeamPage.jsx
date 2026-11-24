@@ -1,3 +1,4 @@
+import { OptionDropdown } from "../components/OptionDropdown.jsx";
 import { useCallback, useEffect, useState } from "react";
 import {
   Button,
@@ -124,15 +125,19 @@ function AddMember({ team, members, onChanged }) {
   }
   return (
     <form className="access__row" onSubmit={submit} aria-label="Add a member">
-      <Field label="Add a person">
-        <select value={pick} onChange={(e) => setPick(e.target.value)} disabled={!users}>
-          <option value="">{users ? "Choose a person…" : "Loading…"}</option>
-          {candidates.map((u) => (
-            <option key={u.id} value={u.id}>
-              {u.email}
-            </option>
-          ))}
-        </select>
+      <Field
+        label="Add a person"
+        hint={users && candidates.length === 0 ? "Everyone with an account is already in this team." : undefined}
+      >
+        <OptionDropdown
+          label="Add a person"
+          options={candidates.map((u) => ({ value: u.id, label: u.email }))}
+          value={pick}
+          onChange={setPick}
+          placeholder={users ? (candidates.length ? "Choose a person…" : "Nobody left to add") : "Loading…"}
+          searchPlaceholder="Search by email"
+          disabled={!users || candidates.length === 0}
+        />
       </Field>
       <Button type="submit" variant="primary" loading={add.busy} disabled={!pick}>
         Add to team

@@ -85,7 +85,8 @@ test("the Super Admin creates, fills, renames and deletes a team", async ({ page
   await expect(row(page, "Platform")).toBeVisible();
 
   await page.getByRole("link", { name: "Growth" }).click();
-  await page.getByLabel("Add a person").selectOption({ label: "bob@example.com" });
+  await page.getByRole("button", { name: "Add a person" }).click();
+  await page.getByRole("option", { name: "bob@example.com" }).click();
   await page.getByRole("button", { name: "Add to team" }).click();
   await expect(row(page, "bob@example.com")).toContainText("Member");
 
