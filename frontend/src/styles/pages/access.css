@@ -8,6 +8,7 @@
 }
 
 .access__row .field {
+  margin-bottom: 0; /* the row aligns fields and buttons on their bottom edge */
   min-width: 16rem;
   flex: 1 1 16rem;
 }
