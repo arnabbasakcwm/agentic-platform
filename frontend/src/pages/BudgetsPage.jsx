@@ -64,7 +64,7 @@ function EditAmount({ node, onSaved }) {
   }
   return (
     <form className="access__confirm" onSubmit={submit} aria-label={`Change amount of ${node.id}`}>
-      <input
+      <input type="text"
         value={text}
         inputMode="decimal"
         aria-label={`New amount in dollars for ${node.id}`}
@@ -197,7 +197,7 @@ function AllocateForm({ parents, ctx, me, teams, onDone }) {
         </select>
       </Field>
       <Field label="Amount per period (USD)" hint={amount && micro === null ? "Use a plain amount like 25 or 12.50" : undefined}>
-        <input value={amount} inputMode="decimal" onChange={(e) => setAmount(e.target.value)} placeholder="25" required />
+        <input type="text" value={amount} inputMode="decimal" onChange={(e) => setAmount(e.target.value)} placeholder="25" required />
       </Field>
       <Field label="Period">
         <select value={period} onChange={(e) => setPeriod(e.target.value)}>

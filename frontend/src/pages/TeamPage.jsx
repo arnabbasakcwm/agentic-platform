@@ -157,7 +157,7 @@ function Rename({ team, onChanged }) {
   return (
     <form className="access__row" onSubmit={submit} aria-label="Rename team">
       <Field label="Team name">
-        <input value={name} maxLength={100} onChange={(e) => setName(e.target.value)} required />
+        <input type="text" value={name} maxLength={100} onChange={(e) => setName(e.target.value)} required />
       </Field>
       <Button type="submit" loading={save.busy} disabled={!name.trim() || name.trim() === team.name}>
         Rename
