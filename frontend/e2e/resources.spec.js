@@ -39,7 +39,7 @@ for (const scheme of ["light", "dark"]) {
     await expect(stepper.getByRole("link")).toHaveCount(6);
     await expect(stepper.getByRole("link", { name: /Knowledge|^Data/ })).toHaveCount(0);
     const step = stepper.getByRole("link", { name: /Resources/ });
-    await expect(step).toContainText("Optional");
+    await expect(step).toContainText("None added");
     await step.click();
     await expect(page).toHaveURL(/\/resources$/);
 

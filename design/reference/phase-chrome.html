@@ -42,16 +42,19 @@
     background: var(--border); border-radius: 2px; z-index: 1;
   }
   .steps > li:not(:last-child) > .step.link-done::after { background: var(--c); }
+  /* skipped (optional, nothing added, a later step is completed): the connector OUT of it is slate */
+  .steps > li:not(:last-child) > .step.is-skipped.link-done::after { background: var(--slate); }
   .dot { position: relative; z-index: 1; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center;
          font: 600 12px/1 var(--font-sans); background: #fff; border: 1.5px solid var(--border); color: var(--text-muted);
          transition: background var(--dur-slow) var(--ease-out), border-color var(--dur-slow), box-shadow var(--dur-slow); }
   .step.is-done .dot { background: var(--c); border-color: var(--c); color: #fff; }
+  .step.is-skipped .dot { background: var(--bg-subtle); border: 1.5px dashed var(--slate); color: var(--text-muted-ink, var(--text-muted)); }
   .step.is-current .dot { box-shadow: 0 0 0 4px var(--c-ring); border-color: var(--c); }
   .step.is-current:not(.is-done) .dot { color: var(--c); }
   .step .t1 { font: 600 13px/18px var(--font-sans); color: var(--text-strong); }
   .step .t2 { font: 400 12px/16px var(--font-sans); color: var(--text-muted); margin-top: -6px; }
   .step.is-current .t1, .step.is-current .t2 { color: var(--c); }
-  .step:not(.is-done):not(.is-current) .t1 { color: var(--text-muted); font-weight: 500; }
+  .step:not(.is-done):not(.is-current):not(.is-skipped) .t1 { color: var(--text-muted); font-weight: 500; }
   .step[data-phase=brief]     { --c: var(--phase-brief);     --c-soft: var(--violet-soft);  --c-ring: rgba(124,58,237,.18); }
   .step[data-phase=resources] { --c: var(--phase-resources); --c-soft: var(--teal-soft);    --c-ring: rgba(13,148,136,.18); }
   .step[data-phase=plan]      { --c: var(--phase-plan);      --c-soft: var(--amber-soft);   --c-ring: rgba(245,158,11,.20); }
@@ -104,12 +107,19 @@
     </button>
   </header>
 
-  <!-- Stepper states are the SAME on every page (they reflect the project). Only .is-current moves. -->
-  <template id="stepper">
+  <!-- Stepper states are the SAME on every page (they reflect the project). Only .is-current moves.
+       Three project states, one template each:
+         [data-variant=skipped]   Resources optional and empty, later steps completed
+         [data-variant=resources] Resources has items -> completed (teal check, "2 files · 1 table")
+         [data-variant=fresh]     only Brief completed; everything after is pending, the line is grey
+       link-done = the connector OUT of a step is coloured when the step it leads TO has been
+       reached or passed (its index <= the furthest completed step) - progress, not "both
+       ends completed". Out of a skipped step it is slate (.is-skipped.link-done). -->
+  <template id="stepper-skipped">
     <nav class="card stepper" aria-label="Project phases">
       <ol class="steps">
-        <li><a class="step is-done" data-phase="brief" href="#brief"><span class="dot">✓</span><span class="t1">1. Brief</span><span class="t2">Defined</span></a></li>
-        <li><a class="step" data-phase="resources" href="#resources"><span class="dot">2</span><span class="t1">2. Resources</span><span class="t2">Optional</span></a></li>
+        <li><a class="step is-done link-done" data-phase="brief" href="#brief"><span class="dot">✓</span><span class="t1">1. Brief</span><span class="t2">Defined</span></a></li>
+        <li><a class="step is-skipped link-done" data-phase="resources" href="#resources"><span class="dot">–</span><span class="t1">2. Resources</span><span class="t2">None added</span></a></li>
         <li><a class="step is-done link-done" data-phase="plan" href="#plan"><span class="dot">✓</span><span class="t1">3. Plan</span><span class="t2">v2 · 4 agents</span></a></li>
         <li><a class="step is-done" data-phase="compile" href="#compile"><span class="dot">✓</span><span class="t1">4. Compile</span><span class="t2">Compiled</span></a></li>
         <li><a class="step" data-phase="run" href="#run"><span class="dot">5</span><span class="t1">5. Run</span><span class="t2">Ready</span></a></li>
@@ -117,13 +127,37 @@
       </ol>
     </nav>
   </template>
-  <!-- link-done = connector to the NEXT step is coloured (this step AND the next are completed).
-       Here: Brief→Resources stays grey because Resources is not completed; Plan→Compile is amber. -->
+  <template id="stepper-resources">
+    <nav class="card stepper" aria-label="Project phases">
+      <ol class="steps">
+        <li><a class="step is-done link-done" data-phase="brief" href="#brief"><span class="dot">✓</span><span class="t1">1. Brief</span><span class="t2">Defined</span></a></li>
+        <li><a class="step is-done link-done" data-phase="resources" href="#resources"><span class="dot">✓</span><span class="t1">2. Resources</span><span class="t2">2 files · 1 table</span></a></li>
+        <li><a class="step is-done link-done" data-phase="plan" href="#plan"><span class="dot">✓</span><span class="t1">3. Plan</span><span class="t2">v2 · 4 agents</span></a></li>
+        <li><a class="step is-done" data-phase="compile" href="#compile"><span class="dot">✓</span><span class="t1">4. Compile</span><span class="t2">Compiled</span></a></li>
+        <li><a class="step" data-phase="run" href="#run"><span class="dot">5</span><span class="t1">5. Run</span><span class="t2">Ready</span></a></li>
+        <li><a class="step" data-phase="deploy" href="#deploy"><span class="dot">6</span><span class="t1">6. Deploy</span><span class="t2">Not deployed</span></a></li>
+      </ol>
+    </nav>
+  </template>
+  <template id="stepper-fresh">
+    <nav class="card stepper" aria-label="Project phases">
+      <ol class="steps">
+        <li><a class="step is-done" data-phase="brief" href="#brief"><span class="dot">✓</span><span class="t1">1. Brief</span><span class="t2">Defined</span></a></li>
+        <li><a class="step" data-phase="resources" href="#resources"><span class="dot">2</span><span class="t1">2. Resources</span><span class="t2">Optional</span></a></li>
+        <li><a class="step" data-phase="plan" href="#plan"><span class="dot">3</span><span class="t1">3. Plan</span><span class="t2">Not planned</span></a></li>
+        <li><a class="step" data-phase="compile" href="#compile"><span class="dot">4</span><span class="t1">4. Compile</span><span class="t2">Not compiled</span></a></li>
+        <li><a class="step" data-phase="run" href="#run"><span class="dot">5</span><span class="t1">5. Run</span><span class="t2">Ready</span></a></li>
+        <li><a class="step" data-phase="deploy" href="#deploy"><span class="dot">6</span><span class="t1">6. Deploy</span><span class="t2">Not deployed</span></a></li>
+      </ol>
+    </nav>
+  </template>
 
-  <div class="label">PhaseStepper: current = Brief</div><div data-current="brief"></div>
-  <div class="label">PhaseStepper: current = Plan</div><div data-current="plan"></div>
-  <div class="label">PhaseStepper: current = Compile</div><div data-current="compile"></div>
-  <div class="label">PhaseStepper: current = Run</div><div data-current="run"></div>
+  <div class="label">PhaseStepper: current = Brief</div><div data-variant="skipped" data-current="brief"></div>
+  <div class="label">PhaseStepper: current = Resources (skipped, still a link, still highlighted)</div><div data-variant="skipped" data-current="resources"></div>
+  <div class="label">PhaseStepper: current = Plan</div><div data-variant="skipped" data-current="plan"></div>
+  <div class="label">PhaseStepper: current = Compile</div><div data-variant="skipped" data-current="compile"></div>
+  <div class="label">PhaseStepper: Resources with items = completed</div><div data-variant="resources" data-current="resources"></div>
+  <div class="label">PhaseStepper: fresh project = pending, grey line</div><div data-variant="fresh" data-current="brief"></div>
 
   <div class="label">StickyFooter (Plan example; fixed to the bottom of the content area in the app)</div>
   <footer class="card footer">
@@ -146,8 +180,8 @@
   </div>
 </div>
 <script>
-  const tpl = document.getElementById('stepper');
   document.querySelectorAll('[data-current]').forEach(slot => {
+    const tpl = document.getElementById('stepper-' + slot.dataset.variant);
     const node = tpl.content.cloneNode(true);
     node.querySelector(`[data-phase="${slot.dataset.current}"]`).classList.add('is-current');
     node.querySelector(`[data-phase="${slot.dataset.current}"]`).setAttribute('aria-current', 'page');

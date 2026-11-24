@@ -42,7 +42,7 @@ for (const scheme of ["light", "dark"]) {
     await page.goto(`/#/projects/${PROJECT}/brief`);
     // Databases live on the Resources step, in their own tab.
     const data = page.locator(".stepper").getByRole("link", { name: /Resources/ });
-    await expect(data).toContainText("Optional");
+    await expect(data).toContainText("None added");
     await data.click();
     await expect(page).toHaveURL(/\/resources$/);
     await page.getByRole("tab", { name: /Databases/ }).click();
@@ -52,7 +52,7 @@ for (const scheme of ["light", "dark"]) {
     await page.getByRole("button", { name: "Attach Bikeshare" }).click();
     const attached = page.getByRole("region", { name: "Attached: Bikeshare" });
     await expect(attached).toContainText("mydata.trips");
-    await expect(data).toContainText("1 db");
+    await expect(data).toContainText("2 tables");
     await expect(page.getByRole("tab", { name: /Databases/ })).toContainText("1");
     await expect(page.getByText("No agent can query this data yet")).toBeVisible();
 

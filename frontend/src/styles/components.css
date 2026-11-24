@@ -117,6 +117,10 @@
   background: var(--c);
 }
 
+.step__line--skipped {
+  background: var(--slate);
+}
+
 .step__dot {
   position: relative;
   z-index: 2;
@@ -148,6 +152,19 @@
 
 .step--current:not(.step--done) .step__dot {
   color: var(--c-ink);
+}
+
+/* Skipped (optional, nothing added, a later step is done): dashed slate circle with a
+   dash; the label stays at normal strength. */
+.step--skipped .step__dot {
+  background: var(--bg-subtle);
+  border: 1.5px dashed var(--slate);
+  color: var(--slate-ink);
+}
+
+.step--skipped:not(.step--current) .step__label {
+  color: var(--text-strong);
+  font-weight: 600;
 }
 
 /* A run in progress: the step's circle pulses in its phase colour. */
@@ -195,7 +212,7 @@
   color: var(--c-ink);
 }
 
-.step:not(.step--done):not(.step--current) .step__label {
+.step:not(.step--done):not(.step--current):not(.step--skipped) .step__label {
   color: var(--text-muted);
   font-weight: 500;
 }

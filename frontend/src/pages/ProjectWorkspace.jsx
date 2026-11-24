@@ -6,7 +6,7 @@ import { Empty, ErrorCallout, LinkButton, Panel } from "../components/ui.jsx";
 import { api } from "../lib/api.js";
 import { paths } from "../lib/router.js";
 import { useAction } from "../lib/useAction.js";
-import { resourcesHint, resourcesReady } from "../lib/resources.js";
+import { resourcesAttached, resourcesHint, resourcesReady } from "../lib/resources.js";
 import { useProjectRun } from "../lib/useProjectRun.js";
 import { BriefStep } from "./project/BriefStep.jsx";
 import { CompileStep } from "./project/CompileStep.jsx";
@@ -141,6 +141,8 @@ export function ProjectWorkspace({
       label: "Resources",
       hint: resourcesHint(project),
       done: resourcesReady(project),
+      optional: true,
+      empty: !resourcesAttached(project),
     },
     {
       key: "plan",

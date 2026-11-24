@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyEvent, failRun, finishAgentRun, idleRun, startRun } from "./runState.js";
+import { applyEvent, displayRun, failRun, finishAgentRun, idleRun, startRun } from "./runState.js";
 
 const plan = {
   orchestration_pattern: "sequential",
@@ -100,5 +100,40 @@ describe("run state", () => {
     });
     expect(done.nodes.b).toMatchObject({ status: "completed", durationMs: 2500 });
     expect(done.nodes.a.status).toBe("idle");
+  });
+});
+
+describe("displayRun: an active run always shows a running agent", () => {
+  const events = [
+    ["run_started", { at: 100 }],
+    ["node_started", { node: "a", at: 100.1 }],
+    ["node_completed", { node: "a", at: 102, duration_ms: 1900, output: { content: "A" } }],
+  ];
+
+  it("shows the first queued agent as running while no node_started has arrived", () => {
+    const shown = displayRun(plan, play([["run_started", { at: 100 }]]));
+    expect(statuses(shown)).toEqual(["running", "queued", "queued"]);
+    expect(shown.nodes.a).toMatchObject({ inferred: true, startedAt: 100 });
+  });
+
+  it("moves on to the next agent once one completes, timing it from that completion", () => {
+    const shown = displayRun(plan, play(events));
+    expect(statuses(shown)).toEqual(["completed", "running", "queued"]);
+    expect(shown.nodes.b.startedAt).toBe(102);
+  });
+
+  it("never invents completed, and leaves a real running node alone", () => {
+    const real = play([...events, ["node_started", { node: "b", at: 102.1 }]]);
+    expect(displayRun(plan, real)).toBe(real);
+    expect(statuses(displayRun(plan, play(events))).filter((s) => s === "completed")).toHaveLength(1);
+  });
+
+  it("does nothing for finished runs, idle runs, single-agent runs or a run that failed", () => {
+    const failed = play([...events, ["run_failed", { at: 103, error_type: "X", message: "boom" }]]);
+    expect(displayRun(plan, failed)).toBe(failed);
+    const idle = idleRun(plan);
+    expect(displayRun(plan, idle)).toBe(idle);
+    const single = startRun(plan, { input: {}, mode: "agent", agentId: "b" });
+    expect(displayRun(plan, single)).toBe(single);
   });
 });

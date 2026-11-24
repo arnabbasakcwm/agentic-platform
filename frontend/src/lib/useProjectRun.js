@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api.js";
 import { stateFromRecord } from "./runReplay.js";
-import { applyEvent, failRun, idleRun, startRun } from "./runState.js";
+import { applyEvent, displayRun, failRun, idleRun, startRun } from "./runState.js";
 
 /** The input a project's Run page starts with: its plan's example, or an empty request. */
 export function defaultInput(plan) {
@@ -180,7 +180,12 @@ export function useProjectRun(project) {
     }
   }, [shownId, projectId, plan, refreshHistory]);
 
-  const run = !plan ? null : shown ? shown.state : idleRun(plan);
+  const shownState = shown?.state;
+  // One status source for the diagram, timeline and cards (see displayRun).
+  const run = useMemo(
+    () => (!plan ? null : displayRun(plan, shownState ?? idleRun(plan))),
+    [plan, shownState],
+  );
   const isStopping = stopping != null && stopping === shownId && run?.status === "running";
   // The input box: what you typed, else the shown run's input, else the plan's example.
   const shownInput = shown?.state?.input;

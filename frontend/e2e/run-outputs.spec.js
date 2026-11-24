@@ -280,3 +280,31 @@ test("any table can be downloaded as its own CSV file", async ({ page }) => {
   expect(text).toBe('﻿airline,fare_inr,note\r\nAkasa Air,7004,"Mornings, promo"\r\nIndiGo,8249,"\'=HYPERLINK(""x"")"\r\n');
   expect(text).not.toContain("Book Akasa Air early");
 });
+
+// ------------------------------------------------------------------ every table downloads
+test("structured data tables and Markdown tables in a report download as CSV too", async ({ page }) => {
+  const fs = await import("node:fs/promises");
+  await runRich(page);
+  const searcher = card(page, "flight_searcher");
+
+  // The Structured data card's table: every column and the real values, not the screen's "₹8,249".
+  await expect(searcher.getByRole("region", { name: "Structured data" })).toBeVisible();
+  let download = page.waitForEvent("download");
+  await searcher.getByRole("button", { name: "Download Airlines as CSV" }).click();
+  let file = await download;
+  expect(file.suggestedFilename()).toMatch(/^Travel-agent-for-finding-cheap-flights_flight-searcher_[A-Za-z0-9-]{1,8}_airlines\.csv$/);
+  let text = await fs.readFile(await file.path(), "utf8");
+  expect(text.startsWith("\ufeffAirline,")).toBe(true);
+  expect(text).toContain("\r\nIndiGo,6,8249\r\n");
+  expect(text).toContain("\r\nAkasa Air,1,7004\r\n");
+  expect(text).not.toContain("₹");
+
+  // A Markdown table inside the report text: its cells as shown.
+  await expect(searcher.locator(".md__table")).toBeVisible();
+  download = page.waitForEvent("download");
+  await searcher.getByRole("button", { name: "Download Table as CSV" }).click();
+  file = await download;
+  expect(file.suggestedFilename()).toMatch(/^Travel-agent-for-finding-cheap-flights_flight-searcher_[A-Za-z0-9-]{1,8}_table\.csv$/);
+  text = await fs.readFile(await file.path(), "utf8");
+  expect(text).toBe('\ufeffAirline,Fare\r\nIndiGo,"₹8,249"\r\nAkasa Air,"₹7,004"\r\n');
+});

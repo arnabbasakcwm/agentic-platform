@@ -1,5 +1,16 @@
+import { createContext, useContext } from "react";
 import { formatValue, humanizeKey } from "../lib/format.js";
 import { JsonView } from "./JsonView.jsx";
+import { TableDownload } from "./TableDownload.jsx";
+
+// The name downloads of this card's tables start with (project_agent_run).
+const FileBase = createContext("output");
+
+const slug = (text) => String(text).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "table";
+
+// A cell as a spreadsheet wants it: the real value, not the screen's "₹7,073"; nested
+// values as JSON.
+const csvCell = (v) => (v == null ? "" : typeof v === "object" ? JSON.stringify(v) : v);
 
 const MAX_DEPTH = 3;
 const MAX_COLUMNS = 8;
@@ -16,38 +27,51 @@ function Value({ name, value, depth }) {
 }
 
 function ArrayValue({ name, items, depth }) {
+  const base = useContext(FileBase);
   if (items.length === 0) return <span className="data__value muted">None</span>;
   // A list of records reads best as a table: one row per item, one column per field.
   if (items.every(isPlainObject)) {
-    const columns = [...new Set(items.flatMap((item) => Object.keys(item)))].slice(0, MAX_COLUMNS);
+    const allColumns = [...new Set(items.flatMap((item) => Object.keys(item)))];
+    const columns = allColumns.slice(0, MAX_COLUMNS);
     return (
-      <div className="data__table" tabIndex={0} role="region" aria-label={humanizeKey(name)}>
-        <table>
-          <thead>
-            <tr>
-              {columns.map((c) => (
-                <th key={c} scope="col">
-                  {humanizeKey(c)}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((item, i) => (
-              <tr key={i}>
+      <div className="data__tablewrap">
+        <div className="tablebar">
+          {/* Every column and row, not just the ones the card has room for. */}
+          <TableDownload
+            header={allColumns.map(humanizeKey)}
+            rows={items.map((item) => allColumns.map((c) => csvCell(item[c])))}
+            fileName={`${base}_${slug(name)}.csv`}
+            label={humanizeKey(name)}
+          />
+        </div>
+        <div className="data__table" tabIndex={0} role="region" aria-label={humanizeKey(name)}>
+          <table>
+            <thead>
+              <tr>
                 {columns.map((c) => (
-                  <td key={c}>
-                    {isPlainObject(item[c]) || Array.isArray(item[c]) ? (
-                      <code className="data__inline">{JSON.stringify(item[c])}</code>
-                    ) : (
-                      formatValue(c, item[c])
-                    )}
-                  </td>
+                  <th key={c} scope="col">
+                    {humanizeKey(c)}
+                  </th>
                 ))}
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {items.map((item, i) => (
+                <tr key={i}>
+                  {columns.map((c) => (
+                    <td key={c}>
+                      {isPlainObject(item[c]) || Array.isArray(item[c]) ? (
+                        <code className="data__inline">{JSON.stringify(item[c])}</code>
+                      ) : (
+                        formatValue(c, item[c])
+                      )}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     );
   }
@@ -78,12 +102,14 @@ function Fields({ value, depth }) {
 }
 
 /** Structured agent data as a readable card, with the raw JSON one click away. */
-export function DataView({ data }) {
+export function DataView({ data, fileBase = "output" }) {
   if (!isPlainObject(data) || Object.keys(data).length === 0) return null;
   return (
     <section className="data" aria-label="Structured data">
       <h4 className="data__title">Structured data</h4>
-      <Fields value={data} depth={0} />
+      <FileBase.Provider value={fileBase}>
+        <Fields value={data} depth={0} />
+      </FileBase.Provider>
       <details className="data__raw">
         <summary>View raw JSON</summary>
         <JsonView value={data} />

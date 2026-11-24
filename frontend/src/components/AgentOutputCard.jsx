@@ -136,7 +136,7 @@ export const AgentOutputCard = forwardRef(function AgentOutputCard(
             // Fades in as the agent's answer arrives.
             <div className="ap-fade">
               <OutputContent output={output} agentId={agentId} projectName={projectName} runId={runId} />
-              <DataView data={output.data} />
+              <DataView data={output.data} fileBase={fileBase({ projectName, agentId, runId })} />
             </div>
           ) : node.status === "running" || node.status === "queued" ? (
             <>

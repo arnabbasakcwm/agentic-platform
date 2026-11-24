@@ -1,0 +1,28 @@
+{
+  "_note": "A sequential three-agent run as the API streams it (the mock's /__emit takes these one by one). `bugShaped` drops the node_started events the server saves late (see e2e/RUN_FIX_LOG.md).",
+  "agents": ["flight_searcher", "price_analyzer", "travel_advisor"],
+  "wellFormed": [
+    { "event": "run_started", "data": { "timeout_s": 300 }, "expect": ["running", "queued", "queued"] },
+    { "event": "node_started", "data": { "node": "flight_searcher" }, "expect": ["running", "queued", "queued"] },
+    { "event": "node_completed", "data": { "node": "flight_searcher", "duration_ms": 4100, "attempts": 1 }, "expect": ["completed", "running", "queued"] },
+    { "event": "node_started", "data": { "node": "price_analyzer" }, "expect": ["completed", "running", "queued"] },
+    { "event": "node_completed", "data": { "node": "price_analyzer", "duration_ms": 6300, "attempts": 1 }, "expect": ["completed", "completed", "running"] },
+    { "event": "node_started", "data": { "node": "travel_advisor" }, "expect": ["completed", "completed", "running"] },
+    { "event": "node_completed", "data": { "node": "travel_advisor", "duration_ms": 3200, "attempts": 1 }, "expect": ["completed", "completed", "completed"] },
+    { "event": "run_completed", "data": { "duration_ms": 13600 }, "expect": ["completed", "completed", "completed"] }
+  ],
+  "bugShaped": [
+    { "event": "run_started", "data": { "timeout_s": 300 }, "expect": ["running", "queued", "queued"] },
+    { "event": "node_completed", "data": { "node": "flight_searcher", "duration_ms": 4100, "attempts": 1 }, "expect": ["completed", "running", "queued"] },
+    { "event": "node_completed", "data": { "node": "price_analyzer", "duration_ms": 6300, "attempts": 1 }, "expect": ["completed", "completed", "running"] },
+    { "event": "node_completed", "data": { "node": "travel_advisor", "duration_ms": 3200, "attempts": 1 }, "expect": ["completed", "completed", "completed"] },
+    { "event": "run_completed", "data": { "duration_ms": 13600 }, "expect": ["completed", "completed", "completed"] }
+  ],
+  "failing": [
+    { "event": "run_started", "data": { "timeout_s": 300 }, "expect": ["running", "queued", "queued"] },
+    { "event": "node_started", "data": { "node": "flight_searcher" }, "expect": ["running", "queued", "queued"] },
+    { "event": "node_completed", "data": { "node": "flight_searcher", "duration_ms": 4100, "attempts": 1 }, "expect": ["completed", "running", "queued"] },
+    { "event": "node_started", "data": { "node": "price_analyzer" }, "expect": ["completed", "running", "queued"] },
+    { "event": "run_failed", "data": { "error_type": "RunTimeout", "message": "the run exceeded its 60s time limit", "limit_s": 60 }, "expect": ["completed", "failed", "skipped"] }
+  ]
+}

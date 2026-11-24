@@ -1,8 +1,8 @@
-import { ArrowDown, ArrowUp, ArrowUpDown, Download } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
 import { Component, useId, useMemo, useState } from "react";
-import { saveBlob } from "../lib/download.js";
-import { numericColumns, sortRows, toCsv } from "../lib/tabular.js";
+import { numericColumns, sortRows } from "../lib/tabular.js";
 import { CopyButton } from "./JsonView.jsx";
+import { TableDownload } from "./TableDownload.jsx";
 
 export const PAGE_SIZE = 100;
 
@@ -59,19 +59,7 @@ export function DataTable({ table, raw, label = "Table", fileName = "table.csv" 
           {pages > 1 && view === "table" && ` · rows ${at * PAGE_SIZE + 1}–${at * PAGE_SIZE + shown.length}`}
         </span>
         <CopyButton text={raw} label="Copy" />
-        <button
-          type="button"
-          className="btn btn--sm btn--ghost"
-          aria-label={`Download ${label} as CSV`}
-          title={fileName}
-          onClick={() =>
-            // Every row, in the agent's order, as a CSV file (made here, from the table).
-            saveBlob(new Blob([toCsv(table.header, table.rows)], { type: "text/csv;charset=utf-8" }), fileName)
-          }
-        >
-          <Download size={13} aria-hidden="true" />
-          Download CSV
-        </button>
+        <TableDownload header={table.header} rows={table.rows} fileName={fileName} label={label} />
       </div>
       {view === "raw" ? (
         <pre className="datatable__raw" tabIndex={0} aria-label={`${label}, raw text`}>

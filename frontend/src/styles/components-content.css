@@ -376,6 +376,12 @@
 }
 
 .md__table,
+.tablebar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: var(--space-xs);
+}
+
 .data__table {
   overflow-x: auto;
   border: 1px solid var(--border);

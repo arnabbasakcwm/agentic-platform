@@ -77,6 +77,20 @@ Nothing in the inventory was removed.
 |---|---|---|---|
 | F1–F5 | Animations cut to ~0; the glow and dashes freeze but stay visible; spinners become still rings; states still change instantly | Same rules. The new motion (pops, shake, pending-edge flow, live dots, stepper pulse, shimmer) also stops. | kept |
 
+### Update (2026-11-04): running state and straight edges
+
+Three changes to the graph after the redesign; the floor above still holds.
+
+| # | Change | Why |
+|---|---|---|
+| A4/A6/A7 | **A running agent is always shown while a run is active.** The first queued agent in run order shows as running (timed from the last completion) until the real `node_started` arrives; nothing else is inferred. One status source (`displayRun`) feeds the nodes, the progress rows and the cards. | The server saved events in batches, so `node_started` could reach the console minutes late (see `frontend/e2e/RUN_FIX_LOG.md`). |
+| E6 | A node that completed without its `node_started` still gets a progress bar (start = completion − duration). | Same cause. |
+| D2 | **START, the agents and END share one centre line;** sequential edges are exactly horizontal. dagre uses each node's measured size, and the view re-fits once after the first measurement. | dagre assumed a 112 px agent height; the real card differs, so the terminals sat off-centre and the edges slanted. |
+
+Checked in `e2e/run-graph.spec.js` (status at every event, with and without reduced motion,
+after a failure and after a reload; edges at 1280 / 1440 / 1920 px and after zooming) with
+screenshots in `frontend/e2e/__screens__/run/`.
+
 ### New motion from DESIGN.md §7, on top of the floor
 
 | Animation | Where |

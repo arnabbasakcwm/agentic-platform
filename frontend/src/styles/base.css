@@ -60,3 +60,45 @@ a {
   flex-shrink: 0;
 }
 
+
+/* The pointer is always a system cursor (never an image) with a visible outline: a hand on
+   anything clickable, the arrow everywhere else (text fields and the graph pane included,
+   because the I-beam and the grab hands drew without an outline). Native
+   selects open on click, so they get the hand too. */
+/* The base is the plain arrow, inherited by all text. With `auto` the browser turns the
+   pointer into the thin I-beam over any text, and the I-beam is the one pointer with no
+   contrast outline. Text can still be selected. */
+html,
+body {
+  cursor: default;
+}
+
+/* Text fields too: the I-beam has no outline and vanished over the sign-in email field.
+   The caret still shows where typing goes. */
+input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="button"]):not([type="submit"]),
+textarea,
+[contenteditable="true"] {
+  cursor: default;
+}
+
+select:not(:disabled),
+summary {
+  cursor: pointer;
+}
+
+/* Decorative layers never take the pointer. */
+.chat__glow,
+.authintro__chip::before,
+.ap-mesh,
+.ap-glow-breathe {
+  pointer-events: none;
+}
+
+/* The graph background shows the plain arrow, also while dragging to pan: the open and
+   closed hand cursors drew without a visible outline on its dotted background. */
+.diagram .react-flow__pane,
+.diagram .react-flow__pane.dragging,
+.diagram .react-flow__pane.draggable,
+.diagram .react-flow__pane.selection {
+  cursor: default;
+}

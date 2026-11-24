@@ -9,7 +9,7 @@ export function resourceCounts(project) {
   };
 }
 
-/** The stepper's hint: "2 docs · 1 db · 1 MCP", or "Optional" when nothing is attached. */
+/** The stepper's hint: "2 files · 1 table · 1 MCP", or "Optional" when nothing is attached. */
 export function resourcesHint(project) {
   const { documents, databases, tools } = resourceCounts(project);
   const parts = [];
@@ -17,11 +17,18 @@ export function resourcesHint(project) {
     const ready = project.knowledge?.ready ?? documents;
     parts.push(
       ready < documents
-        ? `${ready}/${documents} docs ready`
-        : `${documents} doc${documents === 1 ? "" : "s"}`,
+        ? `${ready}/${documents} files ready`
+        : `${documents} file${documents === 1 ? "" : "s"}`,
     );
   }
-  if (databases) parts.push(`${databases} db${databases === 1 ? "" : "s"}`);
+  const tables = project.data_sources?.tables ?? 0;
+  if (databases) {
+    parts.push(
+      tables
+        ? `${tables} table${tables === 1 ? "" : "s"}`
+        : `${databases} source${databases === 1 ? "" : "s"}`,
+    );
+  }
   if (tools) parts.push(`${tools} MCP`);
   return parts.length ? parts.join(" · ") : "Optional";
 }
@@ -33,4 +40,10 @@ export function resourcesReady(project) {
     (project?.data_sources?.tables ?? 0) > 0 ||
     (project?.mcp?.tools?.length ?? 0) > 0
   );
+}
+
+/** Whether anything at all is attached (even a file still indexing). */
+export function resourcesAttached(project) {
+  const { documents, databases, tools } = resourceCounts(project);
+  return documents + databases + tools > 0;
 }

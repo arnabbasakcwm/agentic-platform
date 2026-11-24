@@ -2,6 +2,8 @@
 // run_graph_events). Pure functions, so the diagram, timeline and cards all derive from
 // one source of truth — and every state shown is one the server reported.
 
+import { sequentialOrder } from "./flow.js";
+
 /** Node states, in the order a node moves through them. */
 export const NODE_STATES = ["idle", "queued", "running", "completed", "failed", "skipped"];
 
@@ -100,8 +102,14 @@ export function applyEvent(state, { event, data }) {
       return updateNode(state, data.node, { retryError: data.error, attempts: data.attempt });
 
     case "node_completed": {
+      const before = state.nodes[data.node];
       const next = updateNode(state, data.node, {
         status: "completed",
+        // Its node_started may not have reached us (events are saved in batches): the
+        // start is the completion minus the duration the server measured.
+        ...(before?.startedAt == null && data.duration_ms != null && data.at != null
+          ? { startedAt: data.at - data.duration_ms / 1000 }
+          : {}),
         endedAt: data.at,
         durationMs: data.duration_ms ?? null,
         attempts: data.attempts ?? 1,
@@ -220,4 +228,31 @@ export function runCounts(state) {
   const counts = Object.fromEntries(NODE_STATES.map((s) => [s, 0]));
   for (const node of Object.values(state.nodes)) counts[node.status] += 1;
   return counts;
+}
+
+/**
+ * What to show while a run is active: the run as the events reported it, plus one
+ * inference. The server saves events in batches, so a node_started can reach the console
+ * late — a long way behind the agent actually working. While a graph run is active and no
+ * node is running, the first agent (in run order) that is still queued is shown as
+ * running, so an active run never shows "nothing is running". `inferred` marks it; the
+ * real node_started replaces it. Nothing else is invented: completed, failed and skipped
+ * only ever come from events.
+ */
+export function displayRun(plan, run) {
+  if (!plan || !run || run.status !== "running" || run.mode !== "graph") return run;
+  const nodes = Object.values(run.nodes);
+  if (nodes.length === 0 || nodes.some((n) => n.status === "running")) return run;
+  const order = sequentialOrder(plan.agents);
+  const next = order.find((id) => run.nodes[id]?.status === "queued");
+  if (!next) return run;
+  const finished = nodes.map((n) => n.endedAt).filter((t) => t != null);
+  const since = finished.length ? Math.max(...finished) : run.startedAt;
+  return {
+    ...run,
+    nodes: {
+      ...run.nodes,
+      [next]: { ...run.nodes[next], status: "running", startedAt: since, inferred: true },
+    },
+  };
 }

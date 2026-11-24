@@ -7,6 +7,7 @@ import {
   Position,
   ReactFlow,
   getBezierPath,
+  getStraightPath,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -46,7 +47,10 @@ const STATE_ICON = {
   skipped: "skip",
 };
 
-function layoutGraph(graph, direction) {
+// `sizes`: what React Flow measured for each rendered node ({ width, height }). dagre
+// centres nodes on their real size, so START, END and the agents share one centre line;
+// until a node is measured, the CSS sizes are used.
+function layoutGraph(graph, direction, sizes = {}) {
   const g = new graphlib.Graph();
   g.setGraph({
     rankdir: direction,
@@ -58,10 +62,14 @@ function layoutGraph(graph, direction) {
   g.setDefaultEdgeLabel(() => ({}));
   // dagre writes each node's position into the label object it is given, so every node
   // needs its own copy — a shared object would leave all nodes at the last position.
-  g.setNode(START, { ...TERMINAL_SIZE });
-  g.setNode(END, { ...TERMINAL_SIZE });
+  const sizeOf = (id, fallback) => ({
+    width: sizes[id]?.width ?? fallback.width,
+    height: sizes[id]?.height ?? fallback.height,
+  });
+  g.setNode(START, sizeOf(START, TERMINAL_SIZE));
+  g.setNode(END, sizeOf(END, TERMINAL_SIZE));
   for (const agent of graph.agents) {
-    g.setNode(agent.id, { width: agentWidth(agent.id), height: AGENT_H });
+    g.setNode(agent.id, sizeOf(agent.id, { width: agentWidth(agent.id), height: AGENT_H }));
   }
   for (const edge of graph.edges) g.setEdge(edge.source, edge.target);
   layout(g);
@@ -216,14 +224,22 @@ function FlowEdge({
   data,
   markerEnd,
 }) {
-  const [path] = getBezierPath({
-    sourceX,
-    sourceY,
-    targetX,
-    targetY,
-    sourcePosition,
-    targetPosition,
-  });
+  // Level handles (a sequential chain) get a dead-straight line; branches keep the curve.
+  // Measured sizes are whole pixels, so "level" allows a pixel or two of rounding, which is
+  // snapped away rather than drawn as a slant.
+  const horizontal = sourcePosition === Position.Right && targetPosition === Position.Left;
+  const vertical = sourcePosition === Position.Bottom && targetPosition === Position.Top;
+  const levelH = horizontal && Math.abs(sourceY - targetY) < 2;
+  const levelV = vertical && Math.abs(sourceX - targetX) < 2;
+  const [path] =
+    levelH || levelV
+      ? getStraightPath({
+          sourceX,
+          sourceY,
+          targetX: levelV ? sourceX : targetX,
+          targetY: levelH ? sourceY : targetY,
+        })
+      : getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition });
   return (
     <g
       className={`flow-edge flow-edge--${data.state}`}
@@ -250,6 +266,7 @@ export function RunDiagram({ plan, run, clock, onSelectAgent }) {
   const { theme } = useTheme();
   const containerRef = useRef(null);
   const [direction, setDirection] = useState("LR");
+  const flowRef = useRef(null);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -261,10 +278,6 @@ export function RunDiagram({ plan, run, clock, onSelectAgent }) {
     return () => observer.disconnect();
   }, []);
 
-  const positions = useMemo(
-    () => layoutGraph(graph, direction),
-    [graph, direction],
-  );
   const colorOf = useMemo(
     () => Object.fromEntries(graph.agents.map((a) => [a.id, a.color])),
     [graph],
@@ -282,11 +295,36 @@ export function RunDiagram({ plan, run, clock, onSelectAgent }) {
     );
     if (sized.length === 0) return;
     setMeasured((current) => {
+      let changed = false;
       const next = { ...current };
-      for (const c of sized) next[c.id] = c.dimensions;
-      return next;
+      for (const c of sized) {
+        const { width, height } = c.dimensions;
+        const had = current[c.id];
+        if (had && Math.abs(had.width - width) < 0.5 && Math.abs(had.height - height) < 0.5) continue;
+        next[c.id] = { width, height };
+        changed = true;
+      }
+      return changed ? next : current;
     });
   }, []);
+
+  // Re-laid out once the nodes are measured, so dagre works with their real sizes.
+  const positions = useMemo(
+    () => layoutGraph(graph, direction, measured),
+    [graph, direction, measured],
+  );
+
+  // The first measurement moves nodes a few pixels (dagre now has their real sizes): fit
+  // the view again, once, so the graph stays centred. A user's own zoom is left alone.
+  const layoutSignature = JSON.stringify(
+    Object.entries(positions).map(([id, p]) => [id, Math.round(p.x), Math.round(p.y)]),
+  );
+  useEffect(() => {
+    const id = requestAnimationFrame(() =>
+      flowRef.current?.fitView({ padding: 0.12, maxZoom: 1 }),
+    );
+    return () => cancelAnimationFrame(id);
+  }, [layoutSignature]);
 
   const nodes = useMemo(
     () => [
@@ -364,6 +402,9 @@ export function RunDiagram({ plan, run, clock, onSelectAgent }) {
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         fitView
+        onInit={(instance) => {
+          flowRef.current = instance;
+        }}
         // Never enlarge nodes past 100%: small teams stay crisp, large ones shrink to fit.
         fitViewOptions={{ padding: 0.12, maxZoom: 1 }}
         minZoom={0.25}

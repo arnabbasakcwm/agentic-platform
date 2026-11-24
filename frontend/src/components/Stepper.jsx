@@ -15,9 +15,13 @@ const doneMap = (steps) => Object.fromEntries(steps.map((s) => [s.key, s.done]))
  * - Done: circle filled in the phase colour with a white check.
  * - Current: a soft tint behind the column, a 4px ring, label in the phase colour.
  * - Pending: white circle, grey number, muted label.
- * - The connector to the next step is in this phase's colour only when this step AND the
- *   next are done; otherwise grey. It runs from one circle's edge to the next, never
- *   past the first or last circle. A connector that turns coloured while the page is
+ * - Skipped: an optional step (`optional`) with nothing attached (`empty`) once any later
+ *   step is done. A dashed slate circle with a dash, a normal-weight label, "None added".
+ *   Still a link, and the current-page highlight still applies.
+ * - The connector from a step is in that step's colour when the step it leads TO has been
+ *   reached or passed (its index <= the furthest done step) — progress, not "both ends
+ *   done". From a skipped step it is slate. It runs from one circle's edge to the next,
+ *   never past the first or last circle. A connector that turns coloured while the page is
  *   open fills left to right, and the circle swaps its number for a check with a pop.
  */
 export function Stepper({ steps, current }) {
@@ -33,6 +37,8 @@ export function Stepper({ steps, current }) {
     });
   }
   const justDone = (key) => seen.fresh.includes(key);
+  const furthest = steps.reduce((at, s, i) => (s.done ? i : at), -1);
+  const skipped = (s, i) => Boolean(s.optional && s.empty && !s.done && furthest > i);
 
   return (
     <nav className="stepper" aria-label="Project phases">
@@ -40,10 +46,12 @@ export function Stepper({ steps, current }) {
         {steps.map((step, i) => {
           const isCurrent = step.key === current;
           const next = steps[i + 1];
-          const linkDone = step.done && next?.done;
+          const isSkipped = skipped(step, i);
+          const linkDone = Boolean(next) && i + 1 <= furthest;
           const classes = [
             "step",
             step.done && "step--done",
+            isSkipped && "step--skipped",
             isCurrent && "step--current",
             step.busy && "step--busy",
           ]
@@ -56,24 +64,25 @@ export function Stepper({ steps, current }) {
                 className={classes}
                 data-phase={step.key}
                 aria-current={isCurrent ? "step" : undefined}
-                title={`${i + 1}. ${step.label} — ${step.hint}`}
+                title={`${i + 1}. ${step.label} — ${isSkipped ? "None added" : step.hint}`}
               >
                 <span
                   className={`step__dot${justDone(step.key) ? " ap-pop" : ""}`}
                   aria-hidden="true"
                 >
-                  {step.done ? <Icon name="check" size={14} /> : i + 1}
+                  {step.done ? <Icon name="check" size={14} /> : isSkipped ? "–" : i + 1}
                 </span>
                 <span className="step__label">
                   {i + 1}. {step.label}
                 </span>
-                <span className="step__hint">{step.hint}</span>
+                <span className="step__hint">{isSkipped ? "None added" : step.hint}</span>
               </a>
               {next && (
                 <span
                   className={[
                     "step__line",
                     linkDone && "step__line--done",
+                    linkDone && isSkipped && "step__line--skipped",
                     linkDone &&
                       (justDone(step.key) || justDone(next.key)) &&
                       "ap-connector-fill",
