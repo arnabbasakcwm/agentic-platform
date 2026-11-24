@@ -129,6 +129,7 @@ export async function handleAccess({ req, res, path, readBody, send, orgRole, se
     state.orgRole = body.orgRole ?? "user";
     if (body.projectLevel) state.projectLevel = body.projectLevel;
     state.projectRestricted = Boolean(body.restricted);
+    if (body.noBudgets) state.budgets = [];
     setOrgRole(state.orgRole);
     for (const [team, role] of Object.entries(body.teams ?? {})) {
       state.members[team] ??= {};
@@ -269,7 +270,7 @@ export async function handleAccess({ req, res, path, readBody, send, orgRole, se
     const chain = ["user:u1", ...(q.get("project_id") ? ["team:A"] : [])].map(node_).filter(Boolean);
     return send(res, 200, {
       chain: chain.map((n) => ({ id: n.id, scope_type: n.scope_type, amount: n.amount, remaining: n.remaining, percent_used: Math.round((100 * n.spent) / n.amount), thresholds_reached: n.spent * 100 >= 80 * n.amount ? [80] : [], period: n.period, hard_limit: n.hard_limit })),
-      tightest_remaining: Math.min(...["user:u1", "team:A", "pool:sub1", "org"].map(node_).filter((n) => n.hard_limit).map((n) => n.remaining)),
+      tightest_remaining: (() => { const r = [...["user:u1", "team:A", "pool:sub1", "org"].map(node_).filter((n) => n && n.hard_limit).map((n) => n.remaining)]; return r.length ? Math.min(...r) : null; })(),
     });
   }
   const b = path.match(/^\/budgets\/([^/]+)\/([^/]+)$/);
@@ -279,7 +280,15 @@ export async function handleAccess({ req, res, path, readBody, send, orgRole, se
     const id = scope === "org" ? "org" : `${scope}:${sid}`;
     const existing = node_(id);
     const parentId = existing ? existing.parent_id : body.parent ?? (isSub() ? "pool:sub1" : scope === "pool" ? "org" : null);
-    if (scope === "org") return isMaster() ? send(res, 200, { budget: existing }) : send(res, 404, notFound);
+    if (scope === "org") {
+      if (!isMaster()) return send(res, 404, notFound);
+      if (existing) return send(res, 200, { budget: existing });
+      const org = node("org", "org", null, body.amount, 0);
+      Object.assign(org, { hard_limit: body.hard_limit ?? true, thresholds: [80, 100], period: body.period ?? "monthly" });
+      state.budgets.push(org);
+      addAudit("budget.created", "org", null, null, { amount: body.amount });
+      return send(res, 200, { budget: org });
+    }
     const parent = parentId ? node_(parentId) : null;
     if (!parent) return fail(parentId ? 422 : 422, parentId ? "BudgetParentMissing" : "BudgetParentRequired", "say which budget to allocate from (parent)");
     if (!mayAllocateFrom(parent)) return send(res, 404, notFound);

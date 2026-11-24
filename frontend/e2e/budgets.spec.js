@@ -81,6 +81,23 @@ test("the Super Admin sees the whole tree and hands budget to a new team", async
   await expect(row(page, "Support")).toHaveCount(0);
 });
 
+test("with no budget yet, the Super Admin can set the organisation's, then hand it down", async ({ page, request }) => {
+  await request.post(`${API}/__access_as`, { data: { orgRole: "master", teams: {}, noBudgets: true } });
+  await page.goto("/#/budgets");
+  const form = page.getByRole("form", { name: "Set the organisation budget" });
+  await form.getByLabel("Amount per period (USD)").fill("500");
+  await form.getByRole("button", { name: "Set organisation budget" }).click();
+  await expect(row(page, "Organisation")).toContainText("$500");
+  await expect(page.getByRole("form", { name: "Allocate a budget" })).toBeVisible();
+});
+
+test("a person who is not the Super Admin is told no budget is set", async ({ page, request }) => {
+  await request.post(`${API}/__access_as`, { data: { orgRole: "user", teams: {}, noBudgets: true } });
+  await page.goto("/#/budgets");
+  await expect(page.getByText("No budgets set")).toBeVisible();
+  await expect(page.getByRole("form", { name: "Set the organisation budget" })).toHaveCount(0);
+});
+
 test("a budget with people under it can't be removed until they are", async ({ page, request }) => {
   await as(request, "master", {});
   await page.goto("/#/budgets");

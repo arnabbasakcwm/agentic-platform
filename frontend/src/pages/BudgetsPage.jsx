@@ -218,6 +218,42 @@ function AllocateForm({ parents, ctx, me, teams, onDone }) {
   );
 }
 
+/** The first budget: the organisation's. Until it exists nothing is limited and nothing can be handed down. */
+function OrgBudgetForm({ onDone }) {
+  const [amount, setAmount] = useState("");
+  const [period, setPeriod] = useState("monthly");
+  const [soft, setSoft] = useState(false);
+  const save = useAction();
+  const micro = parseDollars(amount);
+  async function submit(e) {
+    e.preventDefault();
+    const done = await save.run(() => api.setBudget("org", "org", { amount: micro, period, hard_limit: !soft }));
+    if (done) onDone();
+  }
+  return (
+    <form className="access__row" onSubmit={submit} aria-label="Set the organisation budget">
+      <Field label="Amount per period (USD)" hint={amount && micro === null ? "Use a plain amount like 500 or 1200.50" : undefined}>
+        <input type="text" value={amount} inputMode="decimal" onChange={(e) => setAmount(e.target.value)} placeholder="500" required />
+      </Field>
+      <Field label="Period">
+        <select value={period} onChange={(e) => setPeriod(e.target.value)}>
+          <option value="monthly">Monthly</option>
+          <option value="weekly">Weekly (from Monday)</option>
+          <option value="one_time">One time</option>
+        </select>
+      </Field>
+      <label className="access__check">
+        <input type="checkbox" checked={soft} onChange={(e) => setSoft(e.target.checked)} />
+        Warn only (don&apos;t stop at the limit)
+      </label>
+      <Button type="submit" variant="primary" loading={save.busy} disabled={micro === null}>
+        Set organisation budget
+      </Button>
+      <ErrorCallout error={save.error} />
+    </form>
+  );
+}
+
 /** The budgets you can see, how full each is, and (where you hold the budget above) a way to hand it on. */
 export function BudgetsPage({ me }) {
   const [state, setState] = useState(null);
@@ -291,9 +327,13 @@ export function BudgetsPage({ me }) {
             )}
           </Panel>
 
-          {tree.length === 0 ? (
+          {tree.length === 0 && me.role === "master" ? (
+            <Panel title="Set the organisation budget" subtitle="Nothing limits spending yet. This is the total everyone shares; you then hand parts of it to teams and people.">
+              <OrgBudgetForm onDone={reload} />
+            </Panel>
+          ) : tree.length === 0 ? (
             <Callout tone="info" title="No budgets set">
-              Nothing limits spending yet. An administrator sets the organisation&apos;s budget and hands it down.
+              Nothing limits spending yet. The Super Admin sets the organisation&apos;s budget and hands it down.
             </Callout>
           ) : (
             <Panel title="Budgets" subtitle={`${tree.length}`} flush>
